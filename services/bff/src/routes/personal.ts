@@ -1,11 +1,12 @@
 import { randomBytes } from "node:crypto";
 import type { InboxItem, MobileNotice } from "@hermes-mobile/protocol";
+import { MAX_CONTROL_ANSWER_BYTES } from "@hermes-mobile/protocol";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
 import { deviceAuth, matchesToken } from "../auth.js";
 import { registerBridge } from "../bridge.js";
-import { createTopic, findProfile, interrupt, respond, submit } from "../mutations.js";
-import { detail, profiles, topics } from "../projections.js";
+import { createTopic, findProfile, interrupt, requestModel, respond, submit } from "../mutations.js";
+import { detail, modelRequest, profiles, topics } from "../projections.js";
 import { registerPushRoutes } from "../push.js";
 import type { Store } from "../store.js";
 import { ApiError, invalid, record, string, uuid } from "../validation.js";
@@ -126,11 +127,31 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
     return accepted(request, reply, result);
   });
 
+  api.post(`${prefix}/topics/:id/model-requests`, requireDevice, async (request, reply) => {
+    const topicId = pathId(request);
+    const body = record(request.body, ["request_id", "provider", "model", "confirm"]);
+    const id = uuid(body.request_id, "request_id");
+    const confirm = body.confirm === undefined ? undefined : string(body.confirm, "model confirmation", 64);
+    if (confirm !== undefined && !/^[a-f0-9]{64}$/.test(confirm)) invalid("Invalid model confirmation");
+    const selection = body.provider === undefined && body.model === undefined && confirm === undefined ? undefined : {
+      provider: string(body.provider, "provider", 256), model: string(body.model, "model", 512),
+      ...(confirm === undefined ? {} : { confirm }),
+    };
+    const result = await store.transaction((db) => requestModel(db, refs, topicId, id, selection));
+    bridge.pump();
+    return accepted(request, reply, result);
+  });
+
+  api.get(`${prefix}/topics/:id/model-requests/:requestId`, requireDevice, async (request) => {
+    const requestId = uuid(record(request.params).requestId, "request_id");
+    return success(request, await modelRequest(store, refs, pathId(request), requestId));
+  });
+
   api.post(`${prefix}/controls/:id/responses`, requireDevice, async (request, reply) => {
     const controlId = pathId(request);
     const body = record(request.body, ["response_id", "answer"]);
     const id = uuid(body.response_id, "response_id");
-    const answer = string(body.answer, "answer", 64 * 1024, true);
+    const answer = string(body.answer, "answer", MAX_CONTROL_ANSWER_BYTES, true);
     const { topicId, result } = await store.transaction((db) => respond(db, refs, controlId, id, answer));
     changed(topicId);
     bridge.pump();

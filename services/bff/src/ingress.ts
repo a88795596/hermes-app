@@ -39,6 +39,10 @@ export async function applyResult(db: PoolClient, frame: CommandResult, refs: Se
     if (!isDeepStrictEqual(result, frame)) conflict("Command result conflicts with recorded result");
     return topic;
   }
+  const isModel = payload.kind === "model_options" || payload.kind === "select_model";
+  if ((frame.model_result !== undefined && (!isModel || frame.status !== "ok" ||
+      (frame.model_result.type === "catalog") !== (payload.kind === "model_options"))) ||
+      (isModel && frame.status === "ok" && !frame.model_result)) invalid("Invalid model result for command");
   if (payload.kind === "create") {
     if (frame.status === "ok" && !frame.session_id) invalid("Create result is missing the session ID");
     const success = frame.status === "ok";
@@ -53,9 +57,14 @@ export async function applyResult(db: PoolClient, frame: CommandResult, refs: Se
     const status = frame.status === "ok" ? "queued" : frame.status === "error" ? "failed" : "unknown";
     await applySubmission(db, topic.id, payload.body.submission_id, status, frame.error, frame.admission_id);
   } else if (payload.kind === "respond") {
-    const status = frame.status === "ok" && frame.control_status === "closed" ? "closed" : "unknown";
-    await db.query("UPDATE controls SET data = data || $3::jsonb WHERE id = $1 AND topic_id = $2 AND data->>'status' = 'responding'",
-      [payload.body.control_id, topic.id, { status }]);
+    const closed = frame.control_status === "closed";
+    const answer = closed && frame.status === "ok" ? payload.body.answer : undefined;
+    await db.query(`UPDATE controls SET data = data || $3::jsonb ||
+      jsonb_build_object('status', CASE WHEN data->>'status' = 'closed' THEN 'closed' ELSE $4::text END)
+      WHERE id = $1 AND topic_id = $2 AND data->>'status' <> 'pending'`,
+      [payload.body.control_id, topic.id,
+        { ...(answer === undefined ? {} : { answer }), ...(frame.error ? { error: frame.error } : {}) },
+        closed ? "closed" : "unknown"]);
   }
   await db.query("UPDATE commands SET result = $2 WHERE id = $1", [frame.command_id, frame]);
   return topic;
@@ -100,7 +109,15 @@ export async function applyEvent(db: PoolClient, frame: ConnectorEvent, refs: Se
     const existing = rows[0];
     if (existing && (existing.topic_id !== topic.id || existing.data.kind !== frame.kind)) conflict("Control ID belongs to another entity");
     if (existing?.data.status === "closed" || (existing && existing.data.status !== "pending" && frame.status === "pending")) return;
-    const control: Control = { control_id: frame.control_id, kind: frame.kind, prompt: frame.prompt, choices: frame.choices, status: frame.status };
+    const submissionId = existing?.data.submission_id ?? frame.submission_id;
+    if (submissionId && !existing?.data.submission_id) {
+      const { rowCount } = await db.query("SELECT id FROM submissions WHERE id = $1 AND topic_id = $2", [submissionId, topic.id]);
+      if (!rowCount) invalid("Invalid control submission");
+    }
+    const control: Control = { ...existing?.data, control_id: frame.control_id, kind: frame.kind,
+      prompt: frame.prompt, choices: frame.choices, status: frame.status,
+      ...(frame.multi_select === undefined ? {} : { multi_select: frame.multi_select }),
+      ...(submissionId ? { submission_id: submissionId } : {}) };
     await db.query("INSERT INTO controls (id, topic_id, data) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET data = excluded.data",
       [control.control_id, topic.id, control]);
   }

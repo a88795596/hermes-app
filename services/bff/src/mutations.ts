@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import type { Command, Control, Message, Topic } from "@hermes-mobile/protocol";
+import type { Command, Control, Message, ModelSelection, Topic } from "@hermes-mobile/protocol";
 import type { PoolClient } from "pg";
 import { profileId, topicData, topicRow } from "./projections.js";
 import { ApiError, conflict, missing } from "./validation.js";
@@ -73,6 +73,26 @@ export async function interrupt(db: PoolClient, refs: Set<string>, topicId: stri
   if (!rowCount) throw new ApiError(409, "NO_ACTIVE_SUBMISSION", "The selected submission is no longer running");
   await enqueue(db, { type: "command", command_id: requestId, topic_id: topicId, profile_ref: row.profile_ref,
     session_id: sessionId, kind: "interrupt", body }, receipt);
+  return receipt;
+}
+
+export async function requestModel(
+  db: PoolClient, refs: Set<string>, topicId: string, requestId: string, selection?: ModelSelection & { confirm?: string },
+) {
+  const row = await topicRow(db, topicId, refs);
+  const kind = selection ? "select_model" : "model_options";
+  const receipt = { status: "pending" as const };
+  const saved = await prior<typeof receipt>(db, requestId, kind, topicId, selection ?? {});
+  if (saved) return saved;
+  const envelope = { type: "command" as const, command_id: requestId, topic_id: row.id, profile_ref: row.profile_ref,
+    session_id: requireReady(row) };
+  if (selection) {
+    const { rowCount } = await db.query(`SELECT 1 FROM submissions WHERE topic_id = $1
+      AND data->>'status' IN ('accepted', 'queued', 'streaming') LIMIT 1`, [topicId]);
+    if (rowCount) throw new ApiError(409, "TOPIC_BUSY", "Wait for the current response before switching models.");
+  }
+  await enqueue(db, selection ? { ...envelope, kind: "select_model", body: selection }
+    : { ...envelope, kind: "model_options", body: {} }, receipt);
   return receipt;
 }
 

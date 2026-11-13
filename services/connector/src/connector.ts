@@ -4,11 +4,13 @@ import {
 } from '@hermes-mobile/hermes-adapter';
 import type { CanonicalAdmission, CanonicalPrompt, ServerRequest, SessionSnapshot } from '@hermes-mobile/hermes-adapter';
 import type { Command, CommandResult, ConnectorEvent, Control } from '@hermes-mobile/protocol';
+import { MAX_CLARIFY_CHOICE_BYTES } from '@hermes-mobile/protocol';
 import { Gateway, GatewayRefusal, object } from './gateway.js';
 import type { JsonObject } from './gateway.js';
+import { hasModel, modelCatalog } from './models.js';
 import { Spool } from './spool.js';
 import type { Binding, Cursor, Turn } from './spool.js';
-import { boundedText, commandDigest, result, stableId } from './wire.js';
+import { boundedText, commandDigest, result, stableId, text } from './wire.js';
 
 type Target =
   | { type: 'prompt'; prompt: CanonicalPrompt }
@@ -171,6 +173,52 @@ export class CanonicalConnector {
       return;
     }
     if (!current() || !session.gateway.connected) return;
+    if (command.kind === 'model_options' || command.kind === 'select_model') {
+      if (!this.spool.begin(id, digest)) return;
+      try {
+        const catalog = modelCatalog(await session.gateway.rpc('model.options', { session_id: binding.sessionId }));
+        let receipt = result(id, 'ok', { model_result: { type: 'catalog', catalog } });
+        if (command.kind === 'select_model') {
+          const { provider, model } = command.body;
+          receipt = result(id, 'error', { error: 'This model is no longer available. Open /model again.' });
+          if (hasModel(catalog, { provider, model })) {
+            const snapshot = parseSessionSnapshot(await session.gateway.rpc('session.resume', {
+              session_id: binding.sessionId, omit_messages: true,
+            }));
+            this.#checkSnapshot(session, snapshot);
+            // Keep model confirmation tied to the idle revision that issued it.
+            if (snapshot.running || snapshot.pending.length) {
+              receipt = result(id, 'error', { error: 'Wait for the current response before switching models.' });
+            } else if (current() && session.gateway.connected) {
+              const reply = await session.gateway.rpc('session.mutate', {
+                session_id: binding.sessionId, request_id: id, operation: 'model', payload: command.body,
+                expected_revision: canonicalInteger(snapshot.revision),
+                expected_generation: canonicalInteger(snapshot.executionGeneration),
+              }, id);
+              receipt = result(id, 'unknown', { error: 'Hermes could not confirm the model selection' });
+              if (reply.session_id === binding.sessionId && reply.operation === 'model') {
+                if (reply.status === 'confirmation_required' && typeof reply.confirm === 'string' &&
+                  /^[a-f0-9]{64}$/.test(reply.confirm) && text(reply.confirm_message, 16 * 1024)) {
+                  receipt = result(id, 'ok', { model_result: { type: 'confirmation', confirm: reply.confirm, message: reply.confirm_message } });
+                } else if (reply.status === 'deferred') {
+                  receipt = result(id, 'ok', { model_result: { type: 'deferred', selection: { provider, model } } });
+                } else if (text(reply.model, 512) && text(reply.provider, 256)) {
+                  receipt = result(id, 'ok', { model_result: { type: 'selected', selection: { provider: reply.provider, model: reply.model } } });
+                }
+              }
+            }
+          }
+        }
+        this.spool.finish(id, { ...receipt });
+      } catch (error) {
+        if (error instanceof GatewayRefusal && error.code === -32601) {
+          this.spool.finish(id, { ...result(id, 'error', { error: 'This Hermes Gateway version does not support model selection' }) });
+        } else {
+          this.#failedWrite(id, error);
+        }
+      }
+      return;
+    }
     if (command.kind === 'interrupt') {
       const turn = this.spool.activeTurns(topicId).find((item) => item.submissionId === command.body.submission_id);
       if (!turn) {
@@ -206,15 +254,16 @@ export class CanonicalConnector {
     if (command.kind === 'respond') {
       const target = session.targets.get(command.body.control_id);
       if (!target) {
-        finish('unknown', { error: 'Hermes could not confirm the control is still open' });
+        finish('error', { control_status: 'closed', error: 'This request has expired or was already answered.' });
         return;
       }
       let call: { method: string; params: JsonObject };
       try {
         call = target.type === 'prompt'
-          ? encodeControlResponse(binding.sessionId, target.prompt, command.body.answer)
+          ? encodeControlResponse(binding.sessionId, target.prompt,
+            target.prompt.kind === 'clarify' && command.body.answer === '' ? '\u0000skipped' : command.body.answer)
           : { method: 'clarify.lock', params: {
-            request_id: target.request.requestId, question_id: target.questionId, answer: command.body.answer,
+            request_id: target.request.requestId, question_id: target.questionId, answer: command.body.answer || null,
           } };
       } catch {
         finish('error', { error: 'The answer is not available for this control' });
@@ -229,11 +278,21 @@ export class CanonicalConnector {
         if (resolved) {
           this.spool.finish(id, { ...result(id, 'ok', { control_status: 'closed' }) });
           this.#closeControls(session, [command.body.control_id], 'closed', [id, 'respond']);
+        } else if (target.type === 'prompt' || reply.status === 'expired') {
+          this.spool.finish(id, { ...result(id, 'error', {
+            control_status: 'closed', error: 'This request has expired or was already answered.',
+          }) });
         } else {
-          this.spool.finish(id, { ...result(id, 'unknown', { control_status: 'unknown' }) });
+          this.spool.finish(id, { ...result(id, 'unknown', { error: 'Hermes could not confirm the response' }) });
         }
       } catch (error) {
-        this.#failedWrite(id, error);
+        if (error instanceof GatewayRefusal && ['stale_generation', 'approval_not_pending'].includes(error.reason ?? '')) {
+          this.spool.finish(id, { ...result(id, 'error', {
+            control_status: 'closed', error: 'This request has expired or was already answered.',
+          }) });
+        } else {
+          this.#failedWrite(id, error);
+        }
       }
       return;
     }
@@ -243,6 +302,7 @@ export class CanonicalConnector {
     try {
       const receipt = parseAdmissionReceipt(await session.gateway.rpc('prompt.submit', {
         session_id: binding.sessionId, submission_id: command.body.submission_id, text: command.body.text,
+        ...(session.gateway.clarifyBatch ? { clarify_batch: true } : {}),
       }, id));
       if (receipt.kind === 'voice_stopped') {
         this.spool.finish(id, { ...result(id, 'error', { error: 'Hermes consumed this input as a voice stop' }) });
@@ -351,11 +411,14 @@ export class CanonicalConnector {
 
   #snapshot(session: Session, snapshot: SessionSnapshot): void {
     const open = new Set<string>();
+    const running = snapshot.pending.filter((receipt) => receipt.status === 'started');
+    const submissionId = running.length === 1 && this.spool.hasIntent(session.binding.topicId, running[0].submissionId)
+      ? running[0].submissionId : undefined;
     for (const prompt of snapshot.prompts) {
-      open.add(this.#prompt(session, prompt, [snapshot.replayEpoch, snapshot.lastSequence, 'snapshot']));
+      open.add(this.#prompt(session, prompt, [snapshot.replayEpoch, snapshot.lastSequence, 'snapshot'], submissionId));
     }
     for (const request of snapshot.openRequests) {
-      for (const id of this.#request(session, request)) open.add(id);
+      for (const id of this.#request(session, request, submissionId)) open.add(id);
     }
     const closed = this.spool.controls(session.binding.topicId)
       .filter((control) => !open.has(control.control_id)).map((control) => control.control_id);
@@ -439,7 +502,8 @@ export class CanonicalConnector {
     if (frame.method !== 'event') {
       const request = parseServerRequest(frame);
       if (request?.sessionId === binding.sessionId) {
-        this.#request(session, request);
+        const running = this.spool.activeTurns(binding.topicId).filter((turn) => turn.status === 'streaming');
+        this.#request(session, request, running.length === 1 ? running[0].submissionId : undefined);
       } else if (typeof frame.id === 'string') {
         void this.#rejectRequest(session.gateway, frame.id).catch(() => {});
       }
@@ -460,14 +524,14 @@ export class CanonicalConnector {
     }
     const projection = normalizeCanonicalEvent(event);
     if (projection?.type === 'approval.request' || projection?.type === 'clarify.request') {
-      this.#prompt(session, projection, key);
+      this.#prompt(session, projection, key, event.admissionId ? this.spool.turn(binding.topicId, event.admissionId)?.submissionId : undefined);
     } else if (projection?.type === 'approval.settled' || projection?.type === 'clarify.settled') {
       this.#closeControls(session, [stableId([binding.topicId, 'prompt', projection.promptId, projection.executionGeneration])],
         'closed', key);
     } else if (projection?.type === 'request.cancel') {
       const ids = [...session.targets].filter(([, target]) => target.type === 'server'
         && target.request.requestId === projection.requestId).map(([id]) => id);
-      this.#closeControls(session, ids, 'unknown', key);
+      this.#closeControls(session, ids, 'closed', key);
     } else if (projection?.type === 'session.info') {
       for (const receipt of projection.pending ?? []) {
         if (this.spool.hasIntent(binding.topicId, receipt.submissionId)) {
@@ -532,11 +596,11 @@ export class CanonicalConnector {
     this.spool.record(topicId, frames.map((body) => ({ id: body.event_id, body: { ...body } })), cursor, { ...turn, text });
   }
 
-  #prompt(session: Session, prompt: CanonicalPrompt, key: string[]): string {
+  #prompt(session: Session, prompt: CanonicalPrompt, key: string[], submissionId?: string | null): string {
     const topicId = session.binding.topicId;
     const id = stableId([topicId, 'prompt', prompt.promptId, prompt.executionGeneration]);
     const visible = boundedText(prompt.prompt, 64 * 1024);
-    const choices = prompt.choices.filter((choice) => choice.trim() && boundedText(choice, 1024) === choice);
+    const choices = prompt.choices.filter((choice) => text(choice, prompt.kind === 'clarify' ? MAX_CLARIFY_CHOICE_BYTES : 1024));
     const safeChoices = prompt.kind === 'approval' && visible !== prompt.prompt
       ? choices.filter((choice) => choice === 'deny')
       : choices;
@@ -544,11 +608,13 @@ export class CanonicalConnector {
     this.#saveControl(session, {
       control_id: id, kind: prompt.kind, prompt: visible,
       choices: safeChoices, status: 'pending',
+      ...(prompt.kind === 'clarify' && prompt.multiSelect ? { multi_select: true } : {}),
+      ...(submissionId ? { submission_id: submissionId } : {}),
     }, key);
     return id;
   }
 
-  #request(session: Session, request: ServerRequest): string[] {
+  #request(session: Session, request: ServerRequest, submissionId?: string | null): string[] {
     const topicId = session.binding.topicId;
     const open: string[] = [];
     for (const question of request.questions) {
@@ -560,6 +626,8 @@ export class CanonicalConnector {
         this.#saveControl(session, {
           control_id: id, kind: 'clarify', prompt: question.prompt,
           choices: question.choices, status: 'pending',
+          ...(question.multiSelect ? { multi_select: true } : {}),
+          ...(submissionId ? { submission_id: submissionId } : {}),
         }, [request.requestId, 'open']);
         open.push(id);
       }
@@ -572,9 +640,9 @@ export class CanonicalConnector {
     const clean = {
       ...control,
       prompt: boundedText(control.prompt, 64 * 1024).trim() || 'Hermes requires an answer',
-      choices: control.choices.slice(0, 30).map((choice) => boundedText(choice, 1024)).filter((choice) => choice.trim()),
+      choices: [...new Set(control.choices.filter((choice) => text(choice, control.kind === 'clarify' ? MAX_CLARIFY_CHOICE_BYTES : 1024)))].slice(0, 30),
     };
-    const id = stableId([topicId, 'control', control.control_id, ...key]);
+    const id = stableId([topicId, 'control', control.control_id, ...key, clean.submission_id ?? '', String(clean.multi_select ?? false)]);
     this.spool.record(topicId, [{ id, body: { ...clean, type: 'control', event_id: id, topic_id: topicId } }],
       undefined, undefined, [clean]);
   }

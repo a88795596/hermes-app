@@ -1,7 +1,7 @@
 import { closeSync, mkdirSync, openSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { Control } from '@hermes-mobile/protocol';
+import type { Control, ModelSelection } from '@hermes-mobile/protocol';
 import type { JsonObject } from './gateway.js';
 
 type CommandRow = { digest: string; result: string | null };
@@ -32,6 +32,9 @@ export class Spool {
       CREATE TABLE IF NOT EXISTS bindings (
         topic_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, profile_id TEXT NOT NULL,
         profile_ref TEXT NOT NULL, UNIQUE(profile_ref, session_id)
+      );
+      CREATE TABLE IF NOT EXISTS model_selections (
+        topic_id TEXT PRIMARY KEY, provider TEXT NOT NULL, model TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS cursors (
         topic_id TEXT PRIMARY KEY, epoch TEXT NOT NULL, sequence TEXT NOT NULL
@@ -89,7 +92,12 @@ export class Spool {
       .all(topicId).map((row) => JSON.parse(row.body as string) as Control);
   }
 
-  finish(id: string, result: JsonObject, binding?: Binding, turn?: Turn): void {
+  modelSelection(topicId: string): ModelSelection | undefined {
+    return this.#db.prepare('SELECT provider, model FROM model_selections WHERE topic_id = ?')
+      .get(topicId) as ModelSelection | undefined;
+  }
+
+  finish(id: string, result: JsonObject, binding?: Binding, turn?: Turn, selection?: ModelSelection & { topicId: string }): void {
     this.#transaction(() => {
       if (binding) {
         this.#db.prepare(`
@@ -97,6 +105,12 @@ export class Spool {
         `).run(binding.topicId, binding.sessionId, binding.profileId, binding.profileRef);
       }
       if (turn) this.#storeTurn(turn);
+      if (selection) {
+        this.#db.prepare(`
+          INSERT INTO model_selections (topic_id, provider, model) VALUES (?, ?, ?)
+          ON CONFLICT (topic_id) DO UPDATE SET provider = excluded.provider, model = excluded.model
+        `).run(selection.topicId, selection.provider, selection.model);
+      }
       this.#db.prepare('UPDATE commands SET result = ? WHERE id = ? AND result IS NULL')
         .run(JSON.stringify(result), id);
     });

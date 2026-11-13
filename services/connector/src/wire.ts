@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { BridgeFrame, Command, CommandResult } from '@hermes-mobile/protocol';
+import { MAX_CONTROL_ANSWER_BYTES } from '@hermes-mobile/protocol';
 import { object } from './gateway.js';
 
 export function stableId(parts: string[]): string {
@@ -18,7 +19,7 @@ export function uuid(value: unknown): value is string {
   return typeof value === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(value);
 }
 
-function text(value: unknown, max: number, empty = false): value is string {
+export function text(value: unknown, max: number, empty = false): value is string {
   return typeof value === 'string' && (empty || !!value.trim()) && !value.includes('\u0000')
     && Buffer.byteLength(value) <= max && Buffer.from(value).toString() === value;
 }
@@ -41,6 +42,17 @@ export function bridgeFrame(source: string): BridgeFrame {
   switch (frame.kind) {
     case 'watch':
       return { ...base, session_id, kind: 'watch', body: {} };
+    case 'model_options':
+      if (!Object.keys(body).length) return { ...base, session_id, kind: 'model_options', body: {} };
+      break;
+    case 'select_model':
+      if (text(body.provider, 256) && text(body.model, 512) &&
+        (body.confirm === undefined || (typeof body.confirm === 'string' && /^[a-f0-9]{64}$/.test(body.confirm)))) {
+        return { ...base, session_id, kind: 'select_model', body: {
+          provider: body.provider, model: body.model, ...(body.confirm === undefined ? {} : { confirm: body.confirm }),
+        } };
+      }
+      break;
     case 'submit':
       if (body.submission_id === command_id && text(body.text, 256 * 1024)) {
         return { ...base, session_id, kind: 'submit', body: { submission_id: command_id, text: body.text } };
@@ -52,7 +64,7 @@ export function bridgeFrame(source: string): BridgeFrame {
       }
       break;
     case 'respond':
-      if (body.response_id === command_id && uuid(body.control_id) && text(body.answer, 256 * 1024, true)) {
+      if (body.response_id === command_id && uuid(body.control_id) && text(body.answer, MAX_CONTROL_ANSWER_BYTES, true)) {
         return { ...base, session_id, kind: 'respond', body: {
           control_id: body.control_id, response_id: command_id, answer: body.answer,
         } };

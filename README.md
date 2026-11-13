@@ -72,4 +72,18 @@ pnpm typecheck
 
 4. To package the Connector for local npm installation, run `pnpm --filter @hermes-mobile/connector pack` and install the resulting tarball. For Cron and `hermes send`, install the [Hermes delivery plugin](plugins/hermes-mobile-delivery/README.md) on the Hermes machine, with the spool available to the Connector.
 
+## Interactive chat
+
+Send `/model` in a Topic and choose a provider, then a model. The menu uses that Hermes profile’s configured providers and marks the current selection. You can switch once the current turn finishes. The selection applies to future turns in the current Topic.
+
+When the agent calls `clarify`, tap an option to answer the waiting turn. The card also supports multiple selections, a typed answer, and skipping the question.
+
+With HTTP Runs, the Hermes API profile must expose pending run controls and have the `clarify` tool enabled. On the development container, enable it as the Hermes user:
+
+```sh
+docker exec -u hermes hermes-dev hermes tools enable --platform api_server clarify
+```
+
+For a named Hermes profile, use the same command with `hermes --profile <name> tools enable --platform api_server clarify`. For Canonical Gateway, the Topic’s local-session toolset must include `clarify`.
+
 The [implemented wire](docs/superpowers/plans/2026-11-13-personal-mvp-wire.md) is the first slice of the design. It uses a single account, text chat, and WSS change notices with HTTP catch-up. Media attachments, system share-in, snapshot cursors, and production-grade deployment and device validation remain separate work.

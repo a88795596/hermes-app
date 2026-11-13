@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
-import type { Control, InboxItem, Message, MobileNotice, Profile, Topic, TopicDetail } from "@hermes-mobile/protocol";
+import type { Control, InboxItem, Message, MobileNotice, ModelRequest, ModelSelection, Profile, Topic, TopicDetail } from "@hermes-mobile/protocol";
 import type { Session } from "../auth/session";
 import { openCache, type Cache } from "../db/cache";
 import { ApiError, request } from "./api";
@@ -370,6 +370,18 @@ export function useWorkspace(session: Session, topicId: string | null) {
     if (id) await loadTopic(id);
   }
 
+  async function requestModel(id: string, requestId: string, selection: ModelSelection & { confirm?: string } | undefined, signal: AbortSignal) {
+    const path = `/topics/${id}/model-requests`;
+    await call<ModelRequest>(path, { method: "POST", body: { request_id: requestId, ...selection }, signal });
+    for (let tries = 0; tries < 50; tries += 1) {
+      signal.throwIfAborted();
+      const result = await call<ModelRequest>(`${path}/${requestId}`, { signal });
+      if (result.status !== "pending") return result;
+      await new Promise((resolve) => setTimeout(resolve, 650));
+    }
+    throw new Error("Hermes has not confirmed the request yet. Try again to check its status.");
+  }
+
   return {
     ...directory,
     detail: detail?.topic.topic_id === topicId ? detail : undefined,
@@ -387,5 +399,6 @@ export function useWorkspace(session: Session, topicId: string | null) {
     sessionEnded,
     finishSession,
     answer,
+    requestModel,
   };
 }
