@@ -29,7 +29,7 @@ export function bridgeFrame(source: string): BridgeFrame {
   if (frame?.type === 'ack' && uuid(frame.id)) return { type: 'ack', id: frame.id };
   if (frame?.type === 'topic_query' && uuid(frame.request_id) && uuid(frame.topic_id)
     && typeof frame.profile_ref === 'string' && /^[a-z0-9][a-z0-9_-]{0,63}$/u.test(frame.profile_ref)
-    && text(frame.session_id, 512) && (frame.kind === 'skills' || frame.kind === 'status')) {
+    && text(frame.session_id, 512) && (frame.kind === 'skills' || frame.kind === 'status' || frame.kind === 'version')) {
     const { type, request_id, topic_id, profile_ref, session_id, kind } = frame;
     return { type, request_id, topic_id, profile_ref, session_id, kind };
   }

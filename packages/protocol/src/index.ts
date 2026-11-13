@@ -81,7 +81,8 @@ export interface SessionStatus {
 
 export type TopicQueryData =
   | { kind: "skills"; skills: Skill[] }
-  | { kind: "status"; status: SessionStatus };
+  | { kind: "status"; status: SessionStatus }
+  | { kind: "version"; version: string };
 
 export interface TopicQuery {
   type: "topic_query";

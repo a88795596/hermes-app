@@ -79,6 +79,9 @@ export function connectorFrame(value: unknown): ConnectorFrame {
         });
         return { type, request_id, data: { kind: "skills", skills } };
       }
+      if (data.kind === "version") {
+        return { type, request_id, data: { kind: "version", version: string(data.version, "Hermes version", 128) } };
+      }
       if (data.kind !== "status") invalid("Invalid query result");
       const status = record(data.status, ["activity", "model", "message_count"]);
       const count = status.message_count;

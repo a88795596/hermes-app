@@ -46,22 +46,26 @@ test("topic lookups use the authenticated topic's Hermes profile and session", {
     await once(ws, "open", { signal: t.signal });
     const skills = Array.from({ length: 205 }, (_, index) => ({ name: `skill-${index}` }));
     const status = { activity: "running", model: "test-model", message_count: 0 };
-    for (const [kind, data] of [
-      ["skills", { kind: "skills", skills }],
-      ["status", { kind: "status", status }],
+    for (const [kind, expected] of [
+      ["skills", skills],
+      ["status", status],
+      ["version", "0.22.7"],
     ] as const) {
-      const incoming = once(ws, "message", { signal: t.signal });
-      const response = get("/" + kind);
-      const [raw] = await incoming;
-      const frame = JSON.parse(raw.toString());
-      assert.deepEqual(frame, {
-        type: "topic_query", request_id: frame.request_id, kind,
-        topic_id: topicId, profile_ref: "work", session_id: sessionId,
+      const incoming = once(ws, "message", { signal: t.signal }).then(([raw]) => {
+        const frame = JSON.parse(raw.toString());
+        assert.deepEqual(frame, {
+          type: "topic_query", request_id: frame.request_id, kind,
+          topic_id: topicId, profile_ref: "work", session_id: sessionId,
+        });
+        ws.send(JSON.stringify({
+          type: "topic_query_result", request_id: frame.request_id, data: { kind, [kind]: expected },
+        }));
       });
-      ws.send(JSON.stringify({ type: "topic_query_result", request_id: frame.request_id, data }));
-      const result = await response;
+      const response = get("/" + kind);
+      const result = await Promise.race([response, incoming.then(() => response)]);
       assert.equal(result.statusCode, 200);
-      assert.deepEqual(result.json().data, kind === "skills" ? skills : status);
+      await incoming;
+      assert.deepEqual(result.json().data, expected);
     }
 
     const incoming = once(ws, "message", { signal: t.signal });

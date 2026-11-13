@@ -10,7 +10,7 @@ import type { JsonObject } from './gateway.js';
 import { hasModel, modelCatalog } from './models.js';
 import { Spool } from './spool.js';
 import type { Binding, Cursor, Turn } from './spool.js';
-import { QueryUnavailable, queryTimeout, sessionStatus, skillList } from './topic-query.js';
+import { QueryUnavailable, queryTimeout, runtimeVersion, sessionStatus, skillList } from './topic-query.js';
 import { boundedText, commandDigest, result, stableId, text } from './wire.js';
 
 type Target =
@@ -110,6 +110,7 @@ export class CanonicalConnector {
     try {
       const info = await gateway.rpc('session.info', { session_id }, undefined, queryTimeout);
       if (info.profile_id !== binding.profileId) throw new Error('Unexpected Hermes profile');
+      if (kind === 'version') return { kind, version: runtimeVersion(info.version) };
       if (kind === 'skills') {
         const categories = object(info.skills);
         if (!categories) throw new QueryUnavailable();

@@ -229,9 +229,11 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
       if (result.error === "unavailable") {
         throw new ApiError(503, "TOPIC_QUERY_UNAVAILABLE", "This Hermes server does not provide this request.");
       }
-      throw new ApiError(502, "TOPIC_QUERY_FAILED", target.kind === "skills"
-        ? "Hermes could not list skills for this profile. Try again."
-        : "Hermes could not read this session’s status. Try again.");
+      throw new ApiError(502, "TOPIC_QUERY_FAILED", {
+        skills: "Hermes could not list skills for this profile. Try again.",
+        status: "Hermes could not read this session’s status. Try again.",
+        version: "Hermes could not report its version. Try again.",
+      }[target.kind]);
     },
     manage(call: ManagementCall) {
       if (!active?.manage) throw new ApiError(503, "MANAGEMENT_UNAVAILABLE",

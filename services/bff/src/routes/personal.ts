@@ -99,7 +99,7 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
   api.get(`${prefix}/status`, requireDevice, (request) => success(request, { connector_online: bridge.online() }));
   api.get(`${prefix}/topics`, requireDevice, async (request) => success(request, await topics(store, refs)));
   api.get(`${prefix}/topics/:id`, requireDevice, async (request) => success(request, await detail(store, pathId(request), refs)));
-  for (const kind of ["skills", "status"] satisfies TopicQuery["kind"][]) {
+  for (const kind of ["skills", "status", "version"] satisfies TopicQuery["kind"][]) {
     api.get(`${prefix}/topics/:id/${kind}`, requireDevice, async (request) => {
       const topic = await topicRow(store, pathId(request), refs);
       if (topic.status !== "ready" || !topic.session_id) {
@@ -108,7 +108,11 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
       const result = await bridge.query({
         kind, topic_id: topic.id, profile_ref: topic.profile_ref, session_id: topic.session_id,
       });
-      return success(request, result.kind === "skills" ? result.skills : result.status);
+      switch (result.kind) {
+        case "skills": return success(request, result.skills);
+        case "status": return success(request, result.status);
+        case "version": return success(request, result.version);
+      }
     });
   }
   api.get(`${prefix}/inbox`, requireDevice, async (request) => {

@@ -190,6 +190,13 @@ function Workspace({
           workspace={workspace}
           draft={drafts[topicId] ?? ""}
           onDraftChange={(value) => setDrafts((current) => ({ ...current, [topicId]: value }))}
+          onNewTopic={() => {
+            showSection("Topics");
+            setProfileId(topic?.profile_id);
+            setTitle("");
+            setComposing(true);
+            setTopicId(null);
+          }}
         />
       </>
     );

@@ -1,10 +1,10 @@
 import { randomUUID } from "expo-crypto";
 import { useEffect, useRef, useState, type ComponentRef } from "react";
 import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
-import type { Control, Message, Topic } from "@hermes-mobile/protocol";
+import type { Control, Message, SessionStatus, Skill, Topic } from "@hermes-mobile/protocol";
 import type { useWorkspace } from "../sync/use-workspace";
 import { Action, Card, EmptyState, Field, Icon, Notice, useTheme } from "../ui/theme";
-import { ComposerMenu } from "./composer-menu";
+import { ComposerMenu, type ComposerCommand } from "./composer-menu";
 import { ModelPicker } from "./model-picker";
 
 const messageStatus: Record<Message["status"], string> = {
@@ -18,6 +18,12 @@ const messageStatus: Record<Message["status"], string> = {
 };
 
 const transcriptGutter = 13;
+const activityLabel: Record<SessionStatus["activity"], string> = {
+  idle: "空闲",
+  running: "正在响应",
+  queued: "排队中",
+  unknown: "执行状态待确认",
+};
 
 function ControlCard({
   control, enabled, onAnswer,
@@ -130,13 +136,14 @@ function ControlCard({
 }
 
 export function Conversation({
-  id, topic, workspace, draft, onDraftChange,
+  id, topic, workspace, draft, onDraftChange, onNewTopic,
 }: {
   id: string;
   topic?: Topic;
   workspace: ReturnType<typeof useWorkspace>;
   draft: string;
   onDraftChange: (value: string) => void;
+  onNewTopic: () => void;
 }) {
   const { colors, styles } = useTheme();
   const { width } = useWindowDimensions();
@@ -150,7 +157,8 @@ export function Conversation({
   const [menu, setMenu] = useState<"commands" | "skills">();
   const [error, setError] = useState<string>();
   const [modelPicker, setModelPicker] = useState(false);
-  const [modelNotice, setModelNotice] = useState<string>();
+  const [commandNotice, setCommandNotice] = useState<string>();
+  const queryPending = useRef(false);
   const interruptId = useRef<string>(undefined);
   const messages = workspace.detail?.messages ?? [];
   const controls = workspace.detail?.controls ?? [];
@@ -194,7 +202,7 @@ export function Conversation({
       if (!canControl) return;
       Keyboard.dismiss();
       setError(undefined);
-      setModelNotice(undefined);
+      setCommandNotice(undefined);
       setModelPicker(true);
       onDraftChange("");
       return;
@@ -204,7 +212,7 @@ export function Conversation({
     try {
       await workspace.enqueue({ submission_id: randomUUID(), topic_id: id, text, created_at: Date.now() });
       onDraftChange("");
-      setModelNotice(undefined);
+      setCommandNotice(undefined);
       pinned.current = true;
       scroll.current?.scrollToEnd({ animated: true });
     } catch (failure) {
@@ -215,21 +223,70 @@ export function Conversation({
   }
 
   async function stop() {
-    if (!activeSubmission || !canControl || stopping) return;
+    if (stopping) return;
+    if (!activeSubmission || !canControl) {
+      setCommandNotice(!activeSubmission ? "当前没有正在生成的响应。" : "连接 Hermes 后可停止响应。");
+      return;
+    }
     const request_id = interruptId.current ?? randomUUID();
     interruptId.current = request_id;
     setStopping(true);
     setError(undefined);
+    setCommandNotice("正在请求停止响应…");
     try {
       await workspace.call(`/topics/${id}/interrupt`, {
         method: "POST", body: { request_id, submission_id: activeSubmission },
       });
+      setCommandNotice("已请求停止响应。");
       await workspace.refresh();
     } catch (failure) {
+      setCommandNotice(undefined);
       setError(failure instanceof Error ? failure.message : "The stop request could not be confirmed.");
     } finally {
       setStopping(false);
     }
+  }
+
+  async function runCommand(command: ComposerCommand) {
+    if (command === "skills") {
+      setMenu("skills");
+      return;
+    }
+    setMenu(undefined);
+    if (queryPending.current && (command === "status" || command === "version")) return;
+    setError(undefined);
+    setCommandNotice(undefined);
+    if (command === "stop") {
+      await stop();
+    } else if (command === "model") {
+      if (canControl) setModelPicker(true);
+      else setCommandNotice("连接 Hermes 后可选择模型。");
+    } else if (command === "new") {
+      onNewTopic();
+    } else {
+      queryPending.current = true;
+      setCommandNotice(command === "version" ? "正在查询 Hermes 版本…" : "正在查询会话状态…");
+      try {
+        if (command === "version") {
+          setCommandNotice(`Hermes ${await workspace.call<string>(`/topics/${id}/version`)}`);
+        } else {
+          const status = await workspace.call<SessionStatus>(`/topics/${id}/status`);
+          setCommandNotice(["/status", activityLabel[status.activity], status.model,
+            status.message_count === undefined ? undefined : `${status.message_count} 条消息`,
+          ].filter(Boolean).join(" · "));
+        }
+      } catch (failure) {
+        setCommandNotice(undefined);
+        setError(failure instanceof Error ? failure.message : "无法完成 Hermes 查询。");
+      } finally {
+        queryPending.current = false;
+      }
+    }
+  }
+
+  function selectSkill(skill: Skill) {
+    setMenu(undefined);
+    onDraftChange(`请先用 skill_view 加载技能 ${JSON.stringify(skill.name)}，再处理以下任务。\n\n${draft}`);
   }
 
   return (
@@ -237,9 +294,11 @@ export function Conversation({
       {menu && (
         <ComposerMenu kind={menu} id={id} call={workspace.call}
           profile={workspace.profiles.find((item) => item.profile_id === topic?.profile_id)?.label}
+          connected={canControl}
           canStop={running && canControl && !stopping}
           onClose={() => setMenu(undefined)}
-          onStop={() => { setMenu(undefined); void stop(); }} />
+          onCommand={(command) => void runCommand(command)}
+          onSkill={selectSkill} />
       )}
       <ScrollView
         ref={scroll}
@@ -336,11 +395,11 @@ export function Conversation({
       </ScrollView>
       <View style={[chat.composer, { borderTopColor: colors.edge }]}>
         {error && <Notice>{error}</Notice>}
-        {modelNotice && <Text accessibilityLiveRegion="polite" style={styles.muted}>{modelNotice}</Text>}
+        {commandNotice && <Text accessibilityLiveRegion="polite" style={styles.muted}>{commandNotice}</Text>}
         {isModelCommand && !canControl && <Text style={styles.muted}>Connect to Hermes to choose a model.</Text>}
         <View style={styles.row}>
-          <Action title="Commands" disabled={topic?.status !== "ready"} onPress={() => { Keyboard.dismiss(); setMenu("commands"); }} />
-          <Action title="Skills" disabled={topic?.status !== "ready"} onPress={() => { Keyboard.dismiss(); setMenu("skills"); }} />
+          <Action title="命令" disabled={topic?.status !== "ready"} onPress={() => { Keyboard.dismiss(); setMenu("commands"); }} />
+          <Action title="技能" disabled={topic?.status !== "ready"} onPress={() => { Keyboard.dismiss(); setMenu("skills"); }} />
           {running && (
             <Action title={stopping ? "Requesting stop…" : "Stop response"} icon="stop"
               disabled={!canControl || stopping} onPress={() => void stop()} />
@@ -391,7 +450,7 @@ export function Conversation({
           onRequest={(requestId, selection, signal) => workspace.requestModel(id, requestId, selection, signal)}
           onSelected={({ selection, type }) => {
             setModelPicker(false);
-            setModelNotice(type === "deferred" ? `Queued model change · ${selection.model}` : `Model selected · ${selection.model}`);
+            setCommandNotice(type === "deferred" ? `模型切换已排队 · ${selection.model}` : `已选择模型 · ${selection.model}`);
           }}
         />
       )}

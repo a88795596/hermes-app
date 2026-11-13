@@ -5,7 +5,7 @@ import { integer, object, string } from './gateway.js';
 import type { JsonObject } from './gateway.js';
 import { hasModel, modelCatalog } from './models.js';
 import type { Binding, Spool, Turn } from './spool.js';
-import { QueryUnavailable, queryTimeout, sessionStatus, skillList } from './topic-query.js';
+import { QueryUnavailable, queryTimeout, runtimeVersion, sessionStatus, skillList } from './topic-query.js';
 import { boundedText, commandDigest, result, stableId, text } from './wire.js';
 
 const unknown = 'Hermes could not confirm the outcome';
@@ -87,7 +87,9 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
     if (!binding || binding.profileRef !== profile_ref || binding.sessionId !== session_id || !session_id.startsWith('mobile_')) {
       throw new Error('Hermes session binding could not be verified');
     }
-    const path = kind === 'skills' ? '/v1/skills' : `/api/sessions/${encodeURIComponent(session_id)}`;
+    const path = kind === 'skills' ? '/v1/skills'
+      : kind === 'version' ? '/v1/health'
+      : `/api/sessions/${encodeURIComponent(session_id)}`;
     const response = await request(profile_ref, path, { signal: AbortSignal.timeout(queryTimeout) });
     if (!response.ok) {
       await response.body?.cancel();
@@ -96,6 +98,7 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
     }
     const data = object(await response.json());
     if (kind === 'skills') return { kind, skills: skillList(data?.data) };
+    if (kind === 'version') return { kind, version: runtimeVersion(data?.version) };
     const session = object(data?.session);
     if (session?.id !== session_id) throw new Error('Unexpected Hermes session');
     return { kind, status: sessionStatus(session, spool.activeTurns(topic_id)) };

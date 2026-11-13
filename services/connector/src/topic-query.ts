@@ -7,6 +7,12 @@ export const queryTimeout = 8_000;
 
 export class QueryUnavailable extends Error {}
 
+export function runtimeVersion(value: unknown): string {
+  const version = boundedText(string(value) ?? '', 128).trim();
+  if (!version) throw new QueryUnavailable();
+  return version;
+}
+
 export function skillList(value: unknown): Skill[] {
   if (!Array.isArray(value)) throw new Error('Invalid Hermes skill list');
   return value.map((raw) => {
