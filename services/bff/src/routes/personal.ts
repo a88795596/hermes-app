@@ -1,0 +1,176 @@
+import { randomBytes } from "node:crypto";
+import type { InboxItem, MobileNotice } from "@hermes-mobile/protocol";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { WebSocket } from "ws";
+import { deviceAuth, matchesToken } from "../auth.js";
+import { registerBridge } from "../bridge.js";
+import { createTopic, findProfile, interrupt, respond, submit } from "../mutations.js";
+import { detail, profiles, topics } from "../projections.js";
+import { registerPushRoutes } from "../push.js";
+import type { Store } from "../store.js";
+import { ApiError, invalid, record, string, uuid } from "../validation.js";
+
+interface Config {
+  pairingToken: string;
+  connectorToken: string;
+  profileRefs: string[];
+}
+
+function success(request: FastifyRequest, data: unknown) {
+  return { data, request_id: request.id, server_time: new Date().toISOString() };
+}
+
+function accepted(request: FastifyRequest, reply: FastifyReply, data: unknown) {
+  return reply.code(202).send(success(request, data));
+}
+
+function pathId(request: FastifyRequest) {
+  return uuid(record(request.params).id, "id");
+}
+
+export function registerPersonalRoutes(api: FastifyInstance, store: Store, config: Config) {
+  const refs = new Set(config.profileRefs.map((ref) => string(ref.trim(), "profile ref", 256)));
+  if (!refs.size || [...refs].some((ref) => !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(ref))) {
+    throw new Error("HERMES_PROFILES must contain valid Hermes profile names");
+  }
+  const auth = deviceAuth(store);
+  const tickets = new Map<string, { deviceId: string; expiresAt: number }>();
+  const mobiles = new Map<WebSocket, string>();
+  const prefix = "/mobile/v1";
+  api.addHook("onRequest", async (_request, reply) => { reply.header("Cache-Control", "no-store"); });
+  const authenticate = async (request: FastifyRequest) => {
+    const deviceId = await auth.authenticate(request);
+    if (!deviceId) throw new ApiError(401, "UNAUTHORIZED", "Invalid device credentials");
+    return deviceId;
+  };
+  const requireDevice = { preValidation: async (request: FastifyRequest) => { await authenticate(request); } };
+  const changed = (topicId?: string) => {
+    const notice: MobileNotice = { type: "changed", ...(topicId ? { topic_id: topicId } : {}) };
+    const raw = JSON.stringify(notice);
+    for (const socket of mobiles.keys()) {
+      if (socket.readyState !== socket.OPEN) continue;
+      if (socket.bufferedAmount > 256 * 1024) socket.close(1013, "Reconnect and reload");
+      else socket.send(raw);
+    }
+  };
+  const bridge = registerBridge(api, store, refs, config.connectorToken, changed);
+  registerPushRoutes(api, store, authenticate);
+
+  api.setErrorHandler((error, request, reply) => {
+    if (error instanceof ApiError) {
+      return reply.code(error.statusCode).send({ error: { code: error.code, message: error.message, retryable: false }, request_id: request.id });
+    }
+    const status = error instanceof Error && "statusCode" in error ? Number(error.statusCode) : 500;
+    const rejected = status >= 400 && status < 500;
+    if (!rejected) api.log.error({ request_id: request.id }, "Request failed");
+    return reply.code(rejected ? status : 500).send({ error: {
+      code: rejected ? "BAD_REQUEST" : "INTERNAL_ERROR",
+      message: rejected ? "Invalid request" : "Request could not be completed",
+      retryable: !rejected,
+    }, request_id: request.id });
+  });
+
+  api.post(`${prefix}/pairings/redeem`, async (request) => {
+    const body = record(request.body, ["pairing_token", "device_name"]);
+    if (!matchesToken(body.pairing_token, config.pairingToken)) throw new ApiError(401, "UNAUTHORIZED", "Invalid pairing token");
+    const name = string(body.device_name, "device_name", 160);
+    return success(request, await auth.issue(name));
+  });
+
+  api.delete(`${prefix}/auth/session`, async (request, reply) => {
+    const deviceId = await authenticate(request);
+    await auth.revoke(deviceId);
+    for (const [key, ticket] of tickets) if (ticket.deviceId === deviceId) tickets.delete(key);
+    for (const [socket, owner] of mobiles) if (owner === deviceId) socket.close(1008, "Session revoked");
+    return reply.code(204).send();
+  });
+
+  api.get(`${prefix}/profiles`, requireDevice, (request) => success(request, profiles(refs)));
+  api.get(`${prefix}/status`, requireDevice, (request) => success(request, { connector_online: bridge.online() }));
+  api.get(`${prefix}/topics`, requireDevice, async (request) => success(request, await topics(store, refs)));
+  api.get(`${prefix}/topics/:id`, requireDevice, async (request) => success(request, await detail(store, pathId(request), refs)));
+  api.get(`${prefix}/inbox`, requireDevice, async (request) => {
+    const { rows } = await store.query<{ data: InboxItem }>("SELECT data FROM inbox WHERE profile_ref = ANY($1) ORDER BY created_at DESC, id", [[...refs]]);
+    return success(request, rows.map(({ data }) => data));
+  });
+
+  api.post(`${prefix}/topics`, requireDevice, async (request, reply) => {
+    const body = record(request.body, ["request_id", "profile_id", "title"]);
+    const id = uuid(body.request_id, "request_id");
+    const profile = findProfile(refs, uuid(body.profile_id, "profile_id"));
+    const title = string(body.title, "title", 256);
+    const topic = await store.transaction((db) => createTopic(db, id, profile, title));
+    changed(topic.topic_id);
+    bridge.pump();
+    return accepted(request, reply, topic);
+  });
+
+  api.post(`${prefix}/topics/:id/submissions`, requireDevice, async (request, reply) => {
+    const topicId = pathId(request);
+    const body = record(request.body, ["submission_id", "text"]);
+    const id = uuid(body.submission_id, "submission_id");
+    const text = string(body.text, "text", 64 * 1024);
+    const message = await store.transaction((db) => submit(db, refs, topicId, id, text));
+    changed(topicId);
+    bridge.pump();
+    return accepted(request, reply, message);
+  });
+
+  api.post(`${prefix}/topics/:id/interrupt`, requireDevice, async (request, reply) => {
+    const topicId = pathId(request);
+    const body = record(request.body, ["request_id", "submission_id"]);
+    const id = uuid(body.request_id, "request_id");
+    const submissionId = uuid(body.submission_id, "submission_id");
+    const result = await store.transaction((db) => interrupt(db, refs, topicId, id, submissionId));
+    bridge.pump();
+    return accepted(request, reply, result);
+  });
+
+  api.post(`${prefix}/controls/:id/responses`, requireDevice, async (request, reply) => {
+    const controlId = pathId(request);
+    const body = record(request.body, ["response_id", "answer"]);
+    const id = uuid(body.response_id, "response_id");
+    const answer = string(body.answer, "answer", 64 * 1024, true);
+    const { topicId, result } = await store.transaction((db) => respond(db, refs, controlId, id, answer));
+    changed(topicId);
+    bridge.pump();
+    return accepted(request, reply, result);
+  });
+
+  api.post(`${prefix}/ws-tickets`, async (request) => {
+    const deviceId = await authenticate(request);
+    const now = Date.now();
+    for (const [key, ticket] of tickets) if (ticket.expiresAt <= now) tickets.delete(key);
+    if (tickets.size >= 1024) throw new ApiError(429, "TOO_MANY_TICKETS", "Try again shortly");
+    const ticket = randomBytes(32).toString("base64url");
+    tickets.set(ticket, { deviceId, expiresAt: now + 30_000 });
+    return success(request, { ticket });
+  });
+
+  const readTicket = (request: FastifyRequest) => string(record(request.query, ["ticket"]).ticket, "ticket", 43);
+  api.get(`${prefix}/events`, { websocket: true, preValidation: async (request) => {
+    const ticket = tickets.get(readTicket(request));
+    if (!ticket || ticket.expiresAt <= Date.now()) throw new ApiError(401, "UNAUTHORIZED", "Invalid WebSocket ticket");
+  } }, (socket, request) => {
+    const key = readTicket(request);
+    const ticket = tickets.get(key);
+    tickets.delete(key);
+    if (!ticket || ticket.expiresAt <= Date.now()) return socket.close(1008, "Invalid WebSocket ticket");
+    mobiles.set(socket, ticket.deviceId);
+    let alive = true;
+    socket.on("pong", () => { alive = true; });
+    const heartbeat = setInterval(() => {
+      if (!alive) return socket.terminate();
+      alive = false;
+      if (socket.readyState === socket.OPEN) socket.ping();
+    }, 25_000);
+    heartbeat.unref();
+    socket.once("close", () => {
+      clearInterval(heartbeat);
+      mobiles.delete(socket);
+    });
+    socket.on("error", () => socket.terminate());
+    socket.on("message", () => socket.close(1008, "Read-only connection"));
+    socket.send(JSON.stringify({ type: "changed" } satisfies MobileNotice));
+  });
+}

@@ -1,0 +1,30 @@
+{
+  "name": "@hermes-mobile/connector",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "hermes-mobile-connector": "dist/main.cjs"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "start": "node dist/main.cjs",
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node24 --format=cjs --outfile=dist/main.cjs --banner:js='#!/usr/bin/env node' --log-override:empty-import-meta=silent && cp ../../plugins/hermes-mobile-delivery/src/hermes_mobile_delivery/spool.py dist/spool.py && chmod +x dist/main.cjs",
+    "prepack": "pnpm build",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@hermes-mobile/hermes-adapter": "workspace:*",
+    "@hermes-mobile/protocol": "workspace:*",
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.0",
+    "esbuild": "^0.28.0",
+    "tsx": "^4.0.0",
+    "typescript": "~6.0.3",
+    "ws": "^8.23.0"
+  }
+}

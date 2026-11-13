@@ -1,0 +1,16 @@
+node_modules/
+.expo/
+.pnpm-store/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+.data/
+*.db
+*.sqlite
+*.sqlite3
+__pycache__/
+*.py[cod]
+.venv/
+.DS_Store

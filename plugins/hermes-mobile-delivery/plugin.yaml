@@ -1,0 +1,16 @@
+name: hermes-mobile-delivery
+label: Hermes Mobile
+kind: platform
+version: 0.0.0
+description: Durable text delivery from Hermes Agent to the Hermes Mobile Inbox.
+requires_env:
+  - name: HERMES_MOBILE_SPOOL_PATH
+    description: Absolute path of the local delivery SQLite database.
+    password: false
+  - name: HERMES_MOBILE_HOME_CHANNEL
+    description: The single allowed Hermes Mobile target ID.
+    password: false
+optional_env:
+  - name: HERMES_MOBILE_PROFILE
+    description: Allowed Hermes profile name. Defaults to default.
+    password: false
