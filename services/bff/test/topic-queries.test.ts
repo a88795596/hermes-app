@@ -7,7 +7,7 @@ import WebSocket from "ws";
 import { registerPersonalRoutes } from "../src/routes/personal.js";
 import type { Store } from "../src/store.js";
 
-test("topic lookups use the authenticated topic's Hermes profile and session", { timeout: 5_000 }, async (t) => {
+test("话题查询使用通过鉴权的话题所绑定的 Hermes 配置档案和会话", { timeout: 5_000 }, async (t) => {
   const app = Fastify();
   const topicId = "00000000-0000-4000-8000-000000000001";
   const deniedId = "00000000-0000-4000-8000-000000000002";

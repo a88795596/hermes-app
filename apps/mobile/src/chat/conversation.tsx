@@ -8,14 +8,21 @@ import { ComposerMenu } from "./composer-menu";
 import { ModelPicker } from "./model-picker";
 
 const messageStatus: Record<Message["status"], string> = {
-  accepted: "Accepted",
-  queued: "Queued",
-  streaming: "Responding…",
+  accepted: "已接收",
+  queued: "排队中",
+  streaming: "回复中…",
   final: "",
-  failed: "Failed",
-  unknown: "Execution unconfirmed",
-  cancelled: "Stopped",
+  failed: "失败",
+  unknown: "执行状态待确认",
+  cancelled: "已停止",
 };
+
+const approvalLabels = new Map([
+  ["once", "仅允许本次"],
+  ["session", "本次会话内允许"],
+  ["always", "始终允许"],
+  ["deny", "拒绝"],
+]);
 
 const transcriptGutter = 13;
 
@@ -39,6 +46,7 @@ function ControlCard({
   const clarify = control.kind === "clarify";
   const showText = clarify && (!control.choices.length || other);
   const multiSelect = clarify && control.multi_select === true;
+  const choiceLabel = (choice: string) => clarify ? choice : approvalLabels.get(choice) ?? choice;
 
   async function answer(value: string) {
     if (!canAnswer || answering.current) return;
@@ -52,7 +60,7 @@ function ControlCard({
       await onAnswer(control, id, value);
       setSubmitted(true);
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "The response could not be confirmed.");
+      setError(failure instanceof Error ? failure.message : "无法确认是否已收到你的答复。");
     } finally {
       answering.current = false;
       setSending(false);
@@ -71,59 +79,61 @@ function ControlCard({
   if (multiSelect && savedAnswer) {
     try {
       const values: unknown = JSON.parse(savedAnswer);
-      if (Array.isArray(values) && values.every((value) => typeof value === "string")) savedAnswer = values.join(", ");
+      if (Array.isArray(values) && values.every((value) => typeof value === "string")) savedAnswer = values.join("、");
     } catch {
-      // Earlier clients stored plain text for single button taps.
+      // 旧客户端点击单个选项时保存的是纯文本。
     }
   }
 
   return (
     <Card>
-      <Text style={styles.label}>{clarify ? "Clarification" : "Approval"}</Text>
-      <Text selectable style={styles.text}>{control.prompt}</Text>
+      <Text style={styles.label}>{clarify ? "澄清问题" : "操作审批"}</Text>
+      <Text selectable style={styles.text}>
+        {control.prompt === "Hermes requires an answer" ? "Hermes 正在等待回答。" : control.prompt}
+      </Text>
       {control.status !== "pending" || submitted ? (
         <Text accessibilityLiveRegion="polite" style={styles.muted}>
-          {savedAnswer === "" ? "Skipped" : savedAnswer ? `You answered: ${savedAnswer}` : {
-            responding: "Sending response…",
-            pending: "Sending response…",
-            closed: "No longer awaiting an answer",
-            unknown: "Response unconfirmed",
+          {savedAnswer === "" ? "已跳过" : savedAnswer ? `你的答复：${choiceLabel(savedAnswer)}` : {
+            responding: "正在发送答复…",
+            pending: "正在发送答复…",
+            closed: "已结束等待",
+            unknown: "答复待确认",
           }[control.status]}
         </Text>
       ) : (
         <>
-          {multiSelect && !other && <Text style={styles.muted}>Select one or more options.</Text>}
+          {multiSelect && !other && <Text style={styles.muted}>可选择一项或多项。</Text>}
           {!other && control.choices.length > 0 && (
             <View style={styles.row}>
               {control.choices.map((choice) => (
-                <Action key={choice} title={choice} disabled={!canAnswer} selected={multiSelect ? selected.includes(choice) : undefined}
+                <Action key={choice} title={choiceLabel(choice)} disabled={!canAnswer} selected={multiSelect ? selected.includes(choice) : undefined}
                   icon={selected.includes(choice) ? "check" : undefined} onPress={() => pick(choice)} />
               ))}
             </View>
           )}
           {showText && (
-            <Field accessibilityLabel="Clarification answer" placeholder="Your answer" value={text} editable={canAnswer}
+            <Field accessibilityLabel="澄清答复" placeholder="输入你的答复" value={text} editable={canAnswer}
               onChangeText={setText} autoFocus={other} />
           )}
           {clarify ? (
             <View style={styles.row}>
               {showText && (
-                <Action title="Reply" primary disabled={!canAnswer || !text.trim()}
+                <Action title="回复" primary disabled={!canAnswer || !text.trim()}
                   onPress={() => void answer(multiSelect ? JSON.stringify([text.trim()]) : text.trim())} />
               )}
               {multiSelect && !other && (
-                <Action title="Reply" primary disabled={!canAnswer || !selected.length}
+                <Action title="回复" primary disabled={!canAnswer || !selected.length}
                   onPress={() => void answer(JSON.stringify(selected))} />
               )}
               {control.choices.length > 0 && (
-                <Action title={other ? "Show choices" : "Other"} disabled={!canAnswer} onPress={() => setOther(!other)} />
+                <Action title={other ? "显示选项" : "其他"} disabled={!canAnswer} onPress={() => setOther(!other)} />
               )}
-              <Action title="Skip" disabled={!canAnswer} onPress={() => void answer("")} />
+              <Action title="跳过" disabled={!canAnswer} onPress={() => void answer("")} />
             </View>
-          ) : !control.choices.length && <Text style={styles.muted}>No approval choices available.</Text>}
+          ) : !control.choices.length && <Text style={styles.muted}>暂无可用的审批选项。</Text>}
         </>
       )}
-      {control.status === "pending" && !submitted && !enabled && <Text style={styles.muted}>Reconnect to Hermes to answer.</Text>}
+      {control.status === "pending" && !submitted && !enabled && <Text style={styles.muted}>重新连接 Hermes 后即可答复。</Text>}
       {(error ?? control.error) && <Notice>{error ?? control.error}</Notice>}
     </Card>
   );
@@ -208,7 +218,7 @@ export function Conversation({
       pinned.current = true;
       scroll.current?.scrollToEnd({ animated: true });
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "The message could not be saved.");
+      setError(failure instanceof Error ? failure.message : "无法保存消息。");
     } finally {
       setSending(false);
     }
@@ -226,7 +236,7 @@ export function Conversation({
       });
       await workspace.refresh();
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "The stop request could not be confirmed.");
+      setError(failure instanceof Error ? failure.message : "无法确认停止请求是否生效。");
     } finally {
       setStopping(false);
     }
@@ -265,13 +275,13 @@ export function Conversation({
         {topic?.status === "creating" && (
           <View style={chat.progress}>
             <ActivityIndicator color={colors.accent} />
-            <Text accessibilityLiveRegion="polite" style={styles.muted}>Creating the Hermes session…</Text>
+            <Text accessibilityLiveRegion="polite" style={styles.muted}>正在创建 Hermes 会话…</Text>
           </View>
         )}
-        {topic?.status === "error" && <Notice>{topic.error ?? "Hermes could not create this session."}</Notice>}
+        {topic?.status === "error" && <Notice>{topic.error ?? "Hermes 无法创建此会话。"}</Notice>}
         {topic?.status === "ready" && messages.length === 0 && pending.length === 0 && controls.length === 0 && (
           <View style={chat.empty}>
-            <EmptyState icon="chat" title="Start the conversation" description="Send a message to Hermes." />
+            <EmptyState icon="chat" title="开始对话" description="给 Hermes 发送一条消息。" />
           </View>
         )}
         {messages.map((message, index) => {
@@ -289,7 +299,7 @@ export function Conversation({
                   ]}>
                     <Text
                       selectable
-                      accessibilityLabel={`${outgoing ? "You" : "Hermes"}: ${message.text}`}
+                      accessibilityLabel={`${outgoing ? "你" : "Hermes"}：${message.text}`}
                       style={[styles.text, chat.messageText, outgoing && { color: colors.onAccent }]}
                     >
                       {message.text}
@@ -298,7 +308,7 @@ export function Conversation({
                 )}
                 {messageStatus[message.status] ? (
                   <Text style={[styles.caption, outgoing && chat.outgoingStatus]}>
-                    {!outgoing && !message.text && message.status === "streaming" ? "Hermes is responding…" : messageStatus[message.status]}
+                    {!outgoing && !message.text && message.status === "streaming" ? "Hermes 正在回复…" : messageStatus[message.status]}
                   </Text>
                 ) : null}
                 {message.error && <Notice>{message.error}</Notice>}
@@ -312,7 +322,7 @@ export function Conversation({
         {pending.map((item) => (
           <View key={item.submission_id} style={[chat.message, chat.outgoing, { maxWidth: messageWidth }]}>
             <View style={[chat.bubble, chat.outgoingBubble, { backgroundColor: colors.tint }]}>
-              <Text selectable accessibilityLabel={`You: ${item.text}`} style={[styles.text, chat.messageText]}>
+              <Text selectable accessibilityLabel={`你：${item.text}`} style={[styles.text, chat.messageText]}>
                 {item.text}
               </Text>
             </View>
@@ -320,14 +330,14 @@ export function Conversation({
               <>
                 <Notice>{item.error}</Notice>
                 <Action
-                  title="Discard unsent message"
+                  title="丢弃未发送的消息"
                   destructive
                   onPress={() => void workspace.discard(item).catch((failure: unknown) => {
-                    setError(failure instanceof Error ? failure.message : "The unsent message could not be discarded.");
+                    setError(failure instanceof Error ? failure.message : "无法丢弃未发送的消息。");
                   })}
                 />
               </>
-            ) : <Text style={[styles.caption, chat.outgoingStatus]}>Waiting to send</Text>}
+            ) : <Text style={[styles.caption, chat.outgoingStatus]}>等待发送</Text>}
           </View>
         ))}
         {trailingControls.map((control) => (
@@ -337,19 +347,19 @@ export function Conversation({
       <View style={[chat.composer, { borderTopColor: colors.edge }]}>
         {error && <Notice>{error}</Notice>}
         {modelNotice && <Text accessibilityLiveRegion="polite" style={styles.muted}>{modelNotice}</Text>}
-        {isModelCommand && !canControl && <Text style={styles.muted}>Connect to Hermes to choose a model.</Text>}
+        {isModelCommand && !canControl && <Text style={styles.muted}>连接 Hermes 后即可选择模型。</Text>}
         <View style={styles.row}>
-          <Action title="Commands" disabled={topic?.status !== "ready"} onPress={() => { Keyboard.dismiss(); setMenu("commands"); }} />
-          <Action title="Skills" disabled={topic?.status !== "ready"} onPress={() => { Keyboard.dismiss(); setMenu("skills"); }} />
+          <Action title="命令" disabled={topic?.status !== "ready"} onPress={() => { Keyboard.dismiss(); setMenu("commands"); }} />
+          <Action title="技能" disabled={topic?.status !== "ready"} onPress={() => { Keyboard.dismiss(); setMenu("skills"); }} />
           {running && (
-            <Action title={stopping ? "Requesting stop…" : "Stop response"} icon="stop"
+            <Action title={stopping ? "正在请求停止…" : "停止回复"} icon="stop"
               disabled={!canControl || stopping} onPress={() => void stop()} />
           )}
         </View>
         <View style={[chat.composerRow, { backgroundColor: colors.field, borderColor: draftFocused ? colors.accent : colors.edge }]}>
           <Field
-            accessibilityLabel="Message"
-            placeholder="Message Hermes"
+            accessibilityLabel="消息"
+            placeholder="发消息给 Hermes"
             style={chat.draft}
             multiline
             editable={topic?.status === "ready" && !sending}
@@ -360,7 +370,7 @@ export function Conversation({
           />
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Send"
+            accessibilityLabel="发送"
             accessibilityState={{ disabled: sendDisabled, busy: sending }}
             disabled={sendDisabled}
             onPress={() => void send()}
@@ -385,13 +395,13 @@ export function Conversation({
       {modelPicker && (
         <ModelPicker
           enabled={canControl && !modelBusy}
-          unavailable={modelBusy ? "Wait for the current response before switching models."
-            : !canControl ? "Reconnect to Hermes to choose a model." : undefined}
+          unavailable={modelBusy ? "请等待当前回复结束，再切换模型。"
+            : !canControl ? "重新连接 Hermes 后即可选择模型。" : undefined}
           onClose={() => setModelPicker(false)}
           onRequest={(requestId, selection, signal) => workspace.requestModel(id, requestId, selection, signal)}
           onSelected={({ selection, type }) => {
             setModelPicker(false);
-            setModelNotice(type === "deferred" ? `Queued model change · ${selection.model}` : `Model selected · ${selection.model}`);
+            setModelNotice(type === "deferred" ? `已排队切换模型 · ${selection.model}` : `已选择模型 · ${selection.model}`);
           }}
         />
       )}

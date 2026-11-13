@@ -8,7 +8,7 @@ import type { DeliveryFrame } from "@hermes-mobile/protocol";
 const run = promisify(execFile);
 
 export function createDeliverySpool(path: string) {
-  if (!isAbsolute(path)) throw new Error("HERMES_MOBILE_SPOOL_PATH must be absolute");
+  if (!isAbsolute(path)) throw new Error("HERMES_MOBILE_SPOOL_PATH 必须使用绝对路径");
 
   const python = process.env.HERMES_MOBILE_PYTHON || "python3";
   const script = typeof __dirname === "string"

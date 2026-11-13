@@ -26,7 +26,7 @@ export function integer(value: unknown): number | undefined {
 
 export class GatewayRefusal extends Error {
   constructor(readonly code: number, readonly reason: string | undefined) {
-    super('Hermes rejected the request');
+    super('Hermes 拒绝了请求');
   }
 }
 
@@ -69,26 +69,26 @@ export class Gateway {
   ) {
     this.ready = new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
-        reject(new Error('Hermes gateway ready timed out'));
+        reject(new Error('等待 Hermes 网关就绪超时'));
         socket.terminate();
       }, requestTimeout);
       socket.once('close', () => {
         clearTimeout(timeout);
-        reject(new Error('Hermes gateway disconnected'));
+        reject(new Error('Hermes 网关连接已断开'));
       });
       socket.on('error', () => socket.terminate());
       socket.on('message', (raw, binary) => {
         try {
-          if (binary) throw new Error('Invalid binary Hermes frame');
+          if (binary) throw new Error('Hermes 二进制帧无效');
           const source = raw.toString();
           const frame = object(parseCanonicalJson(source));
-          if (!frame || frame.jsonrpc !== '2.0') throw new Error('Invalid JSON-RPC envelope');
+          if (!frame || frame.jsonrpc !== '2.0') throw new Error('JSON-RPC 报文无效');
           const params = object(frame.params);
           if (frame.method === 'event' && params?.type === 'gateway.ready') {
             clearTimeout(timeout);
             const payload = object(params.payload);
             if (socket.protocol !== protocol || payload?.session_authority !== true) {
-              reject(new Error('Hermes canonical session authority is unavailable'));
+              reject(new Error('Hermes 标准会话的授权服务不可用'));
               socket.terminate();
               return;
             }
@@ -106,7 +106,7 @@ export class Gateway {
             } else if (result) {
               pending.resolve(result);
             } else {
-              pending.reject(new Error('Invalid Hermes RPC reply'));
+              pending.reject(new Error('Hermes RPC 响应无效'));
             }
             return;
           }
@@ -120,7 +120,7 @@ export class Gateway {
       clearInterval(this.#ping);
       for (const pending of this.#pending.values()) {
         clearTimeout(pending.timer);
-        pending.reject(new Error('Hermes gateway disconnected'));
+        pending.reject(new Error('Hermes 网关连接已断开'));
       }
       this.#pending.clear();
       onClose();
@@ -143,7 +143,7 @@ export class Gateway {
       });
       receipt = object(parseCanonicalJson(stdout));
     } catch {
-      throw new Error('Local Hermes gateway attach failed');
+      throw new Error('无法连接本机 Hermes 网关');
     }
     const endpoint = object(receipt?.endpoint);
     const owner = identity(endpoint);
@@ -152,13 +152,13 @@ export class Gateway {
     if (!owner || !address || !ticket || receipt?.protocol !== protocol ||
       !Array.isArray(receipt.protocols) || receipt.protocols.length !== 2 ||
       receipt.protocols[0] !== protocol || receipt.protocols[1] !== `hermes-gateway-ticket.${ticket}`) {
-      throw new Error('Hermes gateway attach returned an incompatible receipt');
+      throw new Error('Hermes 网关返回了不兼容的连接回执');
     }
     const url = new URL(address);
     if (!['ws:', 'wss:'].includes(url.protocol) ||
       !['127.0.0.1', '[::1]', 'localhost'].includes(url.hostname) ||
       url.username || url.password || url.pathname !== '/api/ws' || url.search || url.hash) {
-      throw new Error('Hermes gateway attach did not return a local socket');
+      throw new Error('Hermes 网关未返回本机套接字地址');
     }
     const socket = new WebSocket(url, receipt.protocols, {
       handshakeTimeout: 10_000,
@@ -177,11 +177,11 @@ export class Gateway {
           description.capabilities.includes(item)) ||
         !Array.isArray(create?.sources) || !create.sources.includes('tool') ||
         !Array.isArray(create.parameters) || !create.parameters.includes('source') || !create.parameters.includes('request_id')) {
-        throw new Error('Hermes runtime identity or capabilities differ from the required session protocol');
+        throw new Error('Hermes 运行时的身份或能力与会话协议要求不符');
       }
       const capabilities = await gateway.rpc('client.capabilities', { server_requests: true });
       if (!Array.isArray(capabilities.server_requests)) {
-        throw new Error('Hermes did not negotiate server requests');
+        throw new Error('Hermes 未协商服务端主动请求能力');
       }
       gateway.clarifyBatch = capabilities.canonical_clarify_batch === true && capabilities.server_requests.includes('clarify');
       gateway.#keepAlive();
@@ -212,7 +212,7 @@ export class Gateway {
   send(frame: JsonObject): Promise<void> {
     return new Promise((resolve, reject) => {
       if (!this.connected) {
-        reject(new Error('Hermes gateway is offline'));
+        reject(new Error('Hermes 网关已离线'));
         return;
       }
       this.socket.send(JSON.stringify(frame), (error) => error ? reject(error) : resolve());
@@ -222,12 +222,12 @@ export class Gateway {
   rpc(method: string, params: JsonObject, id = randomUUID() as string, timeoutMs = requestTimeout): Promise<JsonObject> {
     return new Promise((resolve, reject) => {
       if (this.#pending.has(id)) {
-        reject(new Error('Hermes RPC is already pending'));
+        reject(new Error('已有相同的 Hermes RPC 请求正在等待响应'));
         return;
       }
       const timer = setTimeout(() => {
         this.#pending.delete(id);
-        reject(new Error('Hermes RPC timed out'));
+        reject(new Error('Hermes RPC 请求超时'));
       }, timeoutMs);
       this.#pending.set(id, { resolve, reject, timer });
       void this.send({ jsonrpc: '2.0', id, method, params }).catch((error: unknown) => {

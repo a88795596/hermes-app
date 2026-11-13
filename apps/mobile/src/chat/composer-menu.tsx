@@ -3,13 +3,14 @@ import { ActivityIndicator, FlatList, Modal, StyleSheet, Text, View, useWindowDi
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { SessionStatus, Skill } from "@hermes-mobile/protocol";
 import type { useWorkspace } from "../sync/use-workspace";
+import { profileLabel } from "../ui/text";
 import { Action, Notice, useTheme } from "../ui/theme";
 
 const activityLabel: Record<SessionStatus["activity"], string> = {
-  idle: "Idle",
-  running: "Running",
-  queued: "Queued",
-  unknown: "Execution unconfirmed",
+  idle: "空闲",
+  running: "运行中",
+  queued: "排队中",
+  unknown: "执行状态待确认",
 };
 
 function Skills({ call, path }: { call: ReturnType<typeof useWorkspace>["call"]; path: string }) {
@@ -24,7 +25,7 @@ function Skills({ call, path }: { call: ReturnType<typeof useWorkspace>["call"];
     void call<Skill[]>(path + "/skills", { signal: request.signal }).then((items) => {
       if (!request.signal.aborted) setSkills(items);
     }, (failure: unknown) => {
-      if (!request.signal.aborted) setError(failure instanceof Error ? failure.message : "Could not load skills.");
+      if (!request.signal.aborted) setError(failure instanceof Error ? failure.message : "无法加载技能。");
     });
     return () => request.abort();
   }, [attempt, call, path]);
@@ -34,18 +35,18 @@ function Skills({ call, path }: { call: ReturnType<typeof useWorkspace>["call"];
       <>
         <Notice>{error}</Notice>
         <View style={styles.row}>
-          <Action title="Retry" onPress={() => { setError(undefined); setAttempt((value) => value + 1); }} />
+          <Action title="重试" onPress={() => { setError(undefined); setAttempt((value) => value + 1); }} />
         </View>
       </>
     );
   }
-  if (!skills) return <ActivityIndicator accessibilityLabel="Loading skills" color={colors.accent} />;
+  if (!skills) return <ActivityIndicator accessibilityLabel="正在加载技能" color={colors.accent} />;
   return (
     <FlatList
       data={skills}
       style={{ maxHeight: height * 0.58, flexGrow: 0 }}
       keyExtractor={(item, index) => `${item.name}:${index}`}
-      ListEmptyComponent={<Text style={styles.muted}>No skills are available for this profile.</Text>}
+      ListEmptyComponent={<Text style={styles.muted}>此配置档案暂无可用技能。</Text>}
       renderItem={({ item }) => (
         <View style={[menu.skill, { borderBottomColor: colors.edge }]}>
           <Text selectable style={styles.heading}>{item.name}</Text>
@@ -81,7 +82,7 @@ export function ComposerMenu({
     try {
       setStatus(await call<SessionStatus>(path + "/status"));
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "Could not read session status.");
+      setError(failure instanceof Error ? failure.message : "无法获取会话状态。");
     } finally {
       setLoadingStatus(false);
     }
@@ -95,10 +96,10 @@ export function ComposerMenu({
           <View style={menu.content}>
             <View style={menu.header}>
               <View style={menu.grow}>
-                <Text accessibilityRole="header" style={styles.heading}>{kind === "skills" ? "Skills" : "Commands"}</Text>
-                {kind === "skills" && profile && <Text style={styles.caption}>{profile}</Text>}
+                <Text accessibilityRole="header" style={styles.heading}>{kind === "skills" ? "技能" : "命令"}</Text>
+                {kind === "skills" && profile && <Text style={styles.caption}>{profileLabel(profile)}</Text>}
               </View>
-              <Action title="Close" onPress={onClose} />
+              <Action title="关闭" onPress={onClose} />
             </View>
             {kind === "skills" ? <Skills call={call} path={path} /> : (
               <>
@@ -106,13 +107,12 @@ export function ComposerMenu({
                   <Action title="/status" disabled={loadingStatus} onPress={() => void showStatus()} />
                   <Action title="/stop" disabled={!canStop} onPress={onStop} />
                 </View>
-                {loadingStatus && <ActivityIndicator accessibilityLabel="Reading session status" color={colors.accent} />}
+                {loadingStatus && <ActivityIndicator accessibilityLabel="正在获取会话状态" color={colors.accent} />}
                 {error && <Notice>{error}</Notice>}
                 {status && (
                   <Text accessibilityLiveRegion="polite" style={styles.text}>
                     {[activityLabel[status.activity], status.model,
-                      status.message_count === undefined ? undefined
-                        : `${status.message_count} ${status.message_count === 1 ? "message" : "messages"}`,
+                      status.message_count === undefined ? undefined : `${status.message_count} 条消息`,
                     ].filter(Boolean).join(" · ")}
                   </Text>
                 )}

@@ -18,12 +18,12 @@ async function setup() {
     done();
   } });
   app.register(async (api) => registerPersonalRoutes(api, {
-    // Only device lookup and the initial empty chat watch list need a database.
+    // 数据库只用于查找设备和读取初始的空会话订阅列表。
     async query(sql: string, values: unknown[]) {
       if (sql.startsWith("SELECT id FROM devices")) return { rows: Buffer.isBuffer(values[0])
         && values[0].equals(createHash("sha256").update(deviceToken).digest()) ? [{ id: "paired-device" }] : [] };
       if (sql.includes("FROM topics") || sql.includes("FROM commands")) return { rows: [] };
-      throw new Error(`Unexpected SQL: ${sql}`);
+      throw new Error(`收到未预期的 SQL（${sql}）`);
     },
   } as unknown as Store, { pairingToken: "test-pairing", connectorToken, profileRefs: ["default", "work"] }));
   await app.ready();
@@ -36,7 +36,7 @@ async function setup() {
   return { app, call, connect };
 }
 
-test("management requires a paired device and an allowed profile", async (t) => {
+test("管理操作要求设备已配对且配置档案在允许范围内", async (t) => {
   const { app, call } = await setup();
   t.after(() => app.close());
   assert.equal((await call(manage("default", "cron.list"))).statusCode, 401);
@@ -45,7 +45,7 @@ test("management requires a paired device and an allowed profile", async (t) => 
   assert.equal((await call(manage("default", "cron.list"), {}, deviceToken)).statusCode, 503);
 });
 
-test("a management request returns the live result for the selected profile", async (t) => {
+test("管理请求返回所选配置档案的实时结果", async (t) => {
   const { app, call, connect } = await setup();
   t.after(() => app.close());
   const socket = await connect(true);
@@ -62,14 +62,14 @@ test("a management request returns the live result for the selected profile", as
   assert.equal((await call(manage("work", "cron.list"), { profile: "outside" }, deviceToken)).statusCode, 422);
 });
 
-test("an older Connector still connects without advertising management", async (t) => {
+test("旧版连接器无需声明管理能力即可连接", async (t) => {
   const { app, call, connect } = await setup();
   const socket = await connect(false);
   t.after(async () => { socket.terminate(); await app.close(); });
   assert.equal((await call(manage("work", "cron.list"), {}, deviceToken)).statusCode, 503);
 });
 
-test("a disconnected Connector leaves an in-flight write unconfirmed", async (t) => {
+test("连接器断开后提示刷新以确认正在进行的修改", async (t) => {
   const { app, call, connect } = await setup();
   t.after(() => app.close());
   const socket = await connect(true);
@@ -77,5 +77,5 @@ test("a disconnected Connector leaves an in-flight write unconfirmed", async (t)
   socket.once("message", () => socket.terminate());
   const result = await call(manage("default", "cron.create"), { input: { schedule: "every 2h" } }, deviceToken);
   assert.equal(result.statusCode, 503);
-  assert.match(result.json().error.message, /refresh/i);
+  assert.match(result.json().error.message, /刷新/);
 });

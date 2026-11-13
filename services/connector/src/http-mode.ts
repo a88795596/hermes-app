@@ -8,7 +8,7 @@ import type { Binding, Spool, Turn } from './spool.js';
 import { QueryUnavailable, queryTimeout, sessionStatus, skillList } from './topic-query.js';
 import { boundedText, commandDigest, result, stableId, text } from './wire.js';
 
-const unknown = 'Hermes could not confirm the outcome';
+const unknown = 'Hermes 无法确认执行结果';
 const runId = /^run_[a-f0-9]{32}$/;
 const profileName = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 
@@ -38,7 +38,7 @@ function pendingPrompts(id: string, run: JsonObject): Prompt[] {
     const prompt = kind === 'clarify' ? string(item.question) ?? '' : [string(item.description), string(item.command)].filter(Boolean).join('\n');
     const display = boundedText(prompt, 64 * 1024);
     if (!display.trim() || !Array.isArray(item.choices)) return [];
-    // shortcut: incomplete approval details allow denial until the full request can be reviewed.
+    // shortcut: 审批详情不完整时仅可拒绝，等能查看完整请求后再开放其他选项。
     const denyOnly = kind === 'approval' && (Object.hasOwn(item, 'edit') || display !== prompt);
     const maxChoice = kind === 'clarify' ? MAX_CLARIFY_CHOICE_BYTES : 1024;
     const choices = [...new Set(item.choices.filter((choice) => text(choice, maxChoice) && (!denyOnly || choice === 'deny')))].slice(0, 30);
@@ -57,7 +57,7 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
   if (!endpoint || !['http:', 'https:'].includes(endpoint.protocol) ||
       !['127.0.0.1', '[::1]'].includes(endpoint.hostname) || endpoint.username || endpoint.password ||
       endpoint.pathname !== '/' || endpoint.search || endpoint.hash || !token.trim() || /[\r\n]/.test(token)) {
-    throw new Error('Hermes HTTP mode requires a loopback origin and API key');
+    throw new Error('Hermes HTTP 模式需要本机回环地址和 API 密钥');
   }
   const origin = endpoint.origin;
   const shutdown = new AbortController();
@@ -85,19 +85,19 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
   async function query({ kind, topic_id, profile_ref, session_id }: TopicQuery): Promise<TopicQueryData> {
     const binding = spool.binding(topic_id);
     if (!binding || binding.profileRef !== profile_ref || binding.sessionId !== session_id || !session_id.startsWith('mobile_')) {
-      throw new Error('Hermes session binding could not be verified');
+      throw new Error('无法验证 Hermes 会话绑定');
     }
     const path = kind === 'skills' ? '/v1/skills' : `/api/sessions/${encodeURIComponent(session_id)}`;
     const response = await request(profile_ref, path, { signal: AbortSignal.timeout(queryTimeout) });
     if (!response.ok) {
       await response.body?.cancel();
       if (response.status === 404 || response.status === 501) throw new QueryUnavailable();
-      throw new Error('Hermes rejected the query');
+      throw new Error('Hermes 拒绝了查询');
     }
     const data = object(await response.json());
     if (kind === 'skills') return { kind, skills: skillList(data?.data) };
     const session = object(data?.session);
-    if (session?.id !== session_id) throw new Error('Unexpected Hermes session');
+    if (session?.id !== session_id) throw new Error('Hermes 返回了意外的会话');
     return { kind, status: sessionStatus(session, spool.activeTurns(topic_id)) };
   }
 
@@ -147,7 +147,7 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
           if (event.event === 'replay.truncated') gap = true;
           const next = integer(event.seq);
           if (next === undefined || next <= sequence) continue;
-          // shortcut: the Runs stream keeps a bounded replay buffer, so recover truncated text from the terminal output.
+          // shortcut: Runs 流的回放缓冲区有容量限制，回放截断时从最终输出恢复文本。
           gap ||= next !== sequence + 1;
           sequence = next;
           const turn = spool.turn(binding.topicId, id);
@@ -215,7 +215,7 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
               ? boundedText(data.output, 256 * 1024) : saved.text) : undefined;
             const updated = { ...turn, status: state, text: JSON.stringify({ text: finalText ?? saved.text, prompts: next }) };
             if (state !== turn.status) {
-              const error = state === 'unknown' ? unknown : state === 'failed' ? 'Hermes reported that the run failed' : undefined;
+              const error = state === 'unknown' ? unknown : state === 'failed' ? 'Hermes 报告执行失败' : undefined;
               frames.push({ type: 'submission', submission_id: turn.submissionId, status: state, ...(error ? { error } : {}) });
             }
             if (finalText) frames.push(message(updated, 'final', finalText));
@@ -243,7 +243,7 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
     }
     const digest = commandDigest(command);
     const saved = spool.command(command_id);
-    if (saved && saved.digest !== digest) throw new Error('BFF reused a command ID');
+    if (saved && saved.digest !== digest) throw new Error('BFF 重复使用了命令 ID');
     if (saved?.result) {
       send(JSON.parse(saved.result) as JsonObject);
       return;
@@ -263,10 +263,10 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
     let selection: (ModelSelection & { topicId: string }) | undefined;
     try {
       if (!profileName.test(profile_ref)) {
-        receipt = result(command_id, 'error', { error: 'Invalid Hermes profile' });
+        receipt = result(command_id, 'error', { error: 'Hermes 配置档案无效' });
       } else if (command.kind === 'create') {
         if (existing) {
-          receipt = result(command_id, 'error', { error: 'This topic already has a Hermes binding' });
+          receipt = result(command_id, 'error', { error: '此话题已绑定 Hermes 会话' });
         } else {
           const sessionId = `mobile_${httpId(profile_ref, topic_id, command_id)}`;
           const { response, data } = await json(profile_ref, '/api/sessions', { id: sessionId });
@@ -274,17 +274,17 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
             binding = { topicId: topic_id, sessionId, profileRef: profile_ref, profileId: profile_ref };
             receipt = result(command_id, 'ok', { session_id: sessionId });
           } else if (response.status >= 400 && response.status < 500 && response.status !== 408) {
-            receipt = result(command_id, 'error', { error: 'Hermes rejected session creation' });
+            receipt = result(command_id, 'error', { error: 'Hermes 拒绝创建会话' });
           }
         }
       } else if (!bound) {
-        receipt = result(command_id, 'error', { error: 'Hermes topic binding does not match' });
+        receipt = result(command_id, 'error', { error: 'Hermes 会话与话题的绑定不匹配' });
       } else if (command.kind === 'model_options' || command.kind === 'select_model') {
-        receipt = result(command_id, 'error', { error: 'Hermes could not load the model catalog' });
+        receipt = result(command_id, 'error', { error: 'Hermes 无法加载模型目录' });
         const { response, data } = await json(profile_ref, '/api/model/options?include_unconfigured=false');
         if (!response.ok) {
           receipt = result(command_id, 'error', {
-            error: response.status === 404 ? 'This Hermes API version does not support model options' : 'Hermes could not load the model catalog',
+            error: response.status === 404 ? '当前 Hermes API 版本不支持查询模型选项' : 'Hermes 无法加载模型目录',
           });
         } else {
           const catalog = modelCatalog(data, spool.modelSelection(topic_id));
@@ -293,7 +293,7 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
           } else {
             const { provider, model, confirm } = command.body;
             if (confirm || !hasModel(catalog, { provider, model })) {
-              receipt = result(command_id, 'error', { error: 'This model is no longer available. Open /model again.' });
+              receipt = result(command_id, 'error', { error: '此模型已不可用，请重新打开 /model。' });
             } else if (current() && !shutdown.signal.aborted) {
               selection = { topicId: topic_id, provider, model };
               receipt = result(command_id, 'ok', { model_result: { type: 'selected', selection: { provider, model } } });
@@ -309,7 +309,7 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
           turn = { topicId: topic_id, admissionId: id, submissionId: command.body.submission_id, text: emptyRun, status: 'queued' };
           receipt = result(command_id, 'ok', { admission_id: id });
         } else if (response.status >= 400 && response.status < 500 && response.status !== 408) {
-          receipt = result(command_id, 'error', { error: 'Hermes rejected the run' });
+          receipt = result(command_id, 'error', { error: 'Hermes 拒绝执行' });
         }
       } else if (command.kind === 'interrupt') {
         const submissionId = command.body.submission_id;
@@ -322,12 +322,12 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
         }
       } else if (command.kind === 'respond') {
         receipt = result(command_id, 'error', {
-          control_status: 'closed', error: 'This request has expired or was already answered.',
+          control_status: 'closed', error: '此请求已过期或已回答。',
         });
         const active = spool.activeTurns(topic_id).find((turn) => runId.test(turn.admissionId) &&
           (JSON.parse(turn.text) as RunState).prompts.some(({ control }) => control.control_id === command.body.control_id));
         if (active) {
-          receipt = result(command_id, 'unknown', { error: 'Hermes could not confirm the response' });
+          receipt = result(command_id, 'unknown', { error: 'Hermes 无法确认回答' });
           const path = `/v1/runs/${active.admissionId}`;
           const { response: snapshot, data } = await json(profile_ref, path);
           const prompt = data?.run_id === active.admissionId
@@ -335,16 +335,16 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
             : undefined;
           if (!prompt && (data?.run_id === active.admissionId ||
             (snapshot.status === 404 && object(data?.error)?.code === 'run_not_found'))) {
-            receipt = result(command_id, 'error', { control_status: 'closed', error: 'This request has expired or was already answered.' });
+            receipt = result(command_id, 'error', { control_status: 'closed', error: '此请求已过期或已回答。' });
           } else if (prompt && current() && !shutdown.signal.aborted) {
             const { kind, choices } = prompt.control;
             if (kind === 'approval' && !choices.includes(command.body.answer)) {
-              receipt = result(command_id, 'error', { error: 'The answer is not available for this control' });
+              receipt = result(command_id, 'error', { error: '无法为此请求提交该回答' });
             } else {
               const { response, data: reply } = await json(profile_ref, `${path}/${kind}`, {
                 request_id: prompt.id,
                 ...(prompt.generation === undefined ? {} : { execution_generation: prompt.generation }),
-                // The gateway uses a sentinel to distinguish a deliberate skip from an unanswered wait.
+                // 网关用特殊值区分主动跳过和等待回答。
                 [kind === 'approval' ? 'choice' : 'answer']: kind === 'clarify' && command.body.answer === ''
                   ? '\u0000skipped' : command.body.answer,
               });
@@ -354,14 +354,14 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
                 receipt = result(command_id, 'ok', { control_status: 'closed' });
               } else if ((reply?.prompt_id === prompt.id && reply.status === 'already_resolved') ||
                 (response.status === 409 && ['stale_generation', 'approval_not_pending'].includes(String(object(reply?.error)?.code)))) {
-                receipt = result(command_id, 'error', { control_status: 'closed', error: 'This request has expired or was already answered.' });
+                receipt = result(command_id, 'error', { control_status: 'closed', error: '此请求已过期或已回答。' });
               }
             }
           }
         }
       }
     } catch {
-      // The request may have reached Hermes before the connection failed.
+      // 连接中断之前，请求可能已送达 Hermes。
     } finally {
       commands.delete(command_id);
     }

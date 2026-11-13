@@ -34,7 +34,7 @@ export function topicData(row: TopicRow): Topic {
 
 export async function topicRow(db: Pick<Store, "query">, id: string, refs: Set<string>) {
   const { rows } = await db.query<TopicRow>("SELECT * FROM topics WHERE id = $1", [id]);
-  if (!rows[0] || !refs.has(rows[0].profile_ref)) missing("Topic");
+  if (!rows[0] || !refs.has(rows[0].profile_ref)) missing("话题");
   return rows[0];
 }
 
@@ -51,17 +51,17 @@ export async function modelRequest(store: Store, refs: Set<string>, topicId: str
     "SELECT payload, result FROM commands WHERE id = $1 AND topic_id = $2", [requestId, topicId],
   );
   const row = rows[0];
-  if (!row || (row.payload.kind !== "model_options" && row.payload.kind !== "select_model")) missing("Model request");
+  if (!row || (row.payload.kind !== "model_options" && row.payload.kind !== "select_model")) missing("模型请求");
   if (!row.result) return { status: "pending" };
   if (row.result.status === "ok" && row.result.model_result) return { status: "ok", model_result: row.result.model_result };
   return { status: row.result.status === "error" ? "error" : "unknown",
-    error: row.result.error ?? "Hermes could not confirm the model request." };
+    error: row.result.error ?? "Hermes 无法确认模型请求的结果。" };
 }
 
 export function detail(store: Store, id: string, refs: Set<string>) {
   return store.transaction(async (db) => {
     const row = await topicRow(db, id, refs);
-    // shortcut: return full history for personal topics, add cursor pagination for long-lived sessions.
+    // shortcut: 个人话题返回完整历史。需要支持长期会话时，改用游标分页。
     const messages = await db.query<{ data: Message }>("SELECT data FROM messages WHERE topic_id = $1 ORDER BY position", [id]);
     const controls = await db.query<{ data: Control }>("SELECT data FROM controls WHERE topic_id = $1 ORDER BY position", [id]);
     return { topic: topicData(row), messages: messages.rows.map(({ data }) => data), controls: controls.rows.map(({ data }) => data) };

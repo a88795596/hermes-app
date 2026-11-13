@@ -1,36 +1,38 @@
-# Hermes Mobile
+# Hermes 移动端
 
-This repository is a pnpm workspace for the Hermes mobile client system.
+本仓库是 Hermes 移动端的 pnpm 工作区。
 
-| Area | Owner | Purpose |
+| 目录 | 模块 | 职责 |
 | --- | --- | --- |
-| `apps/mobile` | Expo Router app | Native client and local-first UI |
-| `services/bff` | Fastify service | Public Mobile API, authorization, and projections |
-| `services/connector` | Node service | Outbound connection from the Hermes host to the BFF |
-| `packages/protocol` | Shared package | Mobile and Connector wire contracts |
-| `packages/hermes-adapter` | Shared package | Hermes-specific normalization boundary |
-| `plugins/hermes-mobile-delivery` | Hermes Python plugin | Registers the text delivery channel for Cron and `hermes send` |
+| `apps/mobile` | Expo Router 应用 | 原生客户端和本地优先的界面 |
+| `services/bff` | Fastify 服务 | 对外提供移动端 API，负责授权与数据投影 |
+| `services/connector` | Node 服务 | 从 Hermes 主机主动连接 BFF |
+| `packages/protocol` | 共享包 | 定义移动端与连接器的通信协议 |
+| `packages/hermes-adapter` | 共享包 | 校验并规范化 Hermes 数据 |
+| `plugins/hermes-mobile-delivery` | Hermes Python 插件 | 为定时任务和 `hermes send` 注册文本投递通道 |
 
-`packages/protocol` must remain framework-neutral. The mobile app must not receive Hermes credentials or import Node-only code. The BFF does not connect directly to Hermes; the Connector owns that boundary.
+`packages/protocol` 独立于应用框架。Hermes 凭据由连接器保管，移动端只依赖能在设备上运行的代码。BFF 通过连接器与 Hermes 通信。
 
-## Design and delivery
+## 设计与交付
 
-- [iOS and Android technical design](docs/superpowers/specs/2026-11-13-hermes-mobile-design.md)
-- [Mobile and Connector contract baseline](docs/superpowers/specs/2026-11-13-hermes-mobile-contracts.md)
-- [Parallel implementation work packages and acceptance cases](docs/superpowers/plans/2026-11-13-hermes-mobile-parallel-plan.md)
-- [Implemented MVP wire contract](docs/superpowers/plans/2026-11-13-personal-mvp-wire.md)
-- [Engineering specification v2 source](docs/reference/hermes-expo-engineering-spec-v2.md)
+- [iOS 和 Android 技术设计](docs/superpowers/specs/2026-11-13-hermes-mobile-design.md)
+- [移动端与连接器契约基线](docs/superpowers/specs/2026-11-13-hermes-mobile-contracts.md)
+- [并行开发工作包与验收用例](docs/superpowers/plans/2026-11-13-hermes-mobile-parallel-plan.md)
+- [个人版已实现的通信协议](docs/superpowers/plans/2026-11-13-personal-mvp-wire.md)
+- [工程设计规格书 v2](docs/reference/hermes-expo-engineering-spec-v2.md)
 
-## Run the personal MVP
+<a name="run-the-personal-mvp"></a>
 
-Install with Node 24 and pnpm 10.14. Use one BFF, one PostgreSQL database and one Connector. The BFF creates its tables on startup. Run commands from the workspace root.
+## 本地运行个人版
+
+使用 Node 24 和 pnpm 10.14 安装依赖。个人版需要一个 BFF 进程、一个 PostgreSQL 数据库和一个连接器进程。BFF 启动时自动建表。以下命令均在工作区根目录执行。
 
 ```sh
 pnpm install
 pnpm typecheck
 ```
 
-1. Start the BFF. Supply the database URL and two distinct, random secrets. The phone exchanges the pairing token for a per-device credential. The Connector uses the machine token. To start a dedicated development database with Docker, run:
+1. 启动 BFF，配置数据库地址和两个不同的随机令牌。手机用配对令牌换取设备专用凭据，连接器使用机器令牌。可用 Docker 启动专用的开发数据库。
 
    ```sh
    docker run -d --name hermes-mobile-postgres -p 127.0.0.1:55432:5432 \
@@ -46,7 +48,7 @@ pnpm typecheck
    pnpm dev:bff
    ```
 
-2. For the local `hermes-dev` container, use the HTTP Runs API published at port 8642. Keep the API key in the Connector environment. This command captures the configured key without printing it. Leave shell tracing disabled.
+2. 本地 `hermes-dev` 容器通过 8642 端口提供 HTTP Runs API。将 API 密钥留在连接器的环境变量中。以下命令读取已配置的密钥。执行时请关闭 Shell 命令跟踪。
 
    ```sh
    export BFF_URL='http://127.0.0.1:4317'
@@ -57,42 +59,46 @@ pnpm typecheck
    pnpm dev:connector
    ```
 
-   The HTTP adapter uses Hermes API-owned sessions. For a newer Hermes installation, leave `HERMES_API_URL` unset and run the Connector on that machine as the Gateway owner, with `HERMES_BIN` pointing to a CLI that supports `gateway attach --json`. Keep the Connector database and BFF database paired with the same Hermes backend and transport. Use separate databases to try a different backend.
+   HTTP 适配器使用 Hermes API 管理的会话。如果安装了较新版本的 Hermes，可将 `HERMES_API_URL` 留空，以网关所用的账户在同一台主机上运行连接器，并将 `HERMES_BIN` 指向支持 `gateway attach --json` 的命令行程序。连接器与 BFF 的数据库应配套使用，绑定同一个 Hermes 后端和传输方式。试用其他后端时请使用独立的数据库。
 
-   In HTTP mode, the chat Skills menu reads `GET /p/<profile>/v1/skills`. If the endpoint returns 500 because of the `include_editorial` error, run `docker build -t hermes-mobile-runtime - < services/connector/Dockerfile.hermes` and use `hermes-mobile-runtime` as the image for your Hermes container. [Upstream fix](https://github.com/NousResearch/hermes-agent/pull/108968)
+   在 HTTP 模式下，聊天中的「技能」菜单读取 `GET /p/<profile>/v1/skills`。如果该接口因 `include_editorial` 错误返回 500，运行 `docker build -t hermes-mobile-runtime - < services/connector/Dockerfile.hermes`，然后使用 `hermes-mobile-runtime` 作为 Hermes 容器镜像。 [上游修复](https://github.com/NousResearch/hermes-agent/pull/108968)
 
-   If chat runs fail with `no_provider_configured` in the container logs, configure a model provider for the container's Hermes user with `docker exec -it -u hermes hermes-dev hermes model`. The API server key authenticates the Connector; the model provider has its own credentials.
+   如果聊天运行失败，且容器日志显示 `no_provider_configured`，运行 `docker exec -it -u hermes hermes-dev hermes model`，为容器中的 Hermes 用户配置模型服务商。API 服务密钥用于验证连接器，模型服务商使用自己的凭据。
 
-3. Start the App in a separate terminal. Build and open a development client on either platform using the matching command:
+3. 在另一个终端启动应用。按平台选择命令，构建并打开开发客户端。
 
    ```sh
    pnpm --filter @hermes-mobile/mobile exec expo run:ios
    pnpm --filter @hermes-mobile/mobile exec expo run:android
    ```
 
-   After installing the development client, use `pnpm dev:mobile` to restart Metro. Pair with `APP_PAIRING_TOKEN` and the BFF origin. Use `http://127.0.0.1:4317` on the iOS simulator, `http://10.0.2.2:4317` on the Android emulator, or the BFF's trusted HTTPS reverse proxy on a physical device. The native app stores the device token in SecureStore and uses app-private SQLite for history and queued text. A development build with a configured Expo project ID and APNs/FCM credentials can enable Inbox notifications in Connection.
+   安装开发客户端后，运行 `pnpm dev:mobile` 重新启动 Metro。使用 `APP_PAIRING_TOKEN` 和 BFF 地址配对。在 iOS 模拟器中使用 `http://127.0.0.1:4317`，在 Android 模拟器中使用 `http://10.0.2.2:4317`，在真机上使用 BFF 受信任的 HTTPS 反向代理。原生应用通过 SecureStore 保存设备令牌，并在应用私有的 SQLite 数据库中保存历史记录和待发文本。开发构建配置 Expo 项目 ID 和 APNs／FCM 凭据后，可在「连接」页开启收件箱通知。
 
-4. To package the Connector for local npm installation, run `pnpm --filter @hermes-mobile/connector pack` and install the resulting tarball. For Cron and `hermes send`, install the [Hermes delivery plugin](plugins/hermes-mobile-delivery/README.md) on the Hermes machine, with the spool available to the Connector.
+4. 如需在本地通过 npm 安装连接器，运行 `pnpm --filter @hermes-mobile/connector pack` 并安装生成的压缩包。定时投递与 `hermes send` 需要在 Hermes 主机安装插件，并让连接器访问插件的本地投递队列。 [Hermes 投递插件](plugins/hermes-mobile-delivery/README.md)
 
-## Interactive chat
+<a name="interactive-chat"></a>
 
-Send `/model` in a Topic and choose a provider, then a model. The menu uses that Hermes profile’s configured providers and marks the current selection. You can switch once the current turn finishes. The selection applies to future turns in the current Topic.
+## 聊天交互
 
-When the agent calls `clarify`, tap an option to answer the waiting turn. The card also supports multiple selections, a typed answer, and skipping the question.
+在话题中发送 `/model`，先选择服务商，再选择模型。菜单会显示当前 Hermes 配置档案下可用的服务商，并标记当前选项。等本轮回复完成后即可切换模型，新选择对当前话题的后续对话生效。
 
-With HTTP Runs, the Hermes API profile must expose pending run controls and have the `clarify` tool enabled. On the development container, enable it as the Hermes user:
+当智能体调用 `clarify` 时，点击选项即可回答当前的问题。澄清卡片也支持多选、输入自定义答案和跳过问题。
+
+使用 HTTP Runs 时，Hermes API 对应的配置档案须公开运行中等待处理的交互，并启用 `clarify` 工具。在开发容器中，用 Hermes 用户执行以下命令即可启用该工具。
 
 ```sh
 docker exec -u hermes hermes-dev hermes tools enable --platform api_server clarify
 ```
 
-For a named Hermes profile, use the same command with `hermes --profile <name> tools enable --platform api_server clarify`. For Canonical Gateway, the Topic’s local-session toolset must include `clarify`.
+如果使用具名配置档案，命令中的 Hermes 调用部分为 `hermes --profile <name> tools enable --platform api_server clarify`。如果使用 Canonical Gateway，话题所绑定的本地会话工具集须包含 `clarify`。
 
-The [implemented wire](docs/superpowers/plans/2026-11-13-personal-mvp-wire.md) is the first slice of the design. It uses a single account, text chat, and WSS change notices with HTTP catch-up. Media attachments, system share-in, snapshot cursors, and production-grade deployment and device validation remain separate work.
+个人版已实现单账户、文本聊天，以及 WSS 变更通知配合 HTTP 补拉。媒体附件、从系统分享导入、快照游标、生产级部署和设备验证另行交付。 [已实现的通信协议](docs/superpowers/plans/2026-11-13-personal-mvp-wire.md)
 
-## Enable Manage on mobile
+<a name="enable-manage-on-mobile"></a>
 
-Run a version of Hermes that provides the [Dashboard API](https://hermes-agent.nousresearch.com/docs/user-guide/features/web-dashboard) on the same machine and in the same environment as the Connector. Use the same Hermes installation and profile data as your chat and scheduler. Set a Dashboard session token in both process environments. For example, from the Hermes host:
+## 启用移动端管理功能
+
+在连接器所在主机和运行环境中，启动提供控制台 API 的 Hermes 版本。聊天、定时调度和管理应使用同一套 Hermes 安装及配置档案数据。为控制台和连接器进程设置相同的控制台会话令牌。以下命令在 Hermes 主机执行。 [Hermes 控制台文档](https://hermes-agent.nousresearch.com/docs/user-guide/features/web-dashboard)
 
 ```sh
 export HERMES_DASHBOARD_SESSION_TOKEN="$(openssl rand -hex 32)"
@@ -102,6 +108,6 @@ export HERMES_DASHBOARD_URL='http://127.0.0.1:9119'
 pnpm dev:connector
 ```
 
-Keep the existing Connector variables (`BFF_URL`, `CONNECTOR_TOKEN`, and any Runs API settings). If Hermes runs in a container, run the management-enabled Connector in the same container or network namespace so it can reach the loopback Dashboard. For an existing Dashboard process, configure the Connector with its loopback origin and the matching provisioned session token. If the BFF uses a reverse proxy, allow at least 60 seconds for a management response.
+继续使用连接器已有的环境变量，包括 `BFF_URL`、`CONNECTOR_TOKEN` 和 HTTP Runs API 相关配置。Hermes 在容器中运行时，将支持管理的连接器放在同一容器或网络命名空间中，使它可以访问环回地址上的控制台。复用已有的控制台进程时，为连接器配置对应的环回地址和已发放的会话令牌。如果 BFF 使用反向代理，管理请求的响应超时时间至少设为 60 秒。
 
-Restart the updated BFF and Connector, then open **Manage** in the paired app. Choose a Profile listed in `HERMES_PROFILES` to see its scheduled tasks, models, logs, skills, and MCP servers. Updates are saved by Hermes. Its scheduler must be running to execute tasks, and `hermes_mobile` delivery uses the existing Inbox plugin. The log level takes effect when the relevant Hermes process restarts. For an MCP server that requires OAuth, complete sign-in in Hermes Dashboard. Tests for servers that reference credentials in environment variables use the Dashboard process for that profile.
+重启更新后的 BFF 和连接器，在已配对的应用中打开「管理」。选择 `HERMES_PROFILES` 中的配置档案，即可查看其定时任务、模型、日志、技能和 MCP 服务器。变更由 Hermes 保存。定时任务依赖 Hermes 调度器，投递到 `hermes_mobile` 依赖现有收件箱插件。日志级别在相应的 Hermes 进程重启后生效。需要 OAuth 的 MCP 服务器须在 Hermes 控制台中登录。引用环境变量作为凭据的 MCP 服务器由对应配置档案的控制台进程执行连接测试。

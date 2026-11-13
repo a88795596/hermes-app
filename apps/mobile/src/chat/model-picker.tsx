@@ -52,7 +52,7 @@ export function ModelPicker({
     } catch (failure) {
       if (!controller.signal.aborted) {
         setRetry({ id, selection });
-        setError(failure instanceof Error ? failure.message : "Hermes could not complete the model request.");
+        setError(failure instanceof Error ? failure.message : "Hermes 无法完成模型请求。");
       }
     } finally {
       if (pending.current === controller) pending.current = undefined;
@@ -72,7 +72,7 @@ export function ModelPicker({
   const rows = provider
     ? provider.models.map((model) => ({ id: model, name: model, selected: catalog?.provider === provider.id && catalog.model === model }))
     : (catalog?.providers ?? []).map((row) => ({
-      id: row.id, name: row.models.length ? row.name : `${row.name} · No models available`, selected: catalog?.provider === row.id,
+      id: row.id, name: row.models.length ? row.name : `${row.name} · 暂无可用模型`, selected: catalog?.provider === row.id,
     }));
 
   return (
@@ -81,36 +81,39 @@ export function ModelPicker({
         <View accessibilityViewIsModal style={[styles.card, picker.panel, { borderColor: colors.edge }]}>
           <View style={picker.header}>
             <Text accessibilityRole="header" style={[styles.heading, picker.heading]}>
-              {confirmation ? "Confirm model change" : provider ? provider.name : "Choose a provider"}
+              {confirmation ? "确认切换模型" : provider ? provider.name : "选择服务商"}
             </Text>
-            <Action title="Close" onPress={onClose} />
+            <Action title="关闭" onPress={onClose} />
           </View>
           {catalog?.model && !confirmation && (
-            <Text style={styles.muted}>Current model · {catalog.model}{currentProvider ? ` (${currentProvider.name})` : ""}</Text>
+            <Text style={styles.muted}>当前模型 · {catalog.model}{currentProvider ? `（${currentProvider.name}）` : ""}</Text>
           )}
           {unavailable && <Text style={styles.muted}>{unavailable}</Text>}
           {error && <Notice>{error}</Notice>}
           {busy && (
             <View style={styles.row}>
               <ActivityIndicator color={colors.accent} />
-              <Text accessibilityLiveRegion="polite" style={styles.muted}>{catalog ? "Applying model…" : "Loading providers…"}</Text>
+              <Text accessibilityLiveRegion="polite" style={styles.muted}>{catalog ? "正在切换模型…" : "正在加载服务商…"}</Text>
             </View>
           )}
           {retry && (
-            <Action title="Check request again" disabled={busy} onPress={() => void request(retry.selection, retry.id)} />
+            <Action title="重新查询请求状态" disabled={busy} onPress={() => void request(retry.selection, retry.id)} />
           )}
-          {error && !retry && !catalog && <Action title="Reload providers" disabled={!enabled || busy} onPress={() => void request()} />}
+          {error && !retry && !catalog && <Action title="重新加载服务商" disabled={!enabled || busy} onPress={() => void request()} />}
           {confirmation ? (
             <>
-              <ScrollView style={picker.list}><Text selectable style={styles.text}>{confirmation.message}</Text></ScrollView>
+              <ScrollView style={picker.list}>
+                <Text style={styles.muted}>请查看 Hermes 提供的风险和费用说明，再确认切换。</Text>
+                <Text selectable style={styles.text}>{confirmation.message}</Text>
+              </ScrollView>
               <View style={styles.row}>
-                <Action title="Back" disabled={busy} onPress={() => setConfirmation(undefined)} />
-                <Action title="Confirm model" primary disabled={!enabled || busy} onPress={() => void request(confirmation.selection)} />
+                <Action title="返回" disabled={busy} onPress={() => setConfirmation(undefined)} />
+                <Action title="确认切换" primary disabled={!enabled || busy} onPress={() => void request(confirmation.selection)} />
               </View>
             </>
           ) : catalog && (
             <>
-              {provider && <View style={styles.row}><Action title="Back to providers" icon="back" disabled={busy} onPress={() => setProviderId(undefined)} /></View>}
+              {provider && <View style={styles.row}><Action title="返回服务商列表" icon="back" disabled={busy} onPress={() => setProviderId(undefined)} /></View>}
               <FlatList
                 key={provider?.id ?? "providers"}
                 style={picker.list}
@@ -130,7 +133,7 @@ export function ModelPicker({
                   />
                 )}
                 ListEmptyComponent={<Text style={styles.muted}>
-                  {provider ? "Hermes returned no selectable models for this provider." : "No providers are available in this Hermes profile."}
+                  {provider ? "此服务商暂无可选模型。" : "此 Hermes 配置档案暂无可用服务商。"}
                 </Text>}
               />
             </>

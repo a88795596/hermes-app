@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { buildApp } from "../src/app.js";
 
-test("GET /health returns the service status", async (t) => {
+test("GET /health 返回服务状态", async (t) => {
   const app = buildApp();
   t.after(() => app.close());
 

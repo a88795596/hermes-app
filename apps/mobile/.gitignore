@@ -1,6 +1,6 @@
-# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+# Git 忽略规则说明 https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
 
-# dependencies
+# 依赖
 node_modules/
 
 # Expo
@@ -9,7 +9,7 @@ dist/
 web-build/
 expo-env.d.ts
 
-# Native
+# 原生构建与签名文件
 .kotlin/
 *.orig.*
 *.jks
@@ -21,7 +21,7 @@ expo-env.d.ts
 # Metro
 .metro-health-check*
 
-# debug
+# 调试日志
 npm-debug.*
 yarn-debug.*
 yarn-error.*
@@ -30,14 +30,14 @@ yarn-error.*
 .DS_Store
 *.pem
 
-# local env files
+# 本地环境变量文件
 .env*.local
 
-# typescript
+# TypeScript 构建信息
 *.tsbuildinfo
 
 example
 
-# generated native folders
+# 生成的原生项目目录
 /ios
 /android

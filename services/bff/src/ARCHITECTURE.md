@@ -1,9 +1,9 @@
-# Personal BFF
+# 个人版 BFF
 
-`main.ts` starts Fastify on loopback by default. Terminate HTTPS and WSS at the reverse proxy and omit request query strings from proxy logs because Mobile WS tickets travel in the query. Device credentials are independent from the Connector bearer and stored as hashes. The BFF verifies a device before issuing a short-lived, single-use WS ticket.
+`main.ts` 默认在环回地址启动 Fastify。由反向代理终止 HTTPS 与 WSS 连接。移动端 WebSocket 票据随查询参数传输，代理日志须省略请求的查询字符串。设备凭据与连接器的认证令牌各自独立，以哈希形式存储。BFF 验证设备后才发放短时、一次性的 WebSocket 票据。
 
-The mobile routes save user mutations, optimistic message projections, and Connector commands in one PostgreSQL transaction. The bridge dispatches commands after commit and retries unfinished commands by their original IDs when the Connector reconnects. Connector result and event acknowledgments follow successful database commits. Mobile WebSocket messages indicate which HTTP projections to reload.
+移动端路由在同一个 PostgreSQL 事务中保存用户写操作、用于即时显示的消息投影和连接器命令。事务提交后，桥接层才分发命令。连接器重新连接时，桥接层按原 ID 重试未完成的命令。只有相关数据成功提交后，才确认收到连接器的结果和事件。移动端通过 WebSocket 获知需要重新拉取哪些 HTTP 数据投影。
 
-The deployment uses one BFF process and one Connector connection. `HERMES_PROFILES` restricts the configured Hermes profiles. A persisted binding joins each ready Topic to its Hermes session, and the bridge assigns those scopes as watches on reconnect.
+部署使用一个 BFF 进程和一条连接器连接。`HERMES_PROFILES` 限制可用的 Hermes 配置档案。系统持久保存每个就绪话题与 Hermes 会话的绑定，桥接层在重新连接时按绑定恢复对这些会话的订阅。
 
-Device-authenticated management requests resolve the profile through the same allowlist. The bridge sends them on the live Connector socket and returns the correlated result. Management is available when the Connector advertises its Dashboard integration. Changes go directly to Hermes. In-flight management calls are kept in memory and a dropped connection leaves the outcome of a dispatched write unconfirmed.
+通过设备鉴权的管理请求使用同一份允许名单解析配置档案。桥接层通过当前连接器通道发送请求，并返回对应结果。连接器声明已接入 Hermes 控制台后，管理功能才可用。变更直接写入 Hermes。处理中的管理请求保存在内存里，连接中断时，已发出的写操作结果处于未确认状态。

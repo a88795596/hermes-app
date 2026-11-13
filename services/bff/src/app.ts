@@ -23,11 +23,11 @@ export function buildApp(options?: AppOptions) {
 
   if (options) {
     if (!options.databaseUrl || !options.pairingToken || !options.connectorToken || options.pairingToken === options.connectorToken) {
-      throw new Error("A database URL and distinct App and Connector tokens are required");
+      throw new Error("请提供数据库地址，并为应用和连接器分别设置不同的令牌。");
     }
     const store = openStore(options.databaseUrl);
     let stopPush: (() => void | Promise<void>) | undefined;
-    store.onError(() => app.log.error("Database connection lost"));
+    store.onError(() => app.log.error("数据库连接已断开"));
     app.addHook("onReady", async () => {
       await store.migrate();
       await migratePush(store);
@@ -44,7 +44,7 @@ export function buildApp(options?: AppOptions) {
     app.register(websocket, {
       options: { maxPayload: 1024 * 1024 },
       errorHandler: (_error, socket) => {
-        app.log.warn("WebSocket handler failed");
+        app.log.warn("处理 WebSocket 连接失败");
         socket.terminate();
       },
     });

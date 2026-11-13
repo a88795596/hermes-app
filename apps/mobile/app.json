@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Hermes Mobile",
+    "name": "Hermes 移动端",
     "slug": "hermes-mobile",
     "version": "1.1.0",
     "orientation": "portrait",
@@ -10,7 +10,10 @@
     "ios": {
       "bundleIdentifier": "com.hermesmobile.app",
       "buildNumber": "2",
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "infoPlist": {
+        "CFBundleDevelopmentRegion": "zh-Hans"
+      }
     },
     "android": {
       "package": "com.hermesmobile.app",
@@ -29,7 +32,7 @@
     },
     "plugins": [
       "expo-router",
-      "expo-secure-store",
+      ["expo-secure-store", { "faceIDPermission": "允许 Hermes 移动端使用面容 ID。" }],
       "expo-notifications",
       [
         "expo-splash-screen",

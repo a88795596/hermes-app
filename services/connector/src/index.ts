@@ -19,24 +19,24 @@ type Mode = {
 };
 
 function bridgeUrl(input: string | undefined): URL {
-  if (!input) throw new Error('BFF_URL is required');
+  if (!input) throw new Error('请设置 BFF_URL');
   const url = new URL(input);
   const local = ['127.0.0.1', '[::1]', 'localhost'].includes(url.hostname);
   if (url.protocol !== 'https:' && url.protocol !== 'wss:' &&
     !(local && ['http:', 'ws:'].includes(url.protocol))) {
-    throw new Error('BFF_URL requires HTTPS or WSS outside loopback');
+    throw new Error('BFF_URL 使用非回环地址时必须采用 HTTPS 或 WSS');
   }
-  if (url.username || url.password || url.search || url.hash) throw new Error('Invalid BFF_URL');
+  if (url.username || url.password || url.search || url.hash) throw new Error('BFF_URL 无效');
   return new URL('/internal/connector/v1/events', url.href.replace(/^http/u, 'ws'));
 }
 
 async function main(): Promise<void> {
   const url = bridgeUrl(process.env.BFF_URL);
   const token = process.env.CONNECTOR_TOKEN;
-  if (!token?.trim() || /[\r\n]/u.test(token)) throw new Error('A valid CONNECTOR_TOKEN is required');
+  if (!token?.trim() || /[\r\n]/u.test(token)) throw new Error('请设置有效的 CONNECTOR_TOKEN');
   const httpUrl = process.env.HERMES_API_URL;
   const httpKey = process.env.HERMES_API_KEY;
-  if (httpUrl && !httpKey?.trim()) throw new Error('HERMES_API_KEY is required with HERMES_API_URL');
+  if (httpUrl && !httpKey?.trim()) throw new Error('设置 HERMES_API_URL 时需要同时设置 HERMES_API_KEY');
   const dashboardUrl = process.env.HERMES_DASHBOARD_URL;
   const dashboardToken = process.env.HERMES_DASHBOARD_SESSION_TOKEN;
   const manage = dashboardUrl ? createDashboardManagement(dashboardUrl, dashboardToken ?? '') : undefined;
@@ -59,7 +59,7 @@ async function main(): Promise<void> {
     url: httpUrl, token: httpKey, spool, send: () => flush(),
   }) : new CanonicalConnector(process.env.HERMES_BIN ?? 'hermes', spool, () => socket?.terminate());
   for (const id of spool.unfinished()) {
-    spool.finish(id, { ...result(id, 'unknown', { error: 'Hermes could not confirm the outcome' }) });
+    spool.finish(id, { ...result(id, 'unknown', { error: 'Hermes 无法确认执行结果' }) });
   }
 
   try {
@@ -115,7 +115,7 @@ async function main(): Promise<void> {
             if (!deliveryIds.has(frame.event_id) && send({ ...frame })) deliveryIds.add(frame.event_id);
           }
         } catch {
-          process.stderr.write('Connector could not read the local delivery spool\n');
+          process.stderr.write('连接器无法读取本地投递队列\n');
         } finally {
           polling = false;
         }
@@ -134,7 +134,7 @@ async function main(): Promise<void> {
       peer.on('pong', () => { alive = true; });
       peer.on('error', () => peer.terminate());
       peer.on('open', () => {
-        process.stdout.write('Connector linked to BFF\n');
+        process.stdout.write('Hermes 连接器已连接 BFF\n');
         flush();
         void relay();
       });
@@ -190,7 +190,7 @@ async function main(): Promise<void> {
         if (frame.type === 'management_request') {
           if (!manage || managementPending >= 16) {
             send({ type: 'management_result', request_id: frame.request_id, ok: false,
-              status: manage ? 429 : 503, message: manage ? 'Hermes is handling other management requests.' : 'Configure Hermes Dashboard in the Connector.' });
+              status: manage ? 429 : 503, message: manage ? 'Hermes 正在处理其他管理请求，请稍后重试。' : '请在 Hermes 连接器中配置 Hermes 控制台。' });
             return;
           }
           managementPending += 1;
@@ -212,7 +212,7 @@ async function main(): Promise<void> {
             flush();
           }
         }).catch(() => {
-          process.stderr.write('Connector could not process a Hermes command, retrying connection\n');
+          process.stderr.write('连接器无法处理 Hermes 命令，正在重新连接\n');
           peer.terminate();
         }).finally(() => { queued -= 1; });
       });
@@ -237,6 +237,6 @@ async function main(): Promise<void> {
 }
 
 void main().catch(() => {
-  process.stderr.write('Connector startup failed. Check BFF_URL, CONNECTOR_TOKEN, the spool path and the configured Hermes and Dashboard settings.\n');
+  process.stderr.write('连接器启动失败。请检查 BFF_URL、CONNECTOR_TOKEN、本地队列路径以及 Hermes 和控制台配置。\n');
   process.exitCode = 1;
 });

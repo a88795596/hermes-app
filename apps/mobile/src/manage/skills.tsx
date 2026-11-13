@@ -33,29 +33,29 @@ export function Skills({ call }: { call: ManageCall }) {
       await call("skill.create", { name, content, ...(category && { category }) });
       setCreate(false);
       await skills.reload();
-      return "Skill created.";
+      return "技能已创建。";
     })} /> : skill ? <>
-      <View style={styles.row}><Action icon="back" title="All skills" disabled={action.busy} onPress={() => select(undefined)} /></View>
+      <View style={styles.row}><Action icon="back" title="全部技能" disabled={action.busy} onPress={() => select(undefined)} /></View>
       <Card>
         <Text accessibilityRole="header" style={styles.heading}>{skill.name}</Text>
         {!!skill.description && <Text style={styles.text}>{skill.description}</Text>}
         <Text style={styles.caption}>{[skill.category, skill.provenance].filter(Boolean).join(" · ")}</Text>
-        <Toggle label="Skill enabled" value={skill.enabled} disabled={action.busy} onChange={(enabled) => void action.run(async () => {
+        <Toggle label="启用技能" value={skill.enabled} disabled={action.busy} onChange={(enabled) => void action.run(async () => {
           await call("skill.toggle", { name: skill.name, enabled });
           await skills.reload();
-          return enabled ? "Skill enabled." : "Skill disabled.";
+          return enabled ? "技能已启用。" : "技能已停用。";
         })} />
       </Card>
       <SkillContent key={skill.name} call={call} name={skill.name} />
     </> : <>
       <View style={styles.row}>
-        <Action primary icon="compose" title="New skill" disabled={!skills.data} onPress={() => { setCreate(true); setInstall(false); }} />
-        <Action title={install ? "Close install" : "Install from Hub"} disabled={!skills.data || !!pending || action.busy} onPress={() => setInstall(!install)} />
-        <Action icon="refresh" title="Refresh" disabled={skills.loading || action.busy} onPress={() => void skills.reload()} />
+        <Action primary icon="compose" title="新建技能" disabled={!skills.data} onPress={() => { setCreate(true); setInstall(false); }} />
+        <Action title={install ? "关闭安装" : "从技能中心安装"} disabled={!skills.data || !!pending || action.busy} onPress={() => setInstall(!install)} />
+        <Action icon="refresh" title="刷新" disabled={skills.loading || action.busy} onPress={() => void skills.reload()} />
       </View>
       {install && <Card>
-        <EditField label="Skill identifier or URL" placeholder="owner/repository/skill-name" value={identifier} onChangeText={setIdentifier} editable={!action.busy} />
-        <Action primary title={action.busy ? "Starting…" : "Install skill"} disabled={action.busy || !identifier.trim()} onPress={() => void action.run(async () => {
+        <EditField label="技能标识或网址" placeholder="owner/repository/skill-name" value={identifier} onChangeText={setIdentifier} editable={!action.busy} />
+        <Action primary title={action.busy ? "正在启动安装…" : "安装技能"} disabled={action.busy || !identifier.trim()} onPress={() => void action.run(async () => {
           setInstalled(undefined);
           const result = await call<{ name: string }>("skill.install", { identifier: identifier.trim() });
           setPending(result.name);
@@ -64,13 +64,13 @@ export function Skills({ call }: { call: ManageCall }) {
         })} />
       </Card>}
       <DataState {...skills} />
-      {skills.data && <EditField label="Search installed skills" value={search} onChangeText={(value) => { setSearch(value); setLimit(30); }} />}
+      {skills.data && <EditField label="搜索已安装的技能" value={search} onChangeText={(value) => { setSearch(value); setLimit(30); }} />}
       {results?.length ? <Group>
         {results.slice(0, limit).map((item, index) => <Row key={item.name} divided={index > 0} title={item.name}
-          subtitle={item.description || item.category} value={item.enabled ? "Enabled" : "Disabled"} onPress={() => select(item.name)} />)}
-      </Group> : skills.data && <EmptyState icon="skill" title={search ? "No matching skills" : "No installed skills"}
-        description={search ? "Try a different name or category." : "Create a skill or install one from the Hub."} />}
-      {results && results.length > limit && <Action title="Show more skills" onPress={() => setLimit(limit + 30)} />}
+          subtitle={item.description || item.category} value={item.enabled ? "已启用" : "已停用"} onPress={() => select(item.name)} />)}
+      </Group> : skills.data && <EmptyState icon="skill" title={search ? "暂无匹配的技能" : "暂无已安装的技能"}
+        description={search ? "试试其他名称或分类。" : "创建技能，或从技能中心安装。"} />}
+      {results && results.length > limit && <Action title="显示更多技能" onPress={() => setLimit(limit + 30)} />}
     </>}
   </>;
 }
@@ -87,13 +87,13 @@ function SkillContent({ call, name }: { call: ManageCall; name: string }) {
         await call("skill.edit", { name, content });
         setContent(content);
         edit(false);
-        return "Skill saved.";
+        return "技能已保存。";
       })} /> : <Card>
       <Text accessibilityRole="header" style={styles.heading}>SKILL.md</Text>
       <View style={styles.row}>
-        <Action title={action.busy ? "Loading…" : content === undefined ? "Read content" : "Reload content"} disabled={action.busy}
+        <Action title={action.busy ? "加载中…" : content === undefined ? "查看内容" : "重新加载内容"} disabled={action.busy}
           onPress={() => void action.run(async () => { setContent((await call<{ content: string }>("skill.read", { name })).content); })} />
-        {content !== undefined && <Action title="Edit content" disabled={action.busy} onPress={() => edit(true)} />}
+        {content !== undefined && <Action title="编辑内容" disabled={action.busy} onPress={() => edit(true)} />}
       </View>
       {content !== undefined && <Text selectable style={[styles.text, { fontFamily: mono }]}>{content}</Text>}
     </Card>}
@@ -108,17 +108,17 @@ function SkillForm({ name, content, busy, onCancel, onSave }: {
   const [category, setCategory] = useState("");
   const [body, setBody] = useState(content ?? "---\nname: \ndescription: \n---\n\n");
   return <Card>
-    <Text accessibilityRole="header" style={styles.heading}>{name ? `Edit ${name}` : "New skill"}</Text>
+    <Text accessibilityRole="header" style={styles.heading}>{name ? `编辑「${name}」` : "新建技能"}</Text>
     {!name && <>
-      <EditField label="Skill name" placeholder="my-skill" value={skillName} onChangeText={setName} editable={!busy} />
-      <EditField label="Category (optional)" value={category} onChangeText={setCategory} editable={!busy} />
+      <EditField label="技能名称" placeholder="my-skill" value={skillName} onChangeText={setName} editable={!busy} />
+      <EditField label="分类（选填）" value={category} onChangeText={setCategory} editable={!busy} />
     </>}
-    <EditField label="SKILL.md content" value={body} onChangeText={setBody} multiline editable={!busy}
-      help={name ? undefined : "Fill in name and description in the frontmatter, then add the skill instructions."} style={{ fontFamily: mono, minHeight: 225 }} />
+    <EditField label="SKILL.md 内容" value={body} onChangeText={setBody} multiline editable={!busy}
+      help={name ? undefined : "请先在文件开头的元数据区填写 name 和 description，再编写技能说明。"} style={{ fontFamily: mono, minHeight: 225 }} />
     <View style={styles.row}>
-      <Action primary title={busy ? "Saving…" : name ? "Save skill" : "Create skill"}
+      <Action primary title={busy ? "保存中…" : name ? "保存技能" : "创建技能"}
         disabled={busy || !skillName.trim() || !body.trim() || content === body} onPress={() => onSave(skillName.trim(), body, category.trim())} />
-      <Action title="Cancel" disabled={busy} onPress={onCancel} />
+      <Action title="取消" disabled={busy} onPress={onCancel} />
     </View>
   </Card>;
 }

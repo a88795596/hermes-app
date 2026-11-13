@@ -4,7 +4,7 @@ import { text } from './wire.js';
 
 export function modelCatalog(data: unknown, selected?: ModelSelection): ModelCatalog {
   const source = object(data);
-  if (!Array.isArray(source?.providers)) throw new Error('Invalid Hermes model catalog');
+  if (!Array.isArray(source?.providers)) throw new Error('Hermes 模型目录无效');
   const providers: ModelCatalog['providers'] = [];
   const seen = new Set<string>();
   let current = '';
@@ -27,8 +27,8 @@ export function modelCatalog(data: unknown, selected?: ModelSelection): ModelCat
     ...selected,
     providers,
   };
-  // shortcut: one catalog fits in a bridge frame, paginate the wire if a catalog exceeds it.
-  if (Buffer.byteLength(JSON.stringify(catalog)) > 768 * 1024) throw new Error('Hermes model catalog is too large');
+  // shortcut: 模型目录使用单个转发帧，超出容量时改为分页传输。
+  if (Buffer.byteLength(JSON.stringify(catalog)) > 768 * 1024) throw new Error('Hermes 模型目录超出大小限制');
   return catalog;
 }
 

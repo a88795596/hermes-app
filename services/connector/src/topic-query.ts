@@ -8,12 +8,12 @@ export const queryTimeout = 8_000;
 export class QueryUnavailable extends Error {}
 
 export function skillList(value: unknown): Skill[] {
-  if (!Array.isArray(value)) throw new Error('Invalid Hermes skill list');
+  if (!Array.isArray(value)) throw new Error('Hermes 技能列表无效');
   return value.map((raw) => {
     const item = object(raw);
     const name = string(item?.name);
     if (!name?.trim() || name.includes('\0') || Buffer.byteLength(name) > 1024 || Buffer.from(name).toString() !== name) {
-      throw new Error('Invalid Hermes skill name');
+      throw new Error('Hermes 技能名称无效');
     }
     const description = string(item?.description);
     const category = string(item?.category);
@@ -27,7 +27,7 @@ export function skillList(value: unknown): Skill[] {
 
 export function sessionStatus(value: unknown, turns: Turn[]): SessionStatus {
   const item = object(value);
-  if (!item) throw new Error('Invalid Hermes session status');
+  if (!item) throw new Error('Hermes 会话状态无效');
   const model = boundedText(string(item.model) ?? '', 512).trim();
   const count = integer(item.message_count);
   const activity = turns.some(({ status }) => status === 'streaming') ? 'running'

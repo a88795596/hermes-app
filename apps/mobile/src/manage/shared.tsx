@@ -21,7 +21,7 @@ export function useManagementData<T>(call: ManageCall, operation: ManagementOper
       const next = await call<T>(operation, input, controller.signal);
       if (!controller.signal.aborted) setData(next);
     } catch (failure) {
-      if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : "Could not load Hermes data.");
+      if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : "无法加载 Hermes 数据。");
     } finally {
       if (!controller.signal.aborted) setLoading(false);
     }
@@ -47,7 +47,7 @@ export function useManagementAction() {
     try {
       setMessage((await task()) ?? undefined);
     } catch (failure) {
-      setError(failure instanceof ApiError ? failure.message : "The result could not be confirmed. Refresh before trying again.");
+      setError(failure instanceof ApiError ? failure.message : "无法确认操作结果，请先刷新再重试。");
     } finally {
       pending.current = false;
       setBusy(false);
@@ -61,7 +61,7 @@ export function DataState({ loading, error }: { loading: boolean; error?: string
   return <>
     {loading && <View accessibilityLiveRegion="polite" style={styles.row}>
       <ActivityIndicator color={colors.accent} />
-      <Text style={styles.muted}>Loading from Hermes…</Text>
+      <Text style={styles.muted}>正在从 Hermes 加载数据…</Text>
     </View>}
     {error && <Notice>{error}</Notice>}
   </>;
@@ -85,7 +85,7 @@ export function Row({ title, subtitle, value, icon, onPress, divided, disabled }
 }) {
   const { colors, styles } = useTheme();
   return (
-    <Pressable accessibilityRole="button" accessibilityLabel={[title, subtitle, value].filter(Boolean).join(", ")}
+    <Pressable accessibilityRole="button" accessibilityLabel={[title, subtitle, value].filter(Boolean).join("，")}
       accessibilityState={{ disabled }} disabled={disabled} onPress={onPress}
       style={({ pressed }) => [styles.listItem, layout.row, divided && { borderTopColor: colors.edge, borderTopWidth: StyleSheet.hairlineWidth },
         pressed && { backgroundColor: colors.secondary }]}>
@@ -129,8 +129,8 @@ export function Confirm({ title, description, onConfirm, disabled }: {
   return asking ? <View style={layout.field}>
     <Text style={styles.text}>{description}</Text>
     <View style={styles.row}>
-      <Action destructive title={`Confirm ${title.toLowerCase()}`} disabled={disabled} onPress={() => { setAsking(false); onConfirm(); }} />
-      <Action title="Cancel" disabled={disabled} onPress={() => setAsking(false)} />
+      <Action destructive title={`确认${title}`} disabled={disabled} onPress={() => { setAsking(false); onConfirm(); }} />
+      <Action title="取消" disabled={disabled} onPress={() => setAsking(false)} />
     </View>
   </View> : <Action destructive title={title} disabled={disabled} onPress={() => setAsking(true)} />;
 }
@@ -145,16 +145,17 @@ export function InstallProgress({ call, name, onDone }: { call: ManageCall; name
         const result = await call<{ running: boolean; exit_code: number | null }>("action.status", { name }, controller.signal);
         if (controller.signal.aborted) return;
         if (result.running) next = setTimeout(() => void check(), 1800);
-        else if (result.exit_code === 0) onDone("Installation completed.");
-        else onDone(result.exit_code === null ? "Hermes could not confirm the installation. Refresh the list to check." : `Installation failed (exit ${result.exit_code}). Check Hermes logs.`, true);
+        else if (result.exit_code === 0) onDone("安装已完成。");
+        else onDone(result.exit_code === null ? "Hermes 无法确认安装结果，请刷新列表查看。"
+          : `安装失败（退出码 ${result.exit_code}），请查看 Hermes 日志。`, true);
       } catch (failure) {
-        if (!controller.signal.aborted) onDone(failure instanceof ApiError ? failure.message : "Could not confirm installation. Refresh to check.", true);
+        if (!controller.signal.aborted) onDone(failure instanceof ApiError ? failure.message : "无法确认安装结果，请刷新查看。", true);
       }
     }
     void check();
     return () => { controller.abort(); clearTimeout(next); };
   }, [call, name, onDone]);
-  return <Text accessibilityLiveRegion="polite" style={styles.muted}>Installing on the Hermes host…</Text>;
+  return <Text accessibilityLiveRegion="polite" style={styles.muted}>正在 Hermes 主机上安装…</Text>;
 }
 
 export const entries = (value: string) => value.split(/[\n,]/u).map((item) => item.trim()).filter(Boolean);

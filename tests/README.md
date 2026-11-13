@@ -1,3 +1,3 @@
-# Cross-project tests
+# 跨项目测试
 
-Reserve this directory for the specification's contract, integration, and fault-injection tests. Service-local tests stay beside the service; only cross-project evidence belongs here.
+此目录用于存放规格书中的跨项目契约测试、集成测试、故障注入测试和对应验收证据。单个服务的测试随该服务存放。

@@ -6,7 +6,13 @@ import { ActionState, Confirm, DataState, EditField, Group, Row, useManagementAc
 type Assignment = { provider: string; model: string; base_url?: string; base_url_masked?: boolean; task?: string };
 type Provider = { slug: string; name: string; models: string[]; authenticated?: boolean };
 type ProviderKey = { key: string; provider: string; label: string; configured: boolean };
-const taskLabel = (task: string) => task.charAt(0).toUpperCase() + task.slice(1).replaceAll("_", " ");
+const taskLabels = new Map([
+  ["vision", "视觉识别"], ["compression", "上下文压缩"], ["approval", "审批"], ["mcp", "MCP"],
+  ["title_generation", "生成标题"], ["review", "审查"], ["memory_query_rewrite", "改写记忆查询"],
+  ["tts_audio_tags", "语音合成标签"], ["voice_chat", "语音对话"], ["triage_specifier", "编写分流规格"],
+  ["kanban_decomposer", "拆解看板任务"], ["profile_describer", "生成档案描述"], ["curator", "整理技能"],
+  ["group_router", "群聊路由"], ["delegation", "任务委派"],
+]);
 
 export function Models({ call }: { call: ManageCall }) {
   const { styles } = useTheme();
@@ -16,23 +22,23 @@ export function Models({ call }: { call: ManageCall }) {
   const [message, setMessage] = useState<string>();
   return editing ? <ModelForm call={call} current={editing} onClose={() => edit(undefined)} onSave={async () => {
     edit(undefined);
-    setMessage("Model assignment saved.");
+    setMessage("模型配置已保存。");
     await assignments.reload();
   }} /> : credentials ? <ModelKeys call={call} onClose={() => showCredentials(false)} /> : <>
     <ActionState message={message} />
     <View style={styles.row}>
-      <Action title="Provider API keys" onPress={() => showCredentials(true)} />
-      <Action icon="refresh" title="Refresh" disabled={assignments.loading} onPress={() => void assignments.reload()} />
+      <Action title="服务商 API 密钥" onPress={() => showCredentials(true)} />
+      <Action icon="refresh" title="刷新" disabled={assignments.loading} onPress={() => void assignments.reload()} />
     </View>
     <DataState {...assignments} />
     {assignments.data && <>
-      <Group><Row title="Default model" subtitle={assignments.data.main.model || "Choose a provider and model"}
+      <Group><Row title="默认模型" subtitle={assignments.data.main.model || "选择服务商和模型"}
         value={assignments.data.main.provider} onPress={() => { setMessage(undefined); edit(assignments.data?.main); }} /></Group>
-      <Text style={styles.caption}>The default assignment applies to new Hermes sessions.</Text>
-      <Text accessibilityRole="header" style={styles.sectionLabel}>Auxiliary models</Text>
+      <Text style={styles.caption}>默认模型适用于新建的 Hermes 会话。</Text>
+      <Text accessibilityRole="header" style={styles.sectionLabel}>辅助模型</Text>
       <Group>
         {assignments.data.tasks.map((item, index) => item.task && <Row key={item.task} divided={index > 0}
-          title={taskLabel(item.task)} subtitle={item.model || (item.provider === "auto" ? "Automatic" : "Provider default")}
+          title={taskLabels.get(item.task) ?? item.task} subtitle={item.model || (item.provider === "auto" ? "自动选择" : "服务商默认模型")}
           value={item.provider === "auto" ? undefined : item.provider} onPress={() => { setMessage(undefined); edit(item); }} />)}
       </Group>
     </>}
@@ -63,7 +69,7 @@ function ModelForm({ call, current, onClose, onSave }: { call: ManageCall; curre
         ...(confirmed && { confirm_expensive_model: true }),
       });
       if (result.confirm_required) {
-        setConfirm(result.confirm_message || "Hermes requires confirmation to select this model.");
+        setConfirm(result.confirm_message || "Hermes 需要你确认后才能使用此模型。");
         return;
       }
       setKey("");
@@ -82,28 +88,29 @@ function ModelForm({ call, current, onClose, onSave }: { call: ManageCall; curre
   return <>
     <ActionState {...action} />
     <Card>
-      <Text accessibilityRole="header" style={styles.heading}>{current.task ? taskLabel(current.task) : "Default model"}</Text>
-      <EditField label="Provider" value={provider} onChangeText={changeProvider} placeholder={auxiliary ? "auto" : "openrouter"} editable={!action.busy && !confirm} />
-      <EditField label="Model ID" value={model} onChangeText={setModel} editable={!action.busy && !confirm}
-        help={auxiliary ? "Leave empty to use the provider default. Use auto for Hermes routing." : undefined} />
-      <EditField label="Endpoint URL" value={baseUrl} onChangeText={setBaseUrl} keyboardType="url" editable={!action.busy && !confirm}
+      <Text accessibilityRole="header" style={styles.heading}>{current.task ? taskLabels.get(current.task) ?? current.task : "默认模型"}</Text>
+      <EditField label="服务商" value={provider} onChangeText={changeProvider} placeholder={auxiliary ? "auto" : "openrouter"} editable={!action.busy && !confirm} />
+      <EditField label="模型 ID" value={model} onChangeText={setModel} editable={!action.busy && !confirm}
+        help={auxiliary ? "留空使用服务商的默认模型。填写 auto 由 Hermes 自动选择。" : undefined} />
+      <EditField label="接口地址" value={baseUrl} onChangeText={setBaseUrl} keyboardType="url" editable={!action.busy && !confirm}
         placeholder={current.base_url_masked && provider === current.provider ? current.base_url : undefined}
-        help={clearingUrl ? "Hermes retains this endpoint for the same provider. Change provider to use another default endpoint."
-          : "Optional. For a custom endpoint, enter its API base URL."} />
-      <EditField label="Endpoint API key" value={key} onChangeText={setKey} secureTextEntry autoComplete="off"
+        help={clearingUrl ? "保留当前服务商时，Hermes 会沿用此接口地址。切换服务商可使用其默认地址。"
+          : "选填。使用自定义接口时，请填写其 API 基础地址。"} />
+      <EditField label="接口 API 密钥" value={key} onChangeText={setKey} secureTextEntry autoComplete="off"
         editable={!action.busy && !confirm && (!auxiliary || !!baseUrl.trim())}
-        help={auxiliary && !baseUrl.trim() ? "Enter an endpoint URL to set its key."
-          : "Optional. Leave blank to use the credentials already configured for this provider."} />
+        help={auxiliary && !baseUrl.trim() ? "请先填写接口地址，再设置密钥。"
+          : "选填。留空将使用该服务商已有的凭证。"} />
       <View style={styles.row}>
-        <Action title={browse ? "Hide model catalog" : "Browse models"} disabled={action.busy || !!confirm} onPress={() => setBrowse(!browse)} />
-        {!confirm && <Action primary title={action.busy ? "Saving…" : "Save model"} disabled={action.busy || !ready} onPress={() => save()} />}
-        <Action title="Cancel" disabled={action.busy} onPress={onClose} />
+        <Action title={browse ? "隐藏模型目录" : "浏览模型"} disabled={action.busy || !!confirm} onPress={() => setBrowse(!browse)} />
+        {!confirm && <Action primary title={action.busy ? "保存中…" : "保存模型"} disabled={action.busy || !ready} onPress={() => save()} />}
+        <Action title="取消" disabled={action.busy} onPress={onClose} />
       </View>
       {confirm && <>
+        <Text style={styles.muted}>请查看 Hermes 提供的模型说明，再确认保存。</Text>
         <Text style={styles.text}>{confirm}</Text>
         <View style={styles.row}>
-          <Action primary title="Confirm model" disabled={action.busy} onPress={() => save(true)} />
-          <Action title="Keep editing" disabled={action.busy} onPress={() => setConfirm(undefined)} />
+          <Action primary title="确认选择模型" disabled={action.busy} onPress={() => save(true)} />
+          <Action title="继续编辑" disabled={action.busy} onPress={() => setConfirm(undefined)} />
         </View>
       </>}
     </Card>
@@ -125,22 +132,22 @@ function ModelCatalog({ call, disabled, onChoose }: { call: ManageCall; disabled
   const [count, setCount] = useState(30);
   return <>
     <View style={styles.row}>
-      {provider && <Action icon="back" title="All providers" onPress={() => select(undefined)} />}
-      <Action icon="refresh" title="Refresh catalog" disabled={catalog.loading} onPress={() => void catalog.reload()} />
+      {provider && <Action icon="back" title="全部服务商" onPress={() => select(undefined)} />}
+      <Action icon="refresh" title="刷新目录" disabled={catalog.loading} onPress={() => void catalog.reload()} />
     </View>
     <DataState {...catalog} />
     {provider ? <>
-      <EditField label={`Search ${provider.name} models`} value={search} onChangeText={(value) => { setSearch(value); setCount(30); }} />
+      <EditField label={`搜索 ${provider.name} 的模型`} value={search} onChangeText={(value) => { setSearch(value); setCount(30); }} />
       {results.length ? <Group>{results.slice(0, count).map((model, index) =>
         <Row key={model} title={model} divided={index > 0} disabled={disabled} onPress={() => onChoose(provider.slug, model)} />)}</Group>
-        : <Text style={styles.muted}>No matching models. You can enter a model ID in the form above.</Text>}
-      {results.length > count && <Action title="Show more models" onPress={() => setCount(count + 30)} />}
-      <Action title={`Use ${provider.name} provider`} disabled={disabled} onPress={() => onChoose(provider.slug, "")} />
+        : <Text style={styles.muted}>暂无匹配的模型，可在上方输入模型 ID。</Text>}
+      {results.length > count && <Action title="显示更多模型" onPress={() => setCount(count + 30)} />}
+      <Action title={`使用服务商 ${provider.name}`} disabled={disabled} onPress={() => onChoose(provider.slug, "")} />
     </> : catalog.data?.length ? <Group>
       {catalog.data.map((item, index) => <Row key={item.slug} title={item.name || item.slug} divided={index > 0}
-        subtitle={`${item.models.length} models`} value={item.authenticated === false ? "Setup required" : undefined}
+        subtitle={`${item.models.length} 个模型`} value={item.authenticated === false ? "需要配置" : undefined}
         onPress={() => { select(item.slug); setSearch(""); setCount(30); }} />)}
-    </Group> : catalog.data && <Text style={styles.muted}>Hermes returned no provider catalog.</Text>}
+    </Group> : catalog.data && <Text style={styles.muted}>Hermes 暂未提供服务商目录。</Text>}
   </>;
 }
 
@@ -161,33 +168,33 @@ function ModelKeys({ call, onClose }: { call: ManageCall; onClose: () => void })
       setValue("");
       select(undefined);
       await keys.reload();
-      return replacement === undefined ? "Provider API key removed." : "Provider API key saved.";
+      return replacement === undefined ? "服务商 API 密钥已移除。" : "服务商 API 密钥已保存。";
     });
   }
   return <>
     <View style={styles.row}>
-      <Action icon="back" title="Model assignments" disabled={action.busy} onPress={onClose} />
-      <Action icon="refresh" title="Refresh keys" disabled={action.busy || keys.loading} onPress={() => void keys.reload()} />
+      <Action icon="back" title="模型配置" disabled={action.busy} onPress={onClose} />
+      <Action icon="refresh" title="刷新密钥列表" disabled={action.busy || keys.loading} onPress={() => void keys.reload()} />
     </View>
     <DataState {...keys} />
     <ActionState {...action} />
     {selected ? <Card>
       <Text accessibilityRole="header" style={styles.heading}>{selected.label}</Text>
       <Text style={styles.muted}>{selected.key}</Text>
-      <EditField label="New API key" value={value} onChangeText={setValue} secureTextEntry autoComplete="off" editable={!action.busy} />
+      <EditField label="新的 API 密钥" value={value} onChangeText={setValue} secureTextEntry autoComplete="off" editable={!action.busy} />
       <View style={styles.row}>
-        <Action primary title={action.busy ? "Working…" : "Save API key"} disabled={!value.trim() || action.busy}
+        <Action primary title={action.busy ? "处理中…" : "保存 API 密钥"} disabled={!value.trim() || action.busy}
           onPress={() => updateKey(selected.key, value.trim())} />
-        <Action title="Cancel" disabled={action.busy} onPress={() => { select(undefined); setValue(""); }} />
+        <Action title="取消" disabled={action.busy} onPress={() => { select(undefined); setValue(""); }} />
       </View>
-      {configured && <Confirm title="Remove API key" description={`Remove the saved API key for ${selected.label}?`}
+      {configured && <Confirm title="移除 API 密钥" description={`确定移除 ${selected.label} 的 API 密钥吗？`}
         disabled={action.busy || keys.loading} onConfirm={() => updateKey(selected.key)} />}
     </Card> : keys.data && <>
-      <EditField label="Search provider keys" value={search} onChangeText={setSearch} />
+      <EditField label="搜索服务商密钥" value={search} onChangeText={setSearch} />
       {shown?.length ? <Group>
         {shown.map((row, index) => <Row key={row.key} title={row.label} subtitle={row.key} divided={index > 0}
-          value={row.configured ? "Configured" : "Unset"} onPress={() => select(row)} />)}
-      </Group> : <Text style={styles.muted}>No matching API keys.</Text>}
+          value={row.configured ? "已配置" : "未配置"} onPress={() => select(row)} />)}
+      </Group> : <Text style={styles.muted}>暂无匹配的 API 密钥。</Text>}
     </>}
   </>;
 }

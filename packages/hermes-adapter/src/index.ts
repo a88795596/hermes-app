@@ -16,14 +16,14 @@ export function parseCanonicalJson(source: string): unknown {
 
 export function canonicalInteger(value: string): number | object {
   if (!decimalPattern.test(value) || value.length > 19 || BigInt(value) > MAX_INT64) {
-    throw new Error("Invalid Hermes integer");
+    throw new Error("Hermes 整数值无效");
   }
   const number = Number(value);
   return Number.isSafeInteger(number) ? number : json.rawJSON(value);
 }
 
 function invalid(field: string): never {
-  throw new Error(`Invalid Hermes ${field}`);
+  throw new Error(`Hermes ${field}无效`);
 }
 
 function isRecord(value: unknown): value is CanonicalRecord {
@@ -69,17 +69,17 @@ export interface CanonicalEvent {
 
 export function parseCanonicalEvent(frame: unknown): CanonicalEvent | undefined {
   if (!isRecord(frame) || frame.method !== "event") return;
-  if (frame.jsonrpc !== "2.0" || "id" in frame) invalid("event envelope");
-  const params = record(frame.params, "event params");
-  const type = id(params.type, "event type");
+  if (frame.jsonrpc !== "2.0" || "id" in frame) invalid("事件报文");
+  const params = record(frame.params, "事件参数");
+  const type = id(params.type, "事件类型");
   if (params.session_id == null || params.session_id === "") return;
-  const payload = record(params.payload, "event payload");
+  const payload = record(params.payload, "事件内容");
   const gap = type === "session.replay_gap";
   return {
     sessionId: id(params.session_id, "session_id"),
     type,
     replayEpoch: id(gap ? payload.replay_epoch : params.replay_epoch, "replay_epoch"),
-    sequence: integer(gap ? payload.latest_seq : params.seq, "event sequence"),
+    sequence: integer(gap ? payload.latest_seq : params.seq, "事件序号"),
     authorityEpoch: params.authority_epoch == null ? undefined : integer(params.authority_epoch, "authority_epoch"),
     admissionId: params.admission_id == null ? undefined : id(params.admission_id, "admission_id"),
     executionGeneration: params.execution_generation == null
@@ -105,10 +105,10 @@ export interface CanonicalAdmission {
 }
 
 function parseAdmission(value: CanonicalRecord): CanonicalAdmission {
-  const ref = record(value.ref, "admission ref");
+  const ref = record(value.ref, "受理记录引用");
   const status = value.status;
   if (status !== "queued" && status !== "started" && status !== "unknown" && status !== "terminal") {
-    invalid("admission status");
+    invalid("受理记录状态");
   }
   const result = isRecord(value.result) ? value.result : undefined;
   return {
@@ -116,9 +116,9 @@ function parseAdmission(value: CanonicalRecord): CanonicalAdmission {
     admissionId: id(value.admission_id, "admission_id"),
     sessionId: id(ref.session_id, "session_id"),
     profileId: id(ref.profile_id, "profile_id"),
-    sequence: integer(value.sequence, "admission sequence"),
+    sequence: integer(value.sequence, "受理记录序号"),
     status,
-    outcome: value.outcome === null ? null : id(value.outcome, "admission outcome"),
+    outcome: value.outcome === null ? null : id(value.outcome, "受理记录结果"),
     authorityEpoch: integer(value.authority_epoch, "authority_epoch"),
     executionGeneration: value.execution_generation === null
       ? null
@@ -128,15 +128,15 @@ function parseAdmission(value: CanonicalRecord): CanonicalAdmission {
 }
 
 export function parseAdmissionReceipt(value: unknown): AdmissionReceipt {
-  const receipt = record(value, "admission receipt");
+  const receipt = record(value, "受理回执");
   if (receipt.voice_stopped === true && Object.keys(receipt).length === 1) return { kind: "voice_stopped" };
   return parseAdmission(receipt);
 }
 
 export function parseControlReceipt(value: unknown, expectedPromptId: string): "resolved" | "already_resolved" {
-  const receipt = record(value, "control receipt");
+  const receipt = record(value, "交互请求回执");
   if (receipt.prompt_id !== expectedPromptId || (receipt.status !== "resolved" && receipt.status !== "already_resolved")) {
-    invalid("control receipt");
+    invalid("交互请求回执");
   }
   return receipt.status;
 }
@@ -156,16 +156,16 @@ export interface CanonicalPrompt {
 
 function parsePrompt(payload: CanonicalRecord): CanonicalPrompt {
   const kind = payload.kind;
-  if (kind !== "approval" && kind !== "clarify") invalid("prompt kind");
-  const command = kind === "approval" ? string(payload.command, "approval command") : undefined;
-  const description = payload.description == null ? "" : string(payload.description, "approval description");
-  const choices = strings(payload.choices, "prompt choices");
+  if (kind !== "approval" && kind !== "clarify") invalid("提示类型");
+  const command = kind === "approval" ? string(payload.command, "待审批命令") : undefined;
+  const description = payload.description == null ? "" : string(payload.description, "审批说明");
+  const choices = strings(payload.choices, "提示选项");
   return {
     kind,
     promptId: id(payload.prompt_id, "prompt_id"),
     executionGeneration: integer(payload.execution_generation, "execution_generation"),
-    prompt: kind === "approval" ? [command, description].filter(Boolean).join("\n") : id(payload.question, "question"),
-    // File edits require reviewing a diff, which this text-only client does not carry.
+    prompt: kind === "approval" ? [command, description].filter(Boolean).join("\n") : id(payload.question, "问题"),
+    // 审批文件编辑前需查看差异，此纯文本客户端仅提供拒绝选项。
     choices: kind === "approval" && payload.edit != null ? choices.filter((choice) => choice === "deny") : choices,
     multiSelect: payload.multi_select == null ? false : boolean(payload.multi_select, "multi_select"),
   };
@@ -178,7 +178,7 @@ export function encodeControlResponse(sessionId: string, prompt: CanonicalPrompt
     prompt_id: prompt.promptId,
   };
   if (prompt.kind === "approval") {
-    if (!prompt.choices.includes(answer)) invalid("approval choice");
+    if (!prompt.choices.includes(answer)) invalid("审批选项");
     return { method: "approval.respond", params: { ...params, choice: answer } };
   }
   return { method: "clarify.respond", params: { ...params, answer } };
@@ -193,28 +193,28 @@ export interface ServerRequest {
 
 export function parseServerRequest(frame: unknown): ServerRequest | undefined {
   if (!isRecord(frame) || frame.method !== "clarify" || !("id" in frame)) return;
-  if (frame.jsonrpc !== "2.0") invalid("server request envelope");
-  const params = record(frame.params, "server request params");
-  const questions = list(params.questions, "clarify questions").map((value) => {
-    const question = record(value, "clarify question");
+  if (frame.jsonrpc !== "2.0") invalid("服务端请求报文");
+  const params = record(frame.params, "服务端请求参数");
+  const questions = list(params.questions, "澄清问题列表").map((value) => {
+    const question = record(value, "澄清问题");
     return {
-      questionId: id(question.qid, "question qid"),
-      prompt: id(question.question, "question"),
-      choices: question.choices == null ? [] : strings(question.choices, "question choices"),
+      questionId: id(question.qid, "问题标识 qid"),
+      prompt: id(question.question, "问题"),
+      choices: question.choices == null ? [] : strings(question.choices, "问题选项"),
       multiSelect: question.multi_select == null ? false : boolean(question.multi_select, "multi_select"),
     };
   });
   const questionIds = new Set(questions.map((question) => question.questionId));
   if (questions.length < 1 || questions.length > 5 || questions.length !== questionIds.size) {
-    invalid("clarify questions");
+    invalid("澄清问题列表");
   }
-  const answers = params.answers == null ? {} : record(params.answers, "clarify answers");
+  const answers = params.answers == null ? {} : record(params.answers, "澄清回答");
   const answeredQuestionIds = Object.keys(answers);
   if (answeredQuestionIds.some((qid) => !questionIds.has(qid) || (answers[qid] !== null && typeof answers[qid] !== "string"))) {
-    invalid("clarify answers");
+    invalid("澄清回答");
   }
   return {
-    requestId: id(frame.id, "server request id"),
+    requestId: id(frame.id, "服务端请求 ID"),
     sessionId: id(params.session_id, "session_id"),
     questions,
     answeredQuestionIds,
@@ -224,10 +224,10 @@ export function parseServerRequest(frame: unknown): ServerRequest | undefined {
 export function encodeServerResponse(request: ServerRequest, answers: Record<string, string | null>) {
   const questionIds = new Set(request.questions.map((question) => question.questionId));
   if (Object.entries(answers).some(([qid, answer]) => !questionIds.has(qid) || (answer !== null && typeof answer !== "string"))) {
-    invalid("clarify answers");
+    invalid("澄清回答");
   }
   if (request.questions.some(({ questionId }) => !Object.hasOwn(answers, questionId)
-    && !request.answeredQuestionIds.includes(questionId))) invalid("incomplete clarify answers");
+    && !request.answeredQuestionIds.includes(questionId))) throw new Error("Hermes 澄清回答不完整");
   return { jsonrpc: "2.0", id: request.requestId, result: { answers, outcome: "submitted" } };
 }
 
@@ -236,8 +236,8 @@ export interface PendingAdmission extends CanonicalAdmission {
 }
 
 function parsePending(value: unknown): PendingAdmission[] {
-  return list(value, "pending admissions").map((item) => {
-    const admission = record(item, "pending admission");
+  return list(value, "待处理的受理记录列表").map((item) => {
+    const admission = record(item, "待处理的受理记录");
     return { ...parseAdmission(admission), submissionId: id(admission.input_id, "input_id") };
   });
 }
@@ -260,22 +260,22 @@ export interface SessionSnapshot {
 
 function textWithoutMedia(text: string): string {
   return text
-    .replace(/data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=]+/giu, "[image]")
-    .replace(/^@image:.*$/gmu, "[image]")
-    .replace(/\[Image attached at: [^\n\]]+\]/gu, "[image]");
+    .replace(/data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=]+/giu, "[图片]")
+    .replace(/^@image:.*$/gmu, "[图片]")
+    .replace(/\[Image attached at: [^\n\]]+\]/gu, "[图片]");
 }
 
 export function parseSessionSnapshot(value: unknown): SessionSnapshot {
-  const snapshot = record(value, "session snapshot");
+  const snapshot = record(value, "会话快照");
   const sessionId = id(snapshot.session_id, "session_id");
   const messages: SessionSnapshot["messages"] = [];
-  // The gateway display projection hides model-only rows and removes skill/system scaffolding.
-  for (const row of list(snapshot.display_messages ?? [], "display messages")) {
-    const message = record(row, "display message");
+  // 网关提供的界面消息已滤除仅供模型读取的记录及技能和系统辅助内容。
+  for (const row of list(snapshot.display_messages ?? [], "界面消息列表")) {
+    const message = record(row, "界面消息");
     if ((message.role !== "user" && message.role !== "assistant") || message.text == null || message.text === "") continue;
     messages.push({
       role: message.role,
-      text: textWithoutMedia(string(message.text, "message text")),
+      text: textWithoutMedia(string(message.text, "消息文本")),
       rowId: message.row_id == null ? undefined : integer(message.row_id, "row_id"),
     });
   }
@@ -288,14 +288,14 @@ export function parseSessionSnapshot(value: unknown): SessionSnapshot {
     subscriptionId: id(snapshot.subscription_id, "subscription_id"),
     executionGeneration: integer(snapshot.execution_generation, "execution_generation"),
     revision: integer(snapshot.revision, "revision"),
-    running: boolean(snapshot.running, "session running"),
+    running: boolean(snapshot.running, "会话运行标志"),
     messages,
-    prompts: list(snapshot.prompts, "pending prompts").map((item) => parsePrompt(record(item, "prompt"))),
+    prompts: list(snapshot.prompts, "待处理提示列表").map((item) => parsePrompt(record(item, "提示"))),
     pending: parsePending(snapshot.pending),
-    openRequests: list(snapshot.open_requests ?? [], "open requests").flatMap((item) => {
-      const request = parseServerRequest({ ...record(item, "open request"), jsonrpc: "2.0" });
+    openRequests: list(snapshot.open_requests ?? [], "待响应请求列表").flatMap((item) => {
+      const request = parseServerRequest({ ...record(item, "待响应请求"), jsonrpc: "2.0" });
       if (!request) return [];
-      if (request.sessionId !== sessionId) invalid("open request session_id");
+      if (request.sessionId !== sessionId) invalid("待响应请求的 session_id");
       return [request];
     }),
   };
@@ -354,18 +354,18 @@ export function normalizeCanonicalEvent(event: CanonicalEvent): CanonicalProject
     case "message.start":
       return { type, ...turnIdentity(event) };
     case "message.delta":
-      return { type, ...turnIdentity(event), segment: offset(payload.segment, "message segment"),
-        text: payload.text === null ? null : string(payload.text, "delta text"), offset: offset(payload.offset, "delta offset") };
+      return { type, ...turnIdentity(event), segment: offset(payload.segment, "消息分段"),
+        text: payload.text === null ? null : string(payload.text, "增量文本"), offset: offset(payload.offset, "增量偏移量") };
     case "message.interim":
-      return { type, ...turnIdentity(event), segment: offset(payload.segment, "message segment"),
-        text: string(payload.text, "interim text"), alreadyStreamed: boolean(payload.already_streamed, "already_streamed") };
+      return { type, ...turnIdentity(event), segment: offset(payload.segment, "消息分段"),
+        text: string(payload.text, "中间文本"), alreadyStreamed: boolean(payload.already_streamed, "already_streamed") };
     case "message.complete": {
       const identity = turnIdentity(event);
       const admissionId = payload.admission_id == null ? identity.admissionId : id(payload.admission_id, "admission_id");
-      if (identity.admissionId && identity.admissionId !== admissionId) invalid("completion admission_id");
+      if (identity.admissionId && identity.admissionId !== admissionId) invalid("完成事件的 admission_id");
       const text = typeof payload.text === "string" ? payload.text
         : typeof payload.content === "string" ? payload.content : undefined;
-      const persisted = payload.persisted_turn == null ? {} : record(payload.persisted_turn, "persisted turn");
+      const persisted = payload.persisted_turn == null ? {} : record(payload.persisted_turn, "已持久化的对话轮次");
       return {
         type, ...identity, admissionId, text, outcome: normalizeTurnOutcome(payload.outcome, payload.status),
         submissionId: persisted.submission_id == null ? undefined : id(persisted.submission_id, "submission_id"),
@@ -381,14 +381,14 @@ export function normalizeCanonicalEvent(event: CanonicalEvent): CanonicalProject
         type,
         admissionId: event.admissionId,
         toolId: string(payload.tool_id, "tool_id"),
-        name: id(payload.name, "tool name"),
+        name: id(payload.name, "工具名称"),
         status: type === "tool.start" ? "running" : payload.is_error === true ? "failed"
           : payload.is_error === false ? "succeeded" : "unknown",
       };
     case "approval.request":
     case "clarify.request": {
       const kind = type === "approval.request" ? "approval" : "clarify";
-      if (payload.kind != null && payload.kind !== kind) invalid("event prompt kind");
+      if (payload.kind != null && payload.kind !== kind) invalid("事件提示类型");
       return { type, ...parsePrompt({ ...payload, kind }) };
     }
     case "approval.settled":
@@ -400,12 +400,12 @@ export function normalizeCanonicalEvent(event: CanonicalEvent): CanonicalProject
       };
     case "request.cancel":
       if (payload.method !== "clarify") return;
-      return { type, requestId: id(payload.id, "server request id"), reason: id(payload.reason, "cancel reason") };
+      return { type, requestId: id(payload.id, "服务端请求 ID"), reason: id(payload.reason, "取消原因") };
     case "session.info":
       return {
         type,
         pending: payload.pending == null ? undefined : parsePending(payload.pending),
-        running: payload.running == null ? undefined : boolean(payload.running, "session running"),
+        running: payload.running == null ? undefined : boolean(payload.running, "会话运行标志"),
         executionGeneration: payload.execution_generation == null
           ? undefined
           : integer(payload.execution_generation, "execution_generation"),

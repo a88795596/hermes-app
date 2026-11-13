@@ -10,7 +10,7 @@ function frame(operation: ManagementOperation, input: Record<string, unknown> = 
   return { type: 'management_request', request_id: '00000000-0000-4000-8000-000000000001', operation, profile_ref, input };
 }
 
-test('the connector wire accepts a management frame without a chat session', () => {
+test('连接器协议接受不包含聊天会话的管理帧', () => {
   assert.deepEqual(bridgeFrame(JSON.stringify(frame('cron.list'))), frame('cron.list'));
   assert.throws(() => bridgeFrame(JSON.stringify(frame('cron.list', {}, 'all'))));
   assert.throws(() => bridgeFrame(JSON.stringify({ ...frame('cron.list'), operation: 'config.raw' })));
@@ -47,50 +47,50 @@ async function dashboard(t: TestContext, respond: (method: string, url: string, 
   return { run, requests };
 }
 
-test('Cron forwards a scoped edit and blocks a profile override or immutable field', async (t) => {
+test('定时任务编辑仅作用于选定配置档案，并拒绝覆盖档案或修改只读字段', async (t) => {
   const { run, requests } = await dashboard(t, (method, url, body) => {
     assert.equal(method, 'PUT');
     assert.equal(url, '/api/cron/jobs/job-7?profile=work');
-    assert.deepEqual(body, { updates: { name: 'Morning', skills: ['weather'], skill: null } });
-    return { id: 'job-7', name: 'Morning', enabled: true };
+    assert.deepEqual(body, { updates: { name: '晨间任务', skills: ['weather'], skill: null } });
+    return { id: 'job-7', name: '晨间任务', enabled: true };
   });
-  assert.equal((await run(frame('cron.edit', { id: 'job-7', updates: { name: 'Morning', skills: ['weather'] } }))).ok, true);
+  assert.equal((await run(frame('cron.edit', { id: 'job-7', updates: { name: '晨间任务', skills: ['weather'] } }))).ok, true);
   for (const updates of [{ profile: 'outside' }, { next_run_at: 'now' }]) {
     assert.equal((await run(frame('cron.edit', { id: 'job-7', updates }))).ok, false);
   }
   assert.deepEqual(requests, ['PUT /api/cron/jobs/job-7?profile=work']);
 });
 
-test('Cron history drops full session prompts and model configuration before replying', async (t) => {
+test('返回定时任务历史时省略完整会话提示词和模型配置', async (t) => {
   const { run } = await dashboard(t, (_method, url) => {
     assert.equal(url, '/api/cron/jobs/job-7/runs?limit=20&profile=work');
-    return { runs: Array.from({ length: 20 }, (_, i) => ({ id: `run-${i}`, title: 'Daily task', started_at: 42,
+    return { runs: Array.from({ length: 20 }, (_, i) => ({ id: `run-${i}`, title: '每日任务', started_at: 42,
       ended_at: null, is_active: false, system_prompt: 'x'.repeat(50 * 1024), model_config: 'server-only' })), limit: 20 };
   });
   const result = await run(frame('cron.runs', { id: 'job-7' }));
   assert.ok(result.ok);
   const { runs } = result.data as { runs: unknown[] };
   assert.equal(runs.length, 20);
-  assert.deepEqual(runs[0], { id: 'run-0', title: 'Daily task', started_at: 42, ended_at: null, is_active: false });
+  assert.deepEqual(runs[0], { id: 'run-0', title: '每日任务', started_at: 42, ended_at: null, is_active: false });
 });
 
-test('log requests read the selected profile and filter its recent lines', async (t) => {
+test('日志请求读取选定配置档案并筛选近期日志', async (t) => {
   const { run, requests } = await dashboard(t, (_method, url) => {
     if (url === '/api/profiles/active') return { active: 'work', current: 'default' };
     if (url === '/api/profiles') return { profiles: [{ name: 'work', path: '/srv/hermes/profiles/work' }] };
     if (url === '/api/config?profile=work') return { logging: { level: 'WARNING' } };
     assert.equal(url, '/api/files/download?path=%2Fsrv%2Fhermes%2Fprofiles%2Fwork%2Flogs%2Ferrors.log');
-    return '2026-11-13 12:00:00,010 WARNING gateway.run: Sync delayed\n'
-      + '2026-11-13 12:00:00,011 ERROR tools.mcp_tool: Sync failed\n'
-      + '2026-11-13 12:00:00,012 ERROR gateway.run: Sync failed\n';
+    return '2026-11-13 12:00:00,010 WARNING gateway.run: Sync 模块响应延迟\n'
+      + '2026-11-13 12:00:00,011 ERROR tools.mcp_tool: Sync 模块执行失败\n'
+      + '2026-11-13 12:00:00,012 ERROR gateway.run: Sync 模块执行失败\n';
   });
   const result = await run(frame('logs.read', { file: 'errors', level: 'ERROR', component: 'gateway', search: 'SYNC', lines: 50 }));
   assert.ok(result.ok);
-  assert.deepEqual(result.data, { file: 'errors', level: 'WARNING', lines: ['2026-11-13 12:00:00,012 ERROR gateway.run: Sync failed'] });
+  assert.deepEqual(result.data, { file: 'errors', level: 'WARNING', lines: ['2026-11-13 12:00:00,012 ERROR gateway.run: Sync 模块执行失败'] });
   assert.equal(requests.some((path) => path.startsWith('GET /api/logs')), false);
 });
 
-test('MCP editing preserves existing credentials and other servers', async (t) => {
+test('编辑 MCP 服务器时保留现有凭据和其他服务器', async (t) => {
   const servers = {
     weather: { url: 'https://old.example/mcp', enabled: false, headers: { Authorization: 'Bearer ${WEATHER_KEY}' } },
     local: { command: 'node', args: ['server.js'] },
@@ -111,7 +111,7 @@ test('MCP editing preserves existing credentials and other servers', async (t) =
   assert.doesNotMatch(JSON.stringify(result), /WEATHER_KEY/);
 });
 
-test('MCP list retains literal references, masks inline credentials and normalizes tool filters', async (t) => {
+test('MCP 列表保留引用原文、遮蔽内联凭据并规范化工具过滤条件', async (t) => {
   const { run } = await dashboard(t, (_method, url) => {
     assert.equal(url, '/api/config/raw?profile=work');
     return { yaml: 'mcp_servers:\n  weather:\n    command: node\n    args: [server.js, --token, "${WEATHER_KEY}", --secret=abcd]\n    tools:\n      include: lookup_*\n' };
@@ -122,7 +122,7 @@ test('MCP list retains literal references, masks inline credentials and normaliz
     env_keys: [], enabled: true, tools: { include: ['lookup_*'], exclude: [] }, args_masked: true }] });
 });
 
-test('MCP bearer rotation updates only the server’s managed credential for the selected profile', async (t) => {
+test('轮换 MCP Bearer 令牌时仅更新选定配置档案下该服务器托管的凭据', async (t) => {
   const { run, requests } = await dashboard(t, (method, url, body) => {
     if (method === 'GET') {
       assert.equal(url, '/api/config/raw?profile=work');
@@ -151,11 +151,11 @@ test('MCP bearer rotation updates only the server’s managed credential for the
   assert.equal(requests.filter((path) => path.startsWith('PUT ')).length, 1);
 });
 
-test('MCP probe rejects environment-dependent credentials for another runtime profile', async (t) => {
+test('MCP 连接测试拒绝使用其他运行配置档案的环境变量凭据', async (t) => {
   const { run, requests } = await dashboard(t, (_method, url) => {
     if (url === '/api/config/raw?profile=work') return { yaml: 'mcp_servers:\n  weather:\n    url: https://example.com/mcp\n    headers:\n      Authorization: Bearer ${WEATHER_KEY}\n' };
     if (url === '/api/profiles/active') return { active: 'work', current: 'default' };
-    throw new Error('The Dashboard probe should not run');
+    throw new Error('控制台不应执行连接测试');
   });
   const result = await run(frame('mcp.test', { name: 'weather' }));
   assert.ok(!result.ok);
@@ -163,7 +163,7 @@ test('MCP probe rejects environment-dependent credentials for another runtime pr
   assert.equal(requests.some((request) => request.startsWith('POST ')), false);
 });
 
-test('default-profile installs do not follow the sticky active profile', async (t) => {
+test('为默认配置档案安装时要求控制台运行在默认档案且选中默认档案', async (t) => {
   const { run, requests } = await dashboard(t, () => ({ active: 'work', current: 'default' }));
   const result = await run(frame('skill.install', { identifier: 'official/creative/pixel-art' }, 'default'));
   assert.ok(!result.ok);
@@ -171,7 +171,7 @@ test('default-profile installs do not follow the sticky active profile', async (
   assert.deepEqual(requests, ['GET /api/profiles/active']);
 });
 
-test('an installation receipt belongs to its profile and reports the process that started it', async (t) => {
+test('安装回执归属对应配置档案，并提供启动安装的进程状态', async (t) => {
   const action = 'skills-install-official-creative-pixel-art-c9627dec';
   let pid = 42;
   let started = false;
@@ -201,7 +201,7 @@ test('an installation receipt belongs to its profile and reports the process tha
   assert.equal(requests.length, 4);
 });
 
-test('model assignment returns the existing main endpoint and rejects an auxiliary key without a URL', async (t) => {
+test('模型配置返回现有主模型接口地址，并拒绝缺少接口地址的辅助模型密钥', async (t) => {
   const { run, requests } = await dashboard(t, (_method, url) => {
     if (url === '/api/model/auxiliary?profile=work') return { main: { provider: 'custom', model: 'my-model' }, tasks: [] };
     assert.equal(url, '/api/config/raw?profile=work');
@@ -216,7 +216,7 @@ test('model assignment returns the existing main endpoint and rejects an auxilia
   assert.equal(requests.some((request) => request.startsWith('POST ')), false);
 });
 
-test('MCP catalog installation accepts only environment keys declared by the entry', async (t) => {
+test('从 MCP 目录安装时只接受目录条目声明的环境变量', async (t) => {
   const { run, requests } = await dashboard(t, (_method, url) => {
     assert.equal(url, '/api/mcp/catalog?profile=work');
     return { entries: [{ name: 'weather', required_env: [{ name: 'WEATHER_KEY' }] }] };
@@ -226,7 +226,7 @@ test('MCP catalog installation accepts only environment keys declared by the ent
   assert.deepEqual(requests, ['GET /api/mcp/catalog?profile=work']);
 });
 
-test('model key management exposes only provider metadata', async (t) => {
+test('模型密钥管理仅返回服务商元数据', async (t) => {
   const { run, requests } = await dashboard(t, (method, url, body) => {
     assert.equal(url, '/api/env?profile=work');
     if (method === 'PUT') {

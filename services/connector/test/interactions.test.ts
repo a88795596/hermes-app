@@ -29,18 +29,18 @@ async function harness(t: TestContext, replyStatus = 'resolved') {
         provider: 'nous', model: 'default-model',
         providers: [
           { slug: 'nous', name: 'Nous', models: ['default-model', 'restricted'], unavailable_models: ['restricted'] },
-          { slug: 'custom:local', name: 'Local', models: ['local-model'], api_url: 'http://private-endpoint' },
-          { slug: 'unconfigured', name: 'Unconfigured', models: ['ignored'], authenticated: false },
+          { slug: 'custom:local', name: '本地服务商', models: ['local-model'], api_url: 'http://private-endpoint' },
+          { slug: 'unconfigured', name: '未配置的服务商', models: ['ignored'], authenticated: false },
         ],
       }));
     } else if (path === '/v1/runs') {
       res.statusCode = 202;
       res.end(JSON.stringify({ run_id: runId }));
     } else if (path === `/v1/runs/${runId}`) {
-      res.end(JSON.stringify({ run_id: runId, status: pending ? 'running' : 'completed', output: 'Done',
+      res.end(JSON.stringify({ run_id: runId, status: pending ? 'running' : 'completed', output: '已完成',
         pending_controls: pending ? [{
-          kind: 'clarify', prompt_id: 'ask', execution_generation: 3, question: 'Which environments?',
-          choices: ['Staging', 'Production'], multi_select: true,
+          kind: 'clarify', prompt_id: 'ask', execution_generation: 3, question: '要使用哪些环境？',
+          choices: ['预发布环境', '生产环境'], multi_select: true,
         }] : [] }));
     } else if (path === `/v1/runs/${runId}/clarify`) {
       pending = false;
@@ -94,7 +94,7 @@ async function waitForQuestion(frames: JsonObject[]) {
     }, 10);
     const timeout = setTimeout(() => {
       clearInterval(wait);
-      reject(new Error('Hermes question was not projected'));
+      reject(new Error('未投影 Hermes 的提问'));
     }, 2000);
   });
   const { control_id, choices, multi_select } = control;
@@ -102,7 +102,7 @@ async function waitForQuestion(frames: JsonObject[]) {
   return { control_id, choices, multi_select };
 }
 
-test('HTTP model picker returns the configured provider catalog and remembers a selection across a restart', async (t) => {
+test('HTTP 模式的模型选择器返回已配置的服务商目录，并在重启后保留选择', async (t) => {
   const { command, calls, restart } = await harness(t);
   assert.deepEqual((await command({ kind: 'model_options', body: {} }))?.model_result, {
     type: 'catalog',
@@ -110,7 +110,7 @@ test('HTTP model picker returns the configured provider catalog and remembers a 
       provider: 'nous', model: 'default-model',
       providers: [
         { id: 'nous', name: 'Nous', models: ['default-model'] },
-        { id: 'custom:local', name: 'Local', models: ['local-model'] },
+        { id: 'custom:local', name: '本地服务商', models: ['local-model'] },
       ],
     },
   });
@@ -119,21 +119,21 @@ test('HTTP model picker returns the configured provider catalog and remembers a 
   assert.deepEqual((await command({ kind: 'select_model', body: selection }))?.model_result, { type: 'selected', selection });
   restart();
   const id = randomUUID();
-  await command({ kind: 'submit', body: { submission_id: id, text: 'Hello' } }, id);
+  await command({ kind: 'submit', body: { submission_id: id, text: '你好' } }, id);
   assert.deepEqual(calls.find((call) => call.path === '/v1/runs')?.body, {
-    session_id: 'mobile_test', input: 'Hello', ...selection,
+    session_id: 'mobile_test', input: '你好', ...selection,
   });
 });
 
-test('HTTP Runs projects a multiple-choice question and routes the answer to the waiting run', async (t) => {
+test('HTTP Runs 投影多选问题并将回答转发给等待中的执行', async (t) => {
   const { command, calls, frames } = await harness(t);
   const id = randomUUID();
-  await command({ kind: 'submit', body: { submission_id: id, text: 'Ask me which environments to use' } }, id);
+  await command({ kind: 'submit', body: { submission_id: id, text: '问我需要使用哪些环境' } }, id);
   const control = await waitForQuestion(frames);
   assert.equal(control.multi_select, true);
-  assert.deepEqual(control.choices, ['Staging', 'Production']);
+  assert.deepEqual(control.choices, ['预发布环境', '生产环境']);
   const responseId = randomUUID();
-  const answer = JSON.stringify(['Staging', 'Production']);
+  const answer = JSON.stringify(['预发布环境', '生产环境']);
   const response = await command({ kind: 'respond', body: { control_id: control.control_id, response_id: responseId, answer } }, responseId);
   assert.equal(response?.control_status, 'closed');
   assert.deepEqual(calls.find((call) => call.path.endsWith('/clarify'))?.body, {
@@ -141,13 +141,14 @@ test('HTTP Runs projects a multiple-choice question and routes the answer to the
   });
 });
 
-test('HTTP Runs closes an already-resolved question without acknowledging the submitted answer', async (t) => {
+test('HTTP Runs 关闭已处理的问题，拒绝再次提交的回答', async (t) => {
   const { command, frames } = await harness(t, 'already_resolved');
   const id = randomUUID();
-  await command({ kind: 'submit', body: { submission_id: id, text: 'Ask me which environments to use' } }, id);
+  await command({ kind: 'submit', body: { submission_id: id, text: '问我需要使用哪些环境' } }, id);
   const { control_id } = await waitForQuestion(frames);
   const responseId = randomUUID();
-  const response = await command({ kind: 'respond', body: { control_id, response_id: responseId, answer: 'Staging' } }, responseId);
+  const response = await command({ kind: 'respond', body: { control_id, response_id: responseId, answer: '预发布环境' } }, responseId);
   assert.equal(response?.control_status, 'closed');
   assert.equal(response.status, 'error');
+  assert.equal(response.error, '此请求已过期或已回答。');
 });
