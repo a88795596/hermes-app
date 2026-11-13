@@ -1,8 +1,9 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import type { Command, Control } from '@hermes-mobile/protocol';
+import type { Command, Control, TopicQuery, TopicQueryData } from '@hermes-mobile/protocol';
 import { integer, object, string } from './gateway.js';
 import type { JsonObject } from './gateway.js';
 import type { Binding, Spool, Turn } from './spool.js';
+import { QueryUnavailable, queryTimeout, sessionStatus, skillList } from './topic-query.js';
 import { boundedText, commandDigest, result, stableId } from './wire.js';
 
 const unknown = 'Hermes could not confirm the outcome';
@@ -78,6 +79,25 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
       body: JSON.stringify(body),
     });
     return { response, data: object(await response.json().catch(() => undefined)) };
+  }
+
+  async function query({ kind, topic_id, profile_ref, session_id }: TopicQuery): Promise<TopicQueryData> {
+    const binding = spool.binding(topic_id);
+    if (!binding || binding.profileRef !== profile_ref || binding.sessionId !== session_id || !session_id.startsWith('mobile_')) {
+      throw new Error('Hermes session binding could not be verified');
+    }
+    const path = kind === 'skills' ? '/v1/skills' : `/api/sessions/${encodeURIComponent(session_id)}`;
+    const response = await request(profile_ref, path, { signal: AbortSignal.timeout(queryTimeout) });
+    if (!response.ok) {
+      await response.body?.cancel();
+      if (response.status === 404 || response.status === 501) throw new QueryUnavailable();
+      throw new Error('Hermes rejected the query');
+    }
+    const data = object(await response.json());
+    if (kind === 'skills') return { kind, skills: skillList(data?.data) };
+    const session = object(data?.session);
+    if (session?.id !== session_id) throw new Error('Unexpected Hermes session');
+    return { kind, status: sessionStatus(session, spool.activeTurns(topic_id)) };
   }
 
   function record(turn: Turn, bodies: JsonObject[], sequence?: number, gap = false) {
@@ -314,6 +334,7 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
 
   return {
     command,
+    query,
     close() {
       shutdown.abort();
       for (const controller of watchers.values()) controller.abort();

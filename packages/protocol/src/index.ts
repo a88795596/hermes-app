@@ -41,6 +41,36 @@ export interface TopicDetail {
   controls: Control[];
 }
 
+export interface Skill {
+  name: string;
+  description?: string;
+  category?: string;
+}
+
+export interface SessionStatus {
+  activity: "idle" | "running" | "queued" | "unknown";
+  model?: string;
+  message_count?: number;
+}
+
+export type TopicQueryData =
+  | { kind: "skills"; skills: Skill[] }
+  | { kind: "status"; status: SessionStatus };
+
+export interface TopicQuery {
+  type: "topic_query";
+  request_id: string;
+  topic_id: string;
+  profile_ref: string;
+  session_id: string;
+  kind: TopicQueryData["kind"];
+}
+
+export type TopicQueryResult = { type: "topic_query_result"; request_id: string } & (
+  | { data: TopicQueryData }
+  | { error: "unavailable" | "failed" | "too_large" }
+);
+
 export interface InboxItem {
   inbox_id: string;
   text: string;
@@ -96,8 +126,8 @@ export type ConnectorEvent =
   | (EventEnvelope & { type: "submission"; submission_id: string; status: Exclude<MessageStatus, "accepted">; error?: string })
   | (EventEnvelope & Control & { type: "control" });
 
-export type ConnectorFrame = CommandResult | ConnectorEvent | DeliveryFrame;
-export type BridgeFrame = Command | { type: "ack"; id: string };
+export type ConnectorFrame = CommandResult | ConnectorEvent | DeliveryFrame | TopicQueryResult;
+export type BridgeFrame = Command | { type: "ack"; id: string } | TopicQuery;
 
 export interface ApiSuccess<T> {
   data: T;

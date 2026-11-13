@@ -1,11 +1,11 @@
 import { randomBytes } from "node:crypto";
-import type { InboxItem, MobileNotice } from "@hermes-mobile/protocol";
+import type { InboxItem, MobileNotice, TopicQuery } from "@hermes-mobile/protocol";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
 import { deviceAuth, matchesToken } from "../auth.js";
 import { registerBridge } from "../bridge.js";
 import { createTopic, findProfile, interrupt, respond, submit } from "../mutations.js";
-import { detail, profiles, topics } from "../projections.js";
+import { detail, profiles, topicRow, topics } from "../projections.js";
 import { registerPushRoutes } from "../push.js";
 import type { Store } from "../store.js";
 import { ApiError, invalid, record, string, uuid } from "../validation.js";
@@ -89,6 +89,18 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
   api.get(`${prefix}/status`, requireDevice, (request) => success(request, { connector_online: bridge.online() }));
   api.get(`${prefix}/topics`, requireDevice, async (request) => success(request, await topics(store, refs)));
   api.get(`${prefix}/topics/:id`, requireDevice, async (request) => success(request, await detail(store, pathId(request), refs)));
+  for (const kind of ["skills", "status"] satisfies TopicQuery["kind"][]) {
+    api.get(`${prefix}/topics/:id/${kind}`, requireDevice, async (request) => {
+      const topic = await topicRow(store, pathId(request), refs);
+      if (topic.status !== "ready" || !topic.session_id) {
+        throw new ApiError(409, "TOPIC_NOT_READY", "Topic is not ready");
+      }
+      const result = await bridge.query({
+        kind, topic_id: topic.id, profile_ref: topic.profile_ref, session_id: topic.session_id,
+      });
+      return success(request, result.kind === "skills" ? result.skills : result.status);
+    });
+  }
   api.get(`${prefix}/inbox`, requireDevice, async (request) => {
     const { rows } = await store.query<{ data: InboxItem }>("SELECT data FROM inbox WHERE profile_ref = ANY($1) ORDER BY created_at DESC, id", [[...refs]]);
     return success(request, rows.map(({ data }) => data));

@@ -26,6 +26,12 @@ function text(value: unknown, max: number, empty = false): value is string {
 export function bridgeFrame(source: string): BridgeFrame {
   const frame = object(JSON.parse(source));
   if (frame?.type === 'ack' && uuid(frame.id)) return { type: 'ack', id: frame.id };
+  if (frame?.type === 'topic_query' && uuid(frame.request_id) && uuid(frame.topic_id)
+    && typeof frame.profile_ref === 'string' && /^[a-z0-9][a-z0-9_-]{0,63}$/u.test(frame.profile_ref)
+    && text(frame.session_id, 512) && (frame.kind === 'skills' || frame.kind === 'status')) {
+    const { type, request_id, topic_id, profile_ref, session_id, kind } = frame;
+    return { type, request_id, topic_id, profile_ref, session_id, kind };
+  }
   if (frame?.type !== 'command' || !uuid(frame.command_id) || !uuid(frame.topic_id)
     || typeof frame.profile_ref !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,63}$/u.test(frame.profile_ref)) {
     throw new Error('Invalid BFF command envelope');

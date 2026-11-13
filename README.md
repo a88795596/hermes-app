@@ -59,6 +59,8 @@ pnpm typecheck
 
    The HTTP adapter uses Hermes API-owned sessions. For a newer Hermes installation, leave `HERMES_API_URL` unset and run the Connector on that machine as the Gateway owner, with `HERMES_BIN` pointing to a CLI that supports `gateway attach --json`. Keep the Connector database and BFF database paired with the same Hermes backend and transport. Use separate databases to try a different backend.
 
+   In HTTP mode, the chat Skills menu reads `GET /p/<profile>/v1/skills`. If the endpoint returns 500 because of the `include_editorial` error, run `docker build -t hermes-mobile-runtime - < services/connector/Dockerfile.hermes` and use `hermes-mobile-runtime` as the image for your Hermes container. [Upstream fix](https://github.com/NousResearch/hermes-agent/pull/108968)
+
    If chat runs fail with `no_provider_configured` in the container logs, configure a model provider for the container's Hermes user with `docker exec -it -u hermes hermes-dev hermes model`. The API server key authenticates the Connector; the model provider has its own credentials.
 
 3. Start the App in a separate terminal. Build and open a development client on either platform using the matching command:

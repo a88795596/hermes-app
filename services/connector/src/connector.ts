@@ -3,11 +3,12 @@ import {
   parseAdmissionReceipt, parseCanonicalEvent, parseControlReceipt, parseServerRequest, parseSessionSnapshot,
 } from '@hermes-mobile/hermes-adapter';
 import type { CanonicalAdmission, CanonicalPrompt, ServerRequest, SessionSnapshot } from '@hermes-mobile/hermes-adapter';
-import type { Command, CommandResult, ConnectorEvent, Control } from '@hermes-mobile/protocol';
+import type { Command, CommandResult, ConnectorEvent, Control, TopicQuery, TopicQueryData } from '@hermes-mobile/protocol';
 import { Gateway, GatewayRefusal, object } from './gateway.js';
 import type { JsonObject } from './gateway.js';
 import { Spool } from './spool.js';
 import type { Binding, Cursor, Turn } from './spool.js';
+import { QueryUnavailable, queryTimeout, sessionStatus, skillList } from './topic-query.js';
 import { boundedText, commandDigest, result, stableId } from './wire.js';
 
 type Target =
@@ -94,6 +95,31 @@ export class CanonicalConnector {
       return profile;
     } catch (error) {
       if (this.#profiles.get(ref) === profile) this.#profiles.delete(ref);
+      throw error;
+    }
+  }
+
+  async query({ kind, topic_id, profile_ref, session_id }: TopicQuery): Promise<TopicQueryData> {
+    const binding = this.#bindings.get(topic_id);
+    if (!binding || binding.profileRef !== profile_ref || binding.sessionId !== session_id) {
+      throw new Error('Hermes session binding could not be verified');
+    }
+    const { gateway } = await this.#attach(binding);
+    try {
+      const info = await gateway.rpc('session.info', { session_id }, undefined, queryTimeout);
+      if (info.profile_id !== binding.profileId) throw new Error('Unexpected Hermes profile');
+      if (kind === 'skills') {
+        const categories = object(info.skills);
+        if (!categories) throw new QueryUnavailable();
+        const skills = Object.entries(categories).flatMap(([category, names]) => {
+          if (!Array.isArray(names)) throw new Error('Invalid Hermes skill category');
+          return names.map((name: unknown) => ({ name, category }));
+        });
+        return { kind, skills: skillList(skills) };
+      }
+      return { kind, status: sessionStatus(info, this.spool.activeTurns(topic_id)) };
+    } catch (error) {
+      if (error instanceof GatewayRefusal && error.code === -32601) throw new QueryUnavailable();
       throw error;
     }
   }

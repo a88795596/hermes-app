@@ -19,6 +19,37 @@ export function connectorFrame(value: unknown): ConnectorFrame {
         ...(body.error === undefined ? {} : { error: string(body.error, "error", 1024) }),
         ...(body.control_status === undefined ? {} : { control_status: option(body.control_status, controlStatuses) }) };
     }
+    case "topic_query_result": {
+      const body = record(value, ["type", "request_id", "data", "error"]);
+      const request_id = uuid(body.request_id, "request_id");
+      if (body.error !== undefined) {
+        if (body.data !== undefined) invalid("Unexpected query data");
+        return { type, request_id, error: option(body.error, ["unavailable", "failed", "too_large"]) };
+      }
+      const data = record(body.data);
+      if (data.kind === "skills" && Array.isArray(data.skills)) {
+        const skills = data.skills.map((raw) => {
+          const skill = record(raw, ["name", "description", "category"]);
+          return {
+            name: string(skill.name, "skill name", 1024),
+            ...(skill.description === undefined ? {} : { description: string(skill.description, "description", 8192, true) }),
+            ...(skill.category === undefined ? {} : { category: string(skill.category, "category", 1024, true) }),
+          };
+        });
+        return { type, request_id, data: { kind: "skills", skills } };
+      }
+      if (data.kind !== "status") invalid("Invalid query result");
+      const status = record(data.status, ["activity", "model", "message_count"]);
+      const count = status.message_count;
+      if (count !== undefined && (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0)) {
+        invalid("Invalid message count");
+      }
+      return { type, request_id, data: { kind: "status", status: {
+        activity: option(status.activity, ["idle", "running", "queued", "unknown"]),
+        ...(status.model === undefined ? {} : { model: string(status.model, "model", 512) }),
+        ...(count === undefined ? {} : { message_count: count }),
+      } } };
+    }
     case "delivery": {
       const body = record(value, ["type", "event_id", "delivery_id", "profile_ref", "text"]);
       return { type, event_id: uuid(body.event_id, "event_id"), delivery_id: uuid(body.delivery_id, "delivery_id"),

@@ -2,16 +2,18 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import WebSocket from 'ws';
-import type { Command } from '@hermes-mobile/protocol';
+import type { Command, TopicQuery, TopicQueryData, TopicQueryResult } from '@hermes-mobile/protocol';
 import { CanonicalConnector } from './connector.js';
 import { createDeliverySpool } from './delivery.js';
 import type { JsonObject } from './gateway.js';
 import { createHttpConnector } from './http-mode.js';
 import { Spool } from './spool.js';
+import { QueryUnavailable } from './topic-query.js';
 import { bridgeFrame, result } from './wire.js';
 
 type Mode = {
   command(command: Command, current: () => boolean): Promise<void>;
+  query(query: TopicQuery): Promise<TopicQueryData>;
   close(): void;
 };
 
@@ -61,7 +63,7 @@ async function main(): Promise<void> {
     while (!shutdown.signal.aborted) {
       const started = Date.now();
       const peer = new WebSocket(url, {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${token}`, 'X-Hermes-Mobile-Topic-Query': '1' },
         handshakeTimeout: 10_000, maxPayload: 1024 * 1024, perMessageDeflate: false,
       });
       socket = peer;
@@ -73,6 +75,7 @@ async function main(): Promise<void> {
       const awaitingCreateAck = new Map<string, string>();
       let polling = false;
       let queued = 0;
+      let querying = 0;
       let alive = true;
       function send(frame: JsonObject): boolean {
         if (!current() || peer.bufferedAmount > 1024 * 1024) return false;
@@ -130,7 +133,7 @@ async function main(): Promise<void> {
         void relay();
       });
       peer.on('message', (raw, binary) => {
-        if (binary || queued >= 256) {
+        if (binary) {
           peer.terminate();
           return;
         }
@@ -160,6 +163,26 @@ async function main(): Promise<void> {
           if (delivery && deliveryIds.has(id)) {
             void delivery.ack(id).then(() => deliveryIds.delete(id), () => peer.terminate());
           }
+          return;
+        }
+        if (frame.type === 'topic_query') {
+          const base = { type: 'topic_query_result' as const, request_id: frame.request_id };
+          if (querying >= 8) {
+            send({ ...base, error: 'failed' } satisfies TopicQueryResult);
+            return;
+          }
+          querying += 1;
+          void mode.query(frame).then((data) => {
+            const response: TopicQueryResult = { ...base, data };
+            send(Buffer.byteLength(JSON.stringify(response)) <= 1024 * 1024
+              ? response : { ...base, error: 'too_large' });
+          }, (error: unknown) => {
+            send({ ...base, error: error instanceof QueryUnavailable ? 'unavailable' : 'failed' } satisfies TopicQueryResult);
+          }).finally(() => { querying -= 1; });
+          return;
+        }
+        if (queued >= 256) {
+          peer.terminate();
           return;
         }
         if (frame.kind === 'watch') {

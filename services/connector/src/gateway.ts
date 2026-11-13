@@ -217,7 +217,7 @@ export class Gateway {
     });
   }
 
-  rpc(method: string, params: JsonObject, id = randomUUID() as string): Promise<JsonObject> {
+  rpc(method: string, params: JsonObject, id = randomUUID() as string, timeoutMs = requestTimeout): Promise<JsonObject> {
     return new Promise((resolve, reject) => {
       if (this.#pending.has(id)) {
         reject(new Error('Hermes RPC is already pending'));
@@ -226,7 +226,7 @@ export class Gateway {
       const timer = setTimeout(() => {
         this.#pending.delete(id);
         reject(new Error('Hermes RPC timed out'));
-      }, requestTimeout);
+      }, timeoutMs);
       this.#pending.set(id, { resolve, reject, timer });
       void this.send({ jsonrpc: '2.0', id, method, params }).catch((error: unknown) => {
         clearTimeout(timer);

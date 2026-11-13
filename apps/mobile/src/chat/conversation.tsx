@@ -1,9 +1,10 @@
 import { randomUUID } from "expo-crypto";
 import { useEffect, useRef, useState, type ComponentRef } from "react";
-import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import type { Control, Message, Topic } from "@hermes-mobile/protocol";
 import type { useWorkspace } from "../sync/use-workspace";
 import { Action, Card, EmptyState, Field, Icon, Notice, useTheme } from "../ui/theme";
+import { ComposerMenu } from "./composer-menu";
 
 const messageStatus: Record<Message["status"], string> = {
   accepted: "Accepted",
@@ -92,6 +93,7 @@ export function Conversation({
   const [stopping, setStopping] = useState(false);
   const [draftFocused, setDraftFocused] = useState(false);
   const [sendFocused, setSendFocused] = useState(false);
+  const [menu, setMenu] = useState<"commands" | "skills">();
   const [error, setError] = useState<string>();
   const interruptId = useRef<string>(undefined);
   const messages = workspace.detail?.messages ?? [];
@@ -150,6 +152,13 @@ export function Conversation({
 
   return (
     <KeyboardAvoidingView style={styles.frame} behavior={Platform.OS === "web" ? undefined : "padding"}>
+      {menu && (
+        <ComposerMenu kind={menu} id={id} call={workspace.call}
+          profile={workspace.profiles.find((item) => item.profile_id === topic?.profile_id)?.label}
+          canStop={running && canControl && !stopping}
+          onClose={() => setMenu(undefined)}
+          onStop={() => { setMenu(undefined); void stop(); }} />
+      )}
       <ScrollView
         ref={scroll}
         contentContainerStyle={chat.transcript}
@@ -239,16 +248,14 @@ export function Conversation({
       </ScrollView>
       <View style={[chat.composer, { borderTopColor: colors.edge }]}>
         {error && <Notice>{error}</Notice>}
-        {running && (
-          <View style={chat.stop}>
-            <Action
-              title={stopping ? "Requesting stop…" : "Stop response"}
-              icon="stop"
-              disabled={!canControl || stopping}
-              onPress={() => void stop()}
-            />
-          </View>
-        )}
+        <View style={styles.row}>
+          <Action title="Commands" disabled={topic?.status !== "ready"} onPress={() => { Keyboard.dismiss(); setMenu("commands"); }} />
+          <Action title="Skills" disabled={topic?.status !== "ready"} onPress={() => { Keyboard.dismiss(); setMenu("skills"); }} />
+          {running && (
+            <Action title={stopping ? "Requesting stop…" : "Stop response"} icon="stop"
+              disabled={!canControl || stopping} onPress={() => void stop()} />
+          )}
+        </View>
         <View style={[chat.composerRow, { backgroundColor: colors.field, borderColor: draftFocused ? colors.accent : colors.edge }]}>
           <Field
             accessibilityLabel="Message"
@@ -322,7 +329,6 @@ const chat = StyleSheet.create({
     paddingVertical: 9,
     textAlignVertical: "top",
   },
-  stop: { alignSelf: "flex-start" },
   sendButton: { minWidth: 44, height: 44, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "transparent", borderRadius: 22 },
   sendCircle: { width: 29, height: 29, borderRadius: 15, alignItems: "center", justifyContent: "center" },
   pressed: { opacity: 0.78 },

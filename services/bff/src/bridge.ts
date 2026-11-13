@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { BridgeFrame, Command } from "@hermes-mobile/protocol";
+import type { BridgeFrame, Command, TopicQuery, TopicQueryResult } from "@hermes-mobile/protocol";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import { matchesToken, readBearer } from "./auth.js";
@@ -9,14 +9,18 @@ import type { Store } from "./store.js";
 import { ApiError, invalid } from "./validation.js";
 
 export function registerBridge(api: FastifyInstance, store: Store, refs: Set<string>, secret: string, changed: (topicId?: string) => void) {
-  let active: { socket: WebSocket; pump: () => void } | undefined;
+  let active: {
+    socket: WebSocket;
+    pump: () => void;
+    query: (target: Omit<TopicQuery, "type" | "request_id">) => Promise<TopicQueryResult>;
+  } | undefined;
 
   api.get("/internal/connector/v1/events", {
     websocket: true,
     preValidation: async (request) => {
       if (!matchesToken(readBearer(request), secret)) throw new ApiError(401, "UNAUTHORIZED", "Invalid Connector credentials");
     },
-  }, (socket) => {
+  }, (socket, request) => {
     if (active) {
       socket.close(1008, "Connector already connected");
       return;
@@ -24,6 +28,10 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
     const sent = new Map<string, number>();
     const sessions = new Map<string, string>();
     const watches = new Set<string>();
+    const queries = new Map<string, {
+      kind: TopicQuery["kind"];
+      finish: (result?: TopicQueryResult) => void;
+    }>();
     let serial = Promise.resolve();
     let queuedFrames = 0;
     let pumping = false;
@@ -74,7 +82,30 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
         }
       });
     };
-    active = { socket, pump };
+    const query = (target: Omit<TopicQuery, "type" | "request_id">) => {
+      if (request.headers["x-hermes-mobile-topic-query"] !== "1") {
+        throw new ApiError(503, "TOPIC_QUERY_UNAVAILABLE", "The Hermes Connector needs an update for this request.");
+      }
+      if (queries.size >= 8) {
+        throw new ApiError(429, "TOPIC_QUERY_BUSY", "Too many requests. Try again shortly.");
+      }
+      return new Promise<TopicQueryResult>((resolve, reject) => {
+        const request_id = randomUUID();
+        const timer = setTimeout(() => {
+          queries.delete(request_id);
+          reject(new ApiError(504, "TOPIC_QUERY_TIMEOUT", "Hermes took too long to respond. Try again."));
+        }, 9_000);
+        const finish = (result?: TopicQueryResult) => {
+          clearTimeout(timer);
+          queries.delete(request_id);
+          if (result) resolve(result);
+          else reject(new ApiError(503, "CONNECTOR_OFFLINE", "The Hermes Connector disconnected. Try again."));
+        };
+        queries.set(request_id, { kind: target.kind, finish });
+        if (!send({ ...target, type: "topic_query", request_id })) finish();
+      });
+    };
+    active = { socket, pump, query };
     socket.on("pong", () => { alive = true; });
     const heartbeat = setInterval(() => {
       if (!alive || [...sent.values()].some((sentAt) => Date.now() - sentAt > 90_000)) return socket.terminate();
@@ -84,6 +115,7 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
     heartbeat.unref();
     socket.once("close", () => {
       clearInterval(heartbeat);
+      for (const query of queries.values()) query.finish();
       if (active?.socket === socket) {
         active = undefined;
         changed();
@@ -100,7 +132,12 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
       run(async () => {
         try {
           const frame = connectorFrame(JSON.parse(raw.toString()));
-          if (frame.type === "command_result") {
+          if (frame.type === "topic_query_result") {
+            const query = queries.get(frame.request_id);
+            if (!query) return;
+            if ("data" in frame && frame.data.kind !== query.kind) invalid("Mismatched topic query result");
+            query.finish(frame);
+          } else if (frame.type === "command_result") {
             if (watches.delete(frame.command_id)) return;
             if (!sent.has(frame.command_id)) {
               // The Connector can resend a result after the original socket lost the ACK.
@@ -147,5 +184,22 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
   return {
     online: () => active !== undefined && active.socket.readyState === active.socket.OPEN,
     pump: () => active?.pump(),
+    async query(target: Omit<TopicQuery, "type" | "request_id">) {
+      if (!refs.has(target.profile_ref)) invalid("Invalid Hermes profile");
+      if (!active || active.socket.readyState !== active.socket.OPEN) {
+        throw new ApiError(503, "CONNECTOR_OFFLINE", "Connect to Hermes and try again.");
+      }
+      const result = await active.query(target);
+      if ("data" in result) return result.data;
+      if (result.error === "too_large") {
+        throw new ApiError(502, "TOPIC_QUERY_TOO_LARGE", "The Hermes skill list exceeds the Connector response limit.");
+      }
+      if (result.error === "unavailable") {
+        throw new ApiError(503, "TOPIC_QUERY_UNAVAILABLE", "This Hermes server does not provide this request.");
+      }
+      throw new ApiError(502, "TOPIC_QUERY_FAILED", target.kind === "skills"
+        ? "Hermes could not list skills for this profile. Try again."
+        : "Hermes could not read this session’s status. Try again.");
+    },
   };
 }

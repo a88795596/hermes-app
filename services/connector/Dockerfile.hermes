@@ -1,0 +1,5 @@
+FROM nousresearch/hermes-agent:main
+
+# shortcut: remove this image override once the upstream /v1/skills endpoint works.
+RUN sed -i 's/skip_disabled=False, include_editorial=True/skip_disabled=False/' \
+    /opt/hermes/gateway/platforms/api_server.py

@@ -1,7 +1,7 @@
 import { randomUUID } from "expo-crypto";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, BackHandler, Keyboard, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, BackHandler, Keyboard, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { Topic } from "@hermes-mobile/protocol";
 import { Pairing } from "../auth/pairing";
@@ -59,6 +59,7 @@ function Workspace({
     : connected ? "Hermes connected" : "Connector offline";
 
   useEffect(() => {
+    if (Platform.OS === "web") return;
     const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
       if (topicId) {
         setTopicId(null);
