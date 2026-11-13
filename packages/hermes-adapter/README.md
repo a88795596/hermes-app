@@ -1,5 +1,5 @@
-# Hermes adapter
+# Hermes 适配器
 
-This package will isolate the pinned Hermes gateway contract, validation, normalization, and upstream fixtures from the Mobile API.
+此包封装与指定版本 Hermes 网关相关的契约、校验、规范化逻辑和上游测试夹具，使移动端 API 独立于这些实现细节。
 
-Upgrading Hermes must not silently change `@hermes-mobile/protocol`.
+升级 Hermes 时，`@hermes-mobile/protocol` 的任何变化都须显式处理。

@@ -1,4 +1,4 @@
-"""Active delivery to the Hermes Mobile Inbox."""
+"""向 Hermes 移动端收件箱主动投递。"""
 
 
 def register(ctx):

@@ -12,7 +12,7 @@ async function applySubmission(db: PoolClient, topicId: string, id: string, stat
     "SELECT message_id, data FROM submissions WHERE id = $1 AND topic_id = $2", [id, topicId],
   );
   const submission = rows[0];
-  if (!submission) missing("Submission");
+  if (!submission) missing("消息提交记录");
   const old = submission.data.status;
   if (terminal.has(old) || (old === "streaming" && status === "queued")) status = old;
   await db.query("UPDATE submissions SET data = $2 WHERE id = $1", [id, {
@@ -29,31 +29,31 @@ export async function applyResult(db: PoolClient, frame: CommandResult, refs: Se
     "SELECT payload, result FROM commands WHERE id = $1", [frame.command_id],
   );
   const command = rows[0];
-  if (!command) missing("Command");
+  if (!command) missing("命令");
   const { payload, result } = command;
   const topic = await topicRow(db, payload.topic_id, refs);
   if (payload.profile_ref !== topic.profile_ref || (payload.session_id && payload.session_id !== topic.session_id)) {
-    invalid("Command binding no longer matches");
+    invalid("命令绑定已不匹配。");
   }
   if (result) {
-    if (!isDeepStrictEqual(result, frame)) conflict("Command result conflicts with recorded result");
+    if (!isDeepStrictEqual(result, frame)) conflict("命令结果与已保存的结果冲突。");
     return topic;
   }
   const isModel = payload.kind === "model_options" || payload.kind === "select_model";
   if ((frame.model_result !== undefined && (!isModel || frame.status !== "ok" ||
       (frame.model_result.type === "catalog") !== (payload.kind === "model_options"))) ||
-      (isModel && frame.status === "ok" && !frame.model_result)) invalid("Invalid model result for command");
+      (isModel && frame.status === "ok" && !frame.model_result)) invalid("命令的模型结果无效。");
   if (payload.kind === "create") {
-    if (frame.status === "ok" && !frame.session_id) invalid("Create result is missing the session ID");
+    if (frame.status === "ok" && !frame.session_id) invalid("创建结果缺少会话 ID。");
     const success = frame.status === "ok";
     await db.query("UPDATE topics SET session_id = $2, status = $3, error = $4 WHERE id = $1", [
       topic.id, success ? frame.session_id : null, success ? "ready" : "error",
-      success ? null : (frame.error ?? "Hermes could not confirm creation"),
+      success ? null : (frame.error ?? "Hermes 无法确认会话是否创建成功。"),
     ]);
     topic.session_id = success ? frame.session_id! : null;
     topic.status = success ? "ready" : "error";
   } else if (payload.kind === "submit") {
-    if (frame.status === "ok" && !frame.admission_id) invalid("Submit result is missing the admission ID");
+    if (frame.status === "ok" && !frame.admission_id) invalid("提交结果缺少受理 ID。");
     const status = frame.status === "ok" ? "queued" : frame.status === "error" ? "failed" : "unknown";
     await applySubmission(db, topic.id, payload.body.submission_id, status, frame.error, frame.admission_id);
   } else if (payload.kind === "respond") {
@@ -76,13 +76,13 @@ async function recordEvent(db: PoolClient, kind: string, id: string, payload: ob
   );
   if (inserted.rowCount) return true;
   const { rows } = await db.query("SELECT payload FROM connector_ingest WHERE kind = $1 AND id = $2", [kind, id]);
-  if (!isDeepStrictEqual(rows[0]?.payload, payload)) conflict("Connector event ID was reused with different data");
+  if (!isDeepStrictEqual(rows[0]?.payload, payload)) conflict("不同的事件数据使用了同一个连接器事件 ID。");
   return false;
 }
 
 export async function applyEvent(db: PoolClient, frame: ConnectorEvent, refs: Set<string>, sessions: Map<string, string>) {
   const topic = await topicRow(db, frame.topic_id, refs);
-  if (topic.status !== "ready" || sessions.get(topic.id) !== topic.session_id) invalid("Connector does not own this topic scope");
+  if (topic.status !== "ready" || sessions.get(topic.id) !== topic.session_id) invalid("连接器未绑定此话题对应的会话。");
   if (!await recordEvent(db, "event", frame.event_id, frame)) return;
 
   if (frame.type === "submission") {
@@ -90,13 +90,13 @@ export async function applyEvent(db: PoolClient, frame: ConnectorEvent, refs: Se
   } else if (frame.type === "message") {
     if (frame.submission_id) {
       const { rowCount } = await db.query("SELECT id FROM submissions WHERE id = $1 AND topic_id = $2", [frame.submission_id, topic.id]);
-      if (!rowCount) missing("Submission");
+      if (!rowCount) missing("消息提交记录");
     }
     const { rows } = await db.query<{ topic_id: string; data: Message }>("SELECT topic_id, data FROM messages WHERE id = $1", [frame.message_id]);
     const existing = rows[0];
     if (existing && (existing.topic_id !== topic.id || existing.data.role !== "assistant" ||
       (frame.submission_id && existing.data.submission_id && frame.submission_id !== existing.data.submission_id))) {
-      conflict("Message ID belongs to another entity");
+      conflict("该消息 ID 已用于其他记录。");
     }
     if (existing?.data.status === "final" && frame.status === "streaming") return;
     const submissionId = frame.submission_id ?? existing?.data.submission_id;
@@ -107,12 +107,12 @@ export async function applyEvent(db: PoolClient, frame: ConnectorEvent, refs: Se
   } else {
     const { rows } = await db.query<{ topic_id: string; data: Control }>("SELECT topic_id, data FROM controls WHERE id = $1", [frame.control_id]);
     const existing = rows[0];
-    if (existing && (existing.topic_id !== topic.id || existing.data.kind !== frame.kind)) conflict("Control ID belongs to another entity");
+    if (existing && (existing.topic_id !== topic.id || existing.data.kind !== frame.kind)) conflict("该交互请求 ID 已用于其他记录。");
     if (existing?.data.status === "closed" || (existing && existing.data.status !== "pending" && frame.status === "pending")) return;
     const submissionId = existing?.data.submission_id ?? frame.submission_id;
     if (submissionId && !existing?.data.submission_id) {
       const { rowCount } = await db.query("SELECT id FROM submissions WHERE id = $1 AND topic_id = $2", [submissionId, topic.id]);
-      if (!rowCount) invalid("Invalid control submission");
+      if (!rowCount) invalid("交互请求关联的消息提交记录无效。");
     }
     const control: Control = { ...existing?.data, control_id: frame.control_id, kind: frame.kind,
       prompt: frame.prompt, choices: frame.choices, status: frame.status,
@@ -124,7 +124,7 @@ export async function applyEvent(db: PoolClient, frame: ConnectorEvent, refs: Se
 }
 
 export async function applyDelivery(db: PoolClient, frame: DeliveryFrame, refs: Set<string>) {
-  if (!refs.has(frame.profile_ref)) missing("Profile");
+  if (!refs.has(frame.profile_ref)) missing("配置档案");
   await recordEvent(db, "event", frame.event_id, frame);
   const { delivery_id, profile_ref, text } = frame;
   if (!await recordEvent(db, "delivery", delivery_id, { profile_ref, text })) return;

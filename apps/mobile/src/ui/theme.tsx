@@ -1,6 +1,7 @@
 import { SymbolView, type AndroidSymbol, type SFSymbol } from "expo-symbols";
 import { useState, type ReactNode } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View, useColorScheme, type TextInputProps } from "react-native";
+import { errorLabel } from "./text";
 
 const light = {
   background: "#f2f2f7",
@@ -133,7 +134,9 @@ export function Card({ children }: { children: ReactNode }) {
 
 export function Notice({ children }: { children: ReactNode }) {
   const { styles } = useTheme();
-  return <Text accessibilityLiveRegion="polite" style={styles.error}>{children}</Text>;
+  return <Text accessibilityLiveRegion="polite" style={styles.error}>
+    {typeof children === "string" ? errorLabel(children) : children}
+  </Text>;
 }
 
 export function EmptyState({ icon, title, description }: { icon: IconName; title: string; description?: string }) {

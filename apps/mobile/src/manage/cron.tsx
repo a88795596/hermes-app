@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Text, View } from "react-native";
+import { formatDateTime } from "../ui/text";
 import { Action, Card, EmptyState, useTheme } from "../ui/theme";
 import { ActionState, Confirm, DataState, EditField, Group, Row, Toggle, entries,
   useManagementAction, useManagementData, type ManageCall } from "./shared";
@@ -30,14 +31,36 @@ type Job = {
   enabled_toolsets?: string[] | null;
 };
 
+const jobStates = new Map([
+  ["scheduled", "已安排"], ["paused", "已暂停"], ["completed", "已完成"], ["error", "异常"],
+  ["disabled", "已停用"], ["running", "运行中"],
+]);
+const runStates = new Map([
+  ["ok", "成功"], ["error", "失败"], ["delivery_failed", "投递失败"], ["delivery_queued", "等待投递"],
+  ["blocked_config", "配置有误"], ["cancelled", "已取消"], ["interrupted", "已中断"],
+]);
+const deliveryLabels = new Map([["local", "本机"], ["hermes_mobile", "Hermes 收件箱"], ["origin", "原始会话"]]);
+
 function jobName(job: Job) { return job.name || job.prompt?.split("\n", 1)[0]?.slice(0, 80) || job.id; }
-function jobState(job: Job) { return job.state?.replaceAll("_", " ") ?? (job.enabled ? "Scheduled" : "Disabled"); }
+function jobState(job: Job) {
+  const state = job.state || (job.enabled ? "scheduled" : "disabled");
+  return jobStates.get(state) ?? state;
+}
 function scheduleValue(job?: Job) {
   const schedule = job?.schedule;
   if (typeof schedule === "string") return schedule;
   return schedule?.expr ?? schedule?.run_at ?? schedule?.display ?? job?.schedule_display ?? "";
 }
-function when(value: string | number) { return new Date(typeof value === "number" ? value * 1000 : value).toLocaleString(); }
+function scheduleLabel(job: Job) {
+  const schedule = job.schedule;
+  if (schedule && typeof schedule !== "string") {
+    if (schedule.kind === "interval" && typeof schedule.minutes === "number") return `每 ${schedule.minutes} 分钟`;
+    if (schedule.kind === "once" && schedule.run_at) return `单次 · ${schedule.run_at.replace("T", " ")}`;
+    if (schedule.kind === "cron" && schedule.expr) return schedule.expr;
+  }
+  return job.schedule_display || scheduleValue(job) || "未设置执行计划";
+}
+function when(value: string | number) { return formatDateTime(typeof value === "number" ? value * 1000 : value); }
 
 export function ScheduledTasks({ call }: { call: ManageCall }) {
   const { styles } = useTheme();
@@ -57,53 +80,54 @@ export function ScheduledTasks({ call }: { call: ManageCall }) {
       else await call("cron.create", values);
       edit(false);
       await jobs.reload();
-      return job ? "Task updated." : "Task scheduled.";
+      return job ? "任务已更新。" : "任务已创建。";
     })} /> : job ? <>
       <View style={styles.row}>
-        <Action icon="back" title="All tasks" disabled={action.busy} onPress={close} />
-        <Action icon="refresh" title="Refresh" disabled={jobs.loading || action.busy} onPress={() => void jobs.reload()} />
+        <Action icon="back" title="全部任务" disabled={action.busy} onPress={close} />
+        <Action icon="refresh" title="刷新" disabled={jobs.loading || action.busy} onPress={() => void jobs.reload()} />
       </View>
       <DataState {...jobs} />
       <Card>
         <Text accessibilityRole="header" style={styles.heading}>{jobName(job)}</Text>
-        <Text style={styles.text}>{jobState(job)} · {job.schedule_display || scheduleValue(job) || "No schedule"}</Text>
-        <Text style={styles.muted}>Delivery · {job.deliver || "local"}</Text>
-        {job.next_run_at && <Text style={styles.muted}>Next run · {when(job.next_run_at)}</Text>}
-        {job.last_run_at && <Text style={styles.muted}>Last run · {when(job.last_run_at)}{job.last_status ? ` · ${job.last_status}` : ""}</Text>}
+        <Text style={styles.text}>{jobState(job)} · {scheduleLabel(job)}</Text>
+        <Text style={styles.muted}>投递至 · {deliveryLabels.get(job.deliver || "local") ?? job.deliver}</Text>
+        {job.next_run_at && <Text style={styles.muted}>下次运行 · {when(job.next_run_at)}</Text>}
+        {job.last_run_at && <Text style={styles.muted}>上次运行 · {when(job.last_run_at)}
+          {job.last_status ? ` · ${runStates.get(job.last_status) ?? job.last_status}` : ""}</Text>}
         {job.prompt && <Text selectable style={styles.text}>{job.prompt}</Text>}
         {job.last_error && <Text selectable style={styles.error}>{job.last_error}</Text>}
         {job.last_delivery_error && <Text selectable style={styles.error}>{job.last_delivery_error}</Text>}
         <View style={styles.row}>
-          <Action title="Edit task" disabled={action.busy} onPress={() => edit(true)} />
-          <Action title={job.enabled ? "Pause" : "Resume"} disabled={action.busy} onPress={() => void action.run(async () => {
+          <Action title="编辑任务" disabled={action.busy} onPress={() => edit(true)} />
+          <Action title={job.enabled ? "暂停" : "恢复"} disabled={action.busy} onPress={() => void action.run(async () => {
             await call(job.enabled ? "cron.pause" : "cron.resume", { id: job.id });
             await jobs.reload();
-            return job.enabled ? "Task paused." : "Task resumed.";
+            return job.enabled ? "任务已暂停。" : "任务已恢复。";
           })} />
-          <Action title="Run now" disabled={action.busy || !job.enabled} onPress={() => void action.run(async () => {
+          <Action title="立即运行" disabled={action.busy || !job.enabled} onPress={() => void action.run(async () => {
             await call("cron.trigger", { id: job.id });
             await jobs.reload();
-            return "Queued for the next Hermes scheduler tick.";
+            return "已加入队列，将在 Hermes 调度器下次检查时运行。";
           })} />
         </View>
-        {!job.enabled && <Text style={styles.caption}>Resume the task to run it.</Text>}
+        {!job.enabled && <Text style={styles.caption}>恢复任务后即可运行。</Text>}
         <View style={styles.row}>
-          <Action title={history ? "Hide run history" : "Run history"} onPress={() => showHistory(!history)} />
-          <Confirm title="Delete task" description={`Delete the schedule for ${jobName(job)}?`} disabled={action.busy}
-            onConfirm={() => void action.run(async () => { await call("cron.remove", { id: job.id }); close(); await jobs.reload(); return "Task deleted."; })} />
+          <Action title={history ? "隐藏运行记录" : "运行记录"} onPress={() => showHistory(!history)} />
+          <Confirm title="删除任务" description={`确定删除定时任务「${jobName(job)}」吗？`} disabled={action.busy}
+            onConfirm={() => void action.run(async () => { await call("cron.remove", { id: job.id }); close(); await jobs.reload(); return "任务已删除。"; })} />
         </View>
       </Card>
       {history && <RunHistory key={job.id} call={call} id={job.id} />}
     </> : <>
       <View style={styles.row}>
-        <Action primary icon="compose" title="New task" disabled={!jobs.data || action.busy} onPress={() => edit(true)} />
-        <Action icon="refresh" title="Refresh" disabled={jobs.loading || action.busy} onPress={() => void jobs.reload()} />
+        <Action primary icon="compose" title="新建任务" disabled={!jobs.data || action.busy} onPress={() => edit(true)} />
+        <Action icon="refresh" title="刷新" disabled={jobs.loading || action.busy} onPress={() => void jobs.reload()} />
       </View>
       <DataState {...jobs} />
       {jobs.data?.length ? <Group>
         {jobs.data.map((item, index) => <Row key={item.id} divided={index > 0} title={jobName(item)}
-          subtitle={item.schedule_display || scheduleValue(item)} value={jobState(item)} onPress={() => select(item.id)} />)}
-      </Group> : jobs.data && <EmptyState icon="schedule" title="No scheduled tasks" description="Create a task to run a prompt or a script on a schedule." />}
+          subtitle={scheduleLabel(item)} value={jobState(item)} onPress={() => select(item.id)} />)}
+      </Group> : jobs.data && <EmptyState icon="schedule" title="暂无定时任务" description="创建任务，按计划执行提示词或脚本。" />}
     </>}
   </>;
 }
@@ -113,14 +137,17 @@ function RunHistory({ call, id }: { call: ManageCall; id: string }) {
   const input = useMemo(() => ({ id }), [id]);
   const history = useManagementData<{ runs: { id: string; title?: string; started_at: number; ended_at?: number | null; is_active?: boolean }[] }>(call, "cron.runs", input);
   return <Card>
-    <Text accessibilityRole="header" style={styles.heading}>Recent runs</Text>
+    <Text accessibilityRole="header" style={styles.heading}>近期运行记录</Text>
     <DataState {...history} />
-    {history.data?.runs.map((run) => <View key={run.id}>
-      <Text style={styles.text}>{run.title || when(run.started_at)}</Text>
-      <Text style={styles.caption}>{run.title ? `${when(run.started_at)} · ` : ""}{run.is_active ? "Running" : run.ended_at ? "Ended" : "No end time"}</Text>
-    </View>)}
-    {history.data?.runs.length === 0 && <Text style={styles.muted}>Hermes has recorded no session runs for this task.</Text>}
-    <Action icon="refresh" title="Refresh runs" disabled={history.loading} onPress={() => void history.reload()} />
+    {history.data?.runs.map((run) => {
+      const started = when(run.started_at);
+      return <View key={run.id}>
+        <Text style={styles.text}>{run.title || started}</Text>
+        <Text style={styles.caption}>{run.title ? `${started} · ` : ""}{run.is_active ? "运行中" : run.ended_at ? "已结束" : "暂无结束时间"}</Text>
+      </View>;
+    })}
+    {history.data?.runs.length === 0 && <Text style={styles.muted}>Hermes 尚未记录此任务的运行情况。</Text>}
+    <Action icon="refresh" title="刷新运行记录" disabled={history.loading} onPress={() => void history.reload()} />
   </Card>;
 }
 
@@ -135,10 +162,10 @@ function jobValues(job?: Job) {
 }
 
 const advancedFields = [
-  ["skills", "Skills", "Comma-separated skill names"], ["provider", "Provider override", undefined],
-  ["model", "Model override", undefined], ["base_url", "Model endpoint override", undefined],
-  ["script", "Script", "Relative to Hermes scripts directory"], ["workdir", "Working directory", "Absolute path on the Hermes host"],
-  ["context_from", "Use output from tasks", "Comma-separated job IDs"], ["enabled_toolsets", "Toolsets", "Comma-separated toolset names"],
+  ["skills", "技能", "技能名称，用英文逗号分隔"], ["provider", "指定服务商", undefined],
+  ["model", "指定模型", undefined], ["base_url", "指定模型接口地址", undefined],
+  ["script", "脚本", "相对于 Hermes 脚本目录的路径"], ["workdir", "工作目录", "Hermes 主机上的绝对路径"],
+  ["context_from", "引用其他任务的输出", "任务 ID，用英文逗号分隔"], ["enabled_toolsets", "工具集", "工具集名称，用英文逗号分隔"],
 ] as const;
 
 function JobForm({ job, busy, onCancel, onSave }: { job?: Job; busy: boolean; onCancel: () => void; onSave: (values: object) => void }) {
@@ -157,22 +184,22 @@ function JobForm({ job, busy, onCancel, onSave }: { job?: Job; busy: boolean; on
         : key === "no_agent" ? draft[key] : key === "prompt" ? draft[key] : draft[key].trim()])));
   }
   return <Card>
-    <Text accessibilityRole="header" style={styles.heading}>{job ? "Edit scheduled task" : "New scheduled task"}</Text>
-    {field("name", "Name")}
-    {field("schedule", "Schedule", "every 2h or 0 9 * * *")}
-    <Text style={styles.caption}>Schedules use the Hermes host’s configured time zone.</Text>
-    {field("prompt", "Prompt", "What should Hermes do?", true)}
-    {field("deliver", "Delivery target", "local or hermes_mobile")}
-    <Text style={styles.caption}>Use local to keep output on the host, or hermes_mobile for a configured Inbox.</Text>
-    <Action title={advanced ? "Hide advanced options" : "Advanced options"} onPress={() => expand(!advanced)} />
+    <Text accessibilityRole="header" style={styles.heading}>{job ? "编辑定时任务" : "新建定时任务"}</Text>
+    {field("name", "名称")}
+    {field("schedule", "执行计划", "例如 every 2h 或 0 9 * * *")}
+    <Text style={styles.caption}>执行计划采用 Hermes 主机配置的时区。</Text>
+    {field("prompt", "提示词", "希望 Hermes 执行什么？", true)}
+    {field("deliver", "投递目标", "填写 local 或 hermes_mobile")}
+    <Text style={styles.caption}>填写 local 将结果留在主机，填写 hermes_mobile 将结果发送到已配置的收件箱。</Text>
+    <Action title={advanced ? "隐藏高级选项" : "高级选项"} onPress={() => expand(!advanced)} />
     {advanced && <>
       {advancedFields.map(([key, label, hint]) => field(key, label, hint))}
-      <Toggle label="Run script without a model" disabled={busy} value={draft.no_agent} onChange={(no_agent) => set({ ...draft, no_agent })} />
+      <Toggle label="直接运行脚本，跳过模型" disabled={busy} value={draft.no_agent} onChange={(no_agent) => set({ ...draft, no_agent })} />
     </>}
     <View style={styles.row}>
-      <Action primary title={busy ? "Saving…" : job ? "Save task" : "Schedule task"}
+      <Action primary title={busy ? "保存中…" : job ? "保存任务" : "创建任务"}
         disabled={busy || !draft.schedule.trim() || (job && dirty.length === 0)} onPress={save} />
-      <Action title="Cancel" disabled={busy} onPress={onCancel} />
+      <Action title="取消" disabled={busy} onPress={onCancel} />
     </View>
   </Card>;
 }

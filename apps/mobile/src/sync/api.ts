@@ -31,6 +31,9 @@ export async function request<T>(
       ...(body && { "Content-Type": "application/json" }),
     },
     body: body ? JSON.stringify(body) : undefined,
+  }).catch((cause: unknown) => {
+    if (signal?.aborted) throw cause;
+    throw new Error(timeout.aborted ? "服务器请求超时，请稍后重试。" : "无法连接服务器，请检查网络和服务器地址。", { cause });
   });
 
   if (response.status === 204) return undefined as T;
@@ -39,11 +42,11 @@ export async function request<T>(
     throw new ApiError(
       response.status,
       result?.error?.code ?? "HTTP_ERROR",
-      result?.error?.message ?? `Server request failed (${response.status}).`,
+      result?.error?.message ?? `服务器请求失败（状态码 ${response.status}）。`,
       result?.error?.retryable ?? response.status >= 500,
     );
   }
-  if (!result || !Object.hasOwn(result, "data")) throw new Error("The server sent an unreadable response.");
+  if (!result || !Object.hasOwn(result, "data")) throw new Error("无法读取服务器响应。");
   return result.data as T;
 }
 
@@ -52,11 +55,11 @@ export async function pairDevice(origin: string, token: string): Promise<Session
     method: "POST",
     body: {
       pairing_token: token,
-      device_name: Platform.select({ ios: "iOS", android: "Android", default: "Web" }),
+      device_name: Platform.select({ ios: "iOS", android: "安卓", default: "网页版" }),
     },
   });
   if (typeof result.token !== "string" || !result.token.trim()) {
-    throw new Error("The server did not return a device credential.");
+    throw new Error("服务器未返回设备凭证。");
   }
   return { origin, token: result.token };
 }

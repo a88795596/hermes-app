@@ -8,6 +8,8 @@ type Server = { name: string; transport: "http" | "stdio" | "unknown"; url?: str
   enabled: boolean; env_keys?: string[]; auth?: "header" | "oauth"; tools?: { include?: string[]; exclude?: string[] };
   url_masked?: boolean; args_masked?: boolean; bearer_managed?: boolean };
 type Probe = { ok: boolean; error?: string; tools: { name: string; description?: string }[] };
+const transports = new Map([["http", "HTTP"], ["stdio", "标准输入输出"], ["unknown", "传输方式未知"]]);
+const authentication = { header: "请求头认证", oauth: "OAuth" };
 
 export function Mcp({ call }: { call: ManageCall }) {
   const { styles } = useTheme();
@@ -31,49 +33,50 @@ export function Mcp({ call }: { call: ManageCall }) {
         edit(false);
         setProbe(undefined);
         await servers.reload();
-        return server ? "Server settings saved." : "MCP server added.";
+        return server ? "服务器设置已保存。" : "MCP 服务器已添加。";
       })} /> : server ? <>
       <View style={styles.row}>
-        <Action icon="back" title="All servers" disabled={action.busy} onPress={close} />
-        <Action icon="refresh" title="Refresh" disabled={servers.loading || action.busy} onPress={() => void servers.reload()} />
+        <Action icon="back" title="全部服务器" disabled={action.busy} onPress={close} />
+        <Action icon="refresh" title="刷新" disabled={servers.loading || action.busy} onPress={() => void servers.reload()} />
       </View>
       <DataState {...servers} />
       <Card>
         <Text accessibilityRole="header" style={styles.heading}>{server.name}</Text>
-        <Text selectable style={styles.text}>{server.url || [server.command, ...(server.args ?? [])].filter(Boolean).join(" ") || "Unknown transport"}</Text>
-        <Text style={styles.caption}>{server.transport === "http" ? "HTTP" : server.transport} · {server.auth || "No HTTP authentication"}</Text>
-        {!!server.env_keys?.length && <Text style={styles.muted}>Environment · {server.env_keys.join(", ")}</Text>}
-        {!!server.tools?.include?.length && <Text style={styles.muted}>Included tools · {server.tools.include.join(", ")}</Text>}
-        {!!server.tools?.exclude?.length && <Text style={styles.muted}>Excluded tools · {server.tools.exclude.join(", ")}</Text>}
-        <Toggle label="Server enabled" value={server.enabled} disabled={action.busy} onChange={(enabled) => void action.run(async () => {
+        <Text selectable style={styles.text}>{server.url || [server.command, ...(server.args ?? [])].filter(Boolean).join(" ") || "传输方式未知"}</Text>
+        <Text style={styles.caption}>{transports.get(server.transport) ?? server.transport}
+          {server.transport === "http" ? ` · ${server.auth ? authentication[server.auth] : "无身份验证"}` : ""}</Text>
+        {!!server.env_keys?.length && <Text style={styles.muted}>环境变量 · {server.env_keys.join("、")}</Text>}
+        {!!server.tools?.include?.length && <Text style={styles.muted}>包含的工具 · {server.tools.include.join("、")}</Text>}
+        {!!server.tools?.exclude?.length && <Text style={styles.muted}>排除的工具 · {server.tools.exclude.join("、")}</Text>}
+        <Toggle label="启用服务器" value={server.enabled} disabled={action.busy} onChange={(enabled) => void action.run(async () => {
           await call("mcp.toggle", { name: server.name, enabled });
           await servers.reload();
-          return enabled ? "MCP server enabled." : "MCP server disabled.";
+          return enabled ? "MCP 服务器已启用。" : "MCP 服务器已停用。";
         })} />
         <View style={styles.row}>
-          <Action title="Edit server" disabled={action.busy} onPress={() => { closeToken(); edit(true); }} />
-          <Action title="Test connection" disabled={action.busy} onPress={() => void action.run(async () => {
+          <Action title="编辑服务器" disabled={action.busy} onPress={() => { closeToken(); edit(true); }} />
+          <Action title="测试连接" disabled={action.busy} onPress={() => void action.run(async () => {
             setProbe(undefined);
             setProbe(await call<Probe>("mcp.test", { name: server.name }));
           })} />
         </View>
         {server.bearer_managed && (rotating ? <>
-          <EditField label="New Bearer token" value={replacement} onChangeText={setReplacement} secureTextEntry autoComplete="off" editable={!action.busy} />
+          <EditField label="新的 Bearer 令牌" value={replacement} onChangeText={setReplacement} secureTextEntry autoComplete="off" editable={!action.busy} />
           <View style={styles.row}>
-            <Action primary title="Save Bearer token" disabled={action.busy || !replacement.trim()} onPress={() => void action.run(async () => {
+            <Action primary title="保存 Bearer 令牌" disabled={action.busy || !replacement.trim()} onPress={() => void action.run(async () => {
               await call("mcp.token", { name: server.name, bearer_token: replacement.trim() });
               closeToken();
               setProbe(undefined);
-              return "Bearer token updated.";
+              return "Bearer 令牌已更新。";
             })} />
-            <Action title="Cancel" disabled={action.busy} onPress={closeToken} />
+            <Action title="取消" disabled={action.busy} onPress={closeToken} />
           </View>
-        </> : <Action title="Update Bearer token" disabled={action.busy} onPress={() => rotate(true)} />)}
-        <Confirm title="Remove server" description={`Remove ${server.name} from Hermes?`} disabled={action.busy}
-          onConfirm={() => void action.run(async () => { await call("mcp.remove", { name: server.name }); close(); await servers.reload(); return "MCP server removed."; })} />
+        </> : <Action title="更新 Bearer 令牌" disabled={action.busy} onPress={() => rotate(true)} />)}
+        <Confirm title="移除服务器" description={`确定从 Hermes 移除「${server.name}」吗？`} disabled={action.busy}
+          onConfirm={() => void action.run(async () => { await call("mcp.remove", { name: server.name }); close(); await servers.reload(); return "MCP 服务器已移除。"; })} />
       </Card>
       {probe && <Card>
-        <Text accessibilityRole="header" style={styles.heading}>{probe.ok ? `Connected · ${probe.tools.length} tools` : "Connection failed"}</Text>
+        <Text accessibilityRole="header" style={styles.heading}>{probe.ok ? `已连接 · ${probe.tools.length} 个工具` : "连接失败"}</Text>
         {probe.error && <Notice>{probe.error}</Notice>}
         {probe.tools.map((tool) => <View key={tool.name}>
           <Text selectable style={styles.text}>{tool.name}</Text>
@@ -82,15 +85,15 @@ export function Mcp({ call }: { call: ManageCall }) {
       </Card>}
     </> : <>
       <View style={styles.row}>
-        <Action primary icon="compose" title="Add server" disabled={!servers.data} onPress={() => edit(true)} />
-        <Action title="Browse catalog" onPress={() => showCatalog(true)} />
-        <Action icon="refresh" title="Refresh" disabled={servers.loading} onPress={() => void servers.reload()} />
+        <Action primary icon="compose" title="添加服务器" disabled={!servers.data} onPress={() => edit(true)} />
+        <Action title="浏览目录" onPress={() => showCatalog(true)} />
+        <Action icon="refresh" title="刷新" disabled={servers.loading} onPress={() => void servers.reload()} />
       </View>
       <DataState {...servers} />
       {servers.data?.servers.length ? <Group>
         {servers.data.servers.map((item, index) => <Row key={item.name} divided={index > 0} title={item.name} subtitle={item.url || item.command || undefined}
-          value={item.enabled ? "Enabled" : "Disabled"} onPress={() => { setProbe(undefined); select(item.name); }} />)}
-      </Group> : servers.data && <EmptyState icon="mcp" title="No MCP servers" description="Add a server or install one from the Hermes catalog." />}
+          value={item.enabled ? "已启用" : "已停用"} onPress={() => { setProbe(undefined); select(item.name); }} />)}
+      </Group> : servers.data && <EmptyState icon="mcp" title="暂无 MCP 服务器" description="手动添加服务器，或从 Hermes 目录安装。" />}
     </>}
   </>;
 }
@@ -130,11 +133,11 @@ function ServerForm({ server, busy, onCancel, onSave }: { server?: Server; busy:
           const parsed: unknown = JSON.parse(args.trim() || "[]");
           if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === "string")) throw new Error();
           values.args = parsed;
-        } catch { setError('Arguments must be a JSON array of strings, such as ["server.js", "--flag"].'); return; }
+        } catch { setError("参数必须是 JSON 字符串数组，例如 [\"server.js\", \"--flag\"]。"); return; }
       }
       if (env.trim()) {
         const vars = env.split(/\r?\n/u).filter((line) => line.trim()).map((line) => /^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u.exec(line));
-        if (vars.some((line) => !line)) { setError("Enter each environment variable as NAME=value on its own line."); return; }
+        if (vars.some((line) => !line)) { setError("每行填写一个环境变量，格式为 NAME=value。"); return; }
         values.env = Object.fromEntries(vars.map((line) => [line![1], line![2]]));
       }
       if (removeEnv.trim()) values.remove_env = entries(removeEnv);
@@ -146,46 +149,46 @@ function ServerForm({ server, busy, onCancel, onSave }: { server?: Server; busy:
   }
 
   return <Card>
-    <Text accessibilityRole="header" style={styles.heading}>{server ? `Edit ${server.name}` : "Add MCP server"}</Text>
+    <Text accessibilityRole="header" style={styles.heading}>{server ? `编辑「${server.name}」` : "添加 MCP 服务器"}</Text>
     {!server && <>
-      <EditField label="Server name" value={name} onChangeText={setName} editable={!busy} />
+      <EditField label="服务器名称" value={name} onChangeText={setName} editable={!busy} />
       <View style={styles.row}>
         <Action title="HTTP" selected={transport === "http"} disabled={busy} onPress={() => setTransport("http")} />
-        <Action title="Stdio" selected={transport === "stdio"} disabled={busy} onPress={() => setTransport("stdio")} />
+        <Action title="标准输入输出" selected={transport === "stdio"} disabled={busy} onPress={() => setTransport("stdio")} />
       </View>
     </>}
     {transport === "http" && <>
-      <EditField label="Server URL" value={url} onChangeText={setUrl} keyboardType="url" editable={!busy}
+      <EditField label="服务器地址" value={url} onChangeText={setUrl} keyboardType="url" editable={!busy}
         placeholder={server?.url_masked ? server.url : undefined}
-        help={server?.url_masked ? "Enter a full URL to replace the saved URL and its query parameters." : undefined} />
-      {server?.auth === "header" && <Text style={styles.caption}>Hermes will keep the existing Authorization header for this server.</Text>}
+        help={server?.url_masked ? "输入完整地址，以替换已保存的地址及查询参数。" : undefined} />
+      {server?.auth === "header" && <Text style={styles.caption}>Hermes 会保留此服务器现有的 Authorization 请求头。</Text>}
       {!server && <>
-        <Toggle label="Use OAuth" value={oauth} onChange={setOauth} disabled={busy} />
-        {oauth ? <Text style={styles.caption}>Complete OAuth sign-in from Hermes Dashboard on the host.</Text> :
-          <EditField label="Bearer token (optional)" value={token} onChangeText={setToken} secureTextEntry autoComplete="off" editable={!busy} />}
+        <Toggle label="使用 OAuth" value={oauth} onChange={setOauth} disabled={busy} />
+        {oauth ? <Text style={styles.caption}>请在主机上的 Hermes 控制台完成 OAuth 登录。</Text> :
+          <EditField label="Bearer 令牌（选填）" value={token} onChangeText={setToken} secureTextEntry autoComplete="off" editable={!busy} />}
       </>}
     </>}
     {transport === "stdio" && <>
-      <EditField label="Command" value={command} onChangeText={setCommand} placeholder="npx" editable={!busy} />
-      <EditField label="Arguments" value={args} onChangeText={setArgs} multiline editable={!busy}
+      <EditField label="命令" value={command} onChangeText={setCommand} placeholder="npx" editable={!busy} />
+      <EditField label="参数" value={args} onChangeText={setArgs} multiline editable={!busy}
         placeholder={server?.args_masked ? JSON.stringify(server.args) : undefined}
-        help={server?.args_masked ? "Enter a full JSON array to replace the saved arguments, or leave blank to keep them."
-          : 'JSON array, such as ["-y", "package-name"]'} />
-      <EditField label={server ? "Set environment variables" : "Environment variables (optional)"} value={env} onChangeText={setEnv} multiline editable={!busy}
-        help="One NAME=value per line. For secrets, use an existing Hermes environment reference when available." />
-      {!!server?.env_keys?.length && <EditField label="Remove environment variables" value={removeEnv} onChangeText={setRemoveEnv} editable={!busy}
+        help={server?.args_masked ? "输入完整的 JSON 数组以替换已保存的参数，留空则保留原参数。"
+          : "JSON 数组，例如 [\"-y\", \"package-name\"]"} />
+      <EditField label={server ? "设置环境变量" : "环境变量（选填）"} value={env} onChangeText={setEnv} multiline editable={!busy}
+        help="每行填写一个 NAME=value。填写密钥时，可引用 Hermes 中已有的环境变量。" />
+      {!!server?.env_keys?.length && <EditField label="移除环境变量" value={removeEnv} onChangeText={setRemoveEnv} editable={!busy}
         help={server.env_keys.join(", ")} />}
     </>}
     {server && <>
-      <EditField label="Include tools" value={include} onChangeText={setInclude} editable={!busy}
-        help="Comma-separated names or patterns. An include list takes priority over excludes." />
-      <EditField label="Exclude tools" value={exclude} onChangeText={setExclude} editable={!busy} />
+      <EditField label="包含的工具" value={include} onChangeText={setInclude} editable={!busy}
+        help="名称或匹配模式，用英文逗号分隔。包含列表优先于排除列表。" />
+      <EditField label="排除的工具" value={exclude} onChangeText={setExclude} editable={!busy} />
     </>}
     {error && <Notice>{error}</Notice>}
     <View style={styles.row}>
-      <Action primary title={busy ? "Saving…" : server ? "Save server" : "Add MCP server"} disabled={busy || !dirty || !name.trim()
+      <Action primary title={busy ? "保存中…" : server ? "保存服务器" : "添加 MCP 服务器"} disabled={busy || !dirty || !name.trim()
         || (transport === "http" && !url.trim() && !server?.url_masked) || (transport === "stdio" && !command.trim())} onPress={save} />
-      <Action title="Cancel" disabled={busy} onPress={onCancel} />
+      <Action title="取消" disabled={busy} onPress={onCancel} />
     </View>
   </Card>;
 }
@@ -206,10 +209,10 @@ function Catalog({ call, onClose }: { call: ManageCall; onClose: () => void }) {
 
   return <>
     <View style={styles.row}>
-      <Action icon="back" title={selected ? "Catalog" : "All servers"} disabled={action.busy || !!pending} onPress={() => {
+      <Action icon="back" title={selected ? "目录" : "全部服务器"} disabled={action.busy || !!pending} onPress={() => {
         if (selected) select(undefined); else onClose();
       }} />
-      <Action icon="refresh" title="Refresh catalog" disabled={catalog.loading || action.busy || !!pending} onPress={() => void catalog.reload()} />
+      <Action icon="refresh" title="刷新目录" disabled={catalog.loading || action.busy || !!pending} onPress={() => void catalog.reload()} />
     </View>
     <DataState {...catalog} />
     <ActionState {...action} />
@@ -228,25 +231,25 @@ function Catalog({ call, onClose }: { call: ManageCall; onClose: () => void }) {
       {!selected.installed && <>
         {selected.required_env?.map((item) => <EditField key={item.name} label={item.name} help={item.prompt} value={env[item.name] ?? ""}
           secureTextEntry autoComplete="off" editable={!action.busy && !pending} onChangeText={(value) => setEnv({ ...env, [item.name]: value })} />)}
-        <Action primary title={action.busy || pending ? "Installing…" : "Install MCP server"} disabled={action.busy || !!pending
+        <Action primary title={action.busy || pending ? "安装中…" : "安装 MCP 服务器"} disabled={action.busy || !!pending
           || selected.required_env?.some((item) => item.required && !env[item.name]?.trim())}
           onPress={() => void action.run(async () => {
             setInstalled(undefined);
             const result = await call<{ background?: boolean; action?: string }>("mcp.install", { name: selected.name, env });
             if (result.background) {
-              if (!result.action) return "Installation started. Refresh the catalog to check the result.";
+              if (!result.action) return "安装已启动，请刷新目录查看结果。";
               setPending(result.action);
             } else {
-              select(undefined); setEnv({}); await catalog.reload(); return "MCP server installed.";
+              select(undefined); setEnv({}); await catalog.reload(); return "MCP 服务器已安装。";
             }
           })} />
       </>}
     </Card> : catalog.data && <>
-      <EditField label="Search MCP catalog" value={search} onChangeText={setSearch} />
+      <EditField label="搜索 MCP 目录" value={search} onChangeText={setSearch} />
       {results?.length ? <Group>
         {results.map((item, index) => <Row key={item.name} divided={index > 0} title={item.name} subtitle={item.description}
-          value={item.installed ? "Installed" : item.transport} onPress={() => { select(item); setEnv({}); }} />)}
-      </Group> : <EmptyState icon="mcp" title="No catalog matches" description="Try another search or add a server manually." />}
+          value={item.installed ? "已安装" : transports.get(item.transport) ?? item.transport} onPress={() => { select(item); setEnv({}); }} />)}
+      </Group> : <EmptyState icon="mcp" title="暂无匹配结果" description="试试其他关键词，或手动添加服务器。" />}
     </>}
   </>;
 }

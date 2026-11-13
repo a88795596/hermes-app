@@ -104,18 +104,18 @@ export class CanonicalConnector {
   async query({ kind, topic_id, profile_ref, session_id }: TopicQuery): Promise<TopicQueryData> {
     const binding = this.#bindings.get(topic_id);
     if (!binding || binding.profileRef !== profile_ref || binding.sessionId !== session_id) {
-      throw new Error('Hermes session binding could not be verified');
+      throw new Error('无法验证 Hermes 会话绑定');
     }
     const { gateway } = await this.#attach(binding);
     try {
       const info = await gateway.rpc('session.info', { session_id }, undefined, queryTimeout);
-      if (info.profile_id !== binding.profileId) throw new Error('Unexpected Hermes profile');
+      if (info.profile_id !== binding.profileId) throw new Error('Hermes 返回了意外的配置档案');
       if (kind === 'version') return { kind, version: runtimeVersion(info.version) };
       if (kind === 'skills') {
         const categories = object(info.skills);
         if (!categories) throw new QueryUnavailable();
         const skills = Object.entries(categories).flatMap(([category, names]) => {
-          if (!Array.isArray(names)) throw new Error('Invalid Hermes skill category');
+          if (!Array.isArray(names)) throw new Error('Hermes 技能分类无效');
           return names.map((name: unknown) => ({ name, category }));
         });
         return { kind, skills: skillList(skills) };
@@ -143,7 +143,7 @@ export class CanonicalConnector {
     const digest = commandDigest(command);
     const existing = this.spool.command(id);
     if (existing) {
-      if (existing.digest !== digest) throw new Error('BFF reused a command ID');
+      if (existing.digest !== digest) throw new Error('BFF 重复使用了命令 ID');
       return;
     }
 
@@ -152,7 +152,7 @@ export class CanonicalConnector {
     };
     if (command.kind === 'create') {
       if (binding) {
-        finish('error', { error: 'Topic already has a Hermes session' });
+        finish('error', { error: '此话题已绑定 Hermes 会话' });
         return;
       }
       const profile = await this.#profile(ref);
@@ -166,7 +166,7 @@ export class CanonicalConnector {
           source: 'tool', request_id: command.body.request_id,
         }, id));
         if (snapshot.authorityEpoch !== gateway.identity.authorityEpoch || Buffer.byteLength(snapshot.sessionId) > 512) {
-          throw new Error('Unexpected created Hermes session identity');
+          throw new Error('新建的 Hermes 会话标识与预期不符');
         }
         const created = { topicId, sessionId: snapshot.sessionId, profileId: gateway.identity.profileId, profileRef: ref };
         this.spool.finish(id, { ...result(id, 'ok', { session_id: created.sessionId }) }, created);
@@ -188,7 +188,7 @@ export class CanonicalConnector {
     }
 
     if (!binding || binding.profileRef !== ref || binding.sessionId !== command.session_id) {
-      finish('error', { error: 'Hermes session binding could not be verified' });
+      finish('error', { error: '无法验证 Hermes 会话绑定' });
       return;
     }
     let session: Session;
@@ -196,7 +196,7 @@ export class CanonicalConnector {
       session = await this.#attach(binding);
     } catch (error) {
       if (!knownRefusal(error)) throw error;
-      finish('error', { error: 'Hermes session is unavailable for this profile' });
+      finish('error', { error: '此配置档案下的 Hermes 会话不可用' });
       return;
     }
     if (!current() || !session.gateway.connected) return;
@@ -207,22 +207,22 @@ export class CanonicalConnector {
         let receipt = result(id, 'ok', { model_result: { type: 'catalog', catalog } });
         if (command.kind === 'select_model') {
           const { provider, model } = command.body;
-          receipt = result(id, 'error', { error: 'This model is no longer available. Open /model again.' });
+          receipt = result(id, 'error', { error: '此模型已不可用，请重新打开 /model。' });
           if (hasModel(catalog, { provider, model })) {
             const snapshot = parseSessionSnapshot(await session.gateway.rpc('session.resume', {
               session_id: binding.sessionId, omit_messages: true,
             }));
             this.#checkSnapshot(session, snapshot);
-            // Keep model confirmation tied to the idle revision that issued it.
+            // 将模型切换确认绑定到发出确认时的空闲版本。
             if (snapshot.running || snapshot.pending.length) {
-              receipt = result(id, 'error', { error: 'Wait for the current response before switching models.' });
+              receipt = result(id, 'error', { error: '请等待当前回复完成后再切换模型。' });
             } else if (current() && session.gateway.connected) {
               const reply = await session.gateway.rpc('session.mutate', {
                 session_id: binding.sessionId, request_id: id, operation: 'model', payload: command.body,
                 expected_revision: canonicalInteger(snapshot.revision),
                 expected_generation: canonicalInteger(snapshot.executionGeneration),
               }, id);
-              receipt = result(id, 'unknown', { error: 'Hermes could not confirm the model selection' });
+              receipt = result(id, 'unknown', { error: 'Hermes 无法确认模型选择' });
               if (reply.session_id === binding.sessionId && reply.operation === 'model') {
                 if (reply.status === 'confirmation_required' && typeof reply.confirm === 'string' &&
                   /^[a-f0-9]{64}$/.test(reply.confirm) && text(reply.confirm_message, 16 * 1024)) {
@@ -239,7 +239,7 @@ export class CanonicalConnector {
         this.spool.finish(id, { ...receipt });
       } catch (error) {
         if (error instanceof GatewayRefusal && error.code === -32601) {
-          this.spool.finish(id, { ...result(id, 'error', { error: 'This Hermes Gateway version does not support model selection' }) });
+          this.spool.finish(id, { ...result(id, 'error', { error: '当前 Hermes 网关版本不支持选择模型' }) });
         } else {
           this.#failedWrite(id, error);
         }
@@ -249,7 +249,7 @@ export class CanonicalConnector {
     if (command.kind === 'interrupt') {
       const turn = this.spool.activeTurns(topicId).find((item) => item.submissionId === command.body.submission_id);
       if (!turn) {
-        finish('error', { error: 'The requested submission is no longer running' });
+        finish('error', { error: '此消息已结束执行' });
         return;
       }
       const raw = await session.gateway.rpc('session.resume', {
@@ -264,7 +264,7 @@ export class CanonicalConnector {
       if (claim?.steering !== false || !snapshot.running || receipt?.status !== 'started' || !receipt.executionGeneration
         || receipt.executionGeneration !== snapshot.executionGeneration
         || receipt.authorityEpoch !== session.gateway.identity.authorityEpoch) {
-        finish('error', { error: 'The requested submission is no longer running' });
+        finish('error', { error: '此消息已结束执行' });
         return;
       }
       if (!current() || !session.gateway.connected || !this.spool.begin(id, digest)) return;
@@ -281,7 +281,7 @@ export class CanonicalConnector {
     if (command.kind === 'respond') {
       const target = session.targets.get(command.body.control_id);
       if (!target) {
-        finish('error', { control_status: 'closed', error: 'This request has expired or was already answered.' });
+        finish('error', { control_status: 'closed', error: '此请求已过期或已回答。' });
         return;
       }
       let call: { method: string; params: JsonObject };
@@ -293,7 +293,7 @@ export class CanonicalConnector {
             request_id: target.request.requestId, question_id: target.questionId, answer: command.body.answer || null,
           } };
       } catch {
-        finish('error', { error: 'The answer is not available for this control' });
+        finish('error', { error: '无法为此请求提交该回答' });
         return;
       }
       if (!this.spool.begin(id, digest)) return;
@@ -307,15 +307,15 @@ export class CanonicalConnector {
           this.#closeControls(session, [command.body.control_id], 'closed', [id, 'respond']);
         } else if (target.type === 'prompt' || reply.status === 'expired') {
           this.spool.finish(id, { ...result(id, 'error', {
-            control_status: 'closed', error: 'This request has expired or was already answered.',
+            control_status: 'closed', error: '此请求已过期或已回答。',
           }) });
         } else {
-          this.spool.finish(id, { ...result(id, 'unknown', { error: 'Hermes could not confirm the response' }) });
+          this.spool.finish(id, { ...result(id, 'unknown', { error: 'Hermes 无法确认回答' }) });
         }
       } catch (error) {
         if (error instanceof GatewayRefusal && ['stale_generation', 'approval_not_pending'].includes(error.reason ?? '')) {
           this.spool.finish(id, { ...result(id, 'error', {
-            control_status: 'closed', error: 'This request has expired or was already answered.',
+            control_status: 'closed', error: '此请求已过期或已回答。',
           }) });
         } else {
           this.#failedWrite(id, error);
@@ -332,7 +332,7 @@ export class CanonicalConnector {
         ...(session.gateway.clarifyBatch ? { clarify_batch: true } : {}),
       }, id));
       if (receipt.kind === 'voice_stopped') {
-        this.spool.finish(id, { ...result(id, 'error', { error: 'Hermes consumed this input as a voice stop' }) });
+        this.spool.finish(id, { ...result(id, 'error', { error: 'Hermes 已将此输入用作停止语音交互的指令' }) });
       } else {
         this.#checkReceipt(session, receipt);
         this.spool.finish(id, { ...result(id, 'ok', { admission_id: receipt.admissionId }) }, undefined, {
@@ -352,8 +352,8 @@ export class CanonicalConnector {
     const refused = knownRefusal(error);
     const reason = refused && error.reason && /^[a-z0-9_]{1,64}$/u.test(error.reason) ? error.reason : undefined;
     this.spool.finish(id, { ...result(id, refused ? 'error' : 'unknown', {
-      error: refused ? `Hermes refused the request${reason ? ` (${reason})` : ''}`
-        : 'Hermes could not confirm the outcome',
+      error: refused ? `Hermes 拒绝了请求${reason ? `（${reason}）` : ''}`
+        : 'Hermes 无法确认执行结果',
     }) });
   }
 
@@ -380,14 +380,14 @@ export class CanonicalConnector {
     };
     this.#sessions.set(binding.topicId, session);
     try {
-      // Calling since before resume also tells the owner to send the gap between replay and subscription.
+      // 先查询增量再恢复订阅，以便网关补发回放与订阅之间的事件。
       const replay = await gateway.rpc('session.events.since', {
         session_id: binding.sessionId,
         ...(session.cursor && { replay_epoch: session.cursor.epoch }),
         last_sequence: canonicalInteger(session.cursor?.sequence ?? '0'),
       });
       if (!Array.isArray(replay.events) || typeof replay.snapshot_required !== 'boolean') {
-        throw new Error('Invalid Hermes replay reply');
+        throw new Error('Hermes 回放响应无效');
       }
       if (!replay.snapshot_required) {
         for (const params of replay.events) this.#frame(session, { jsonrpc: '2.0', method: 'event', params });
@@ -465,7 +465,7 @@ export class CanonicalConnector {
 
   #checkReceipt(session: Session, receipt: CanonicalAdmission): void {
     if (receipt.profileId !== session.binding.profileId || receipt.sessionId !== session.binding.sessionId) {
-      throw new Error('Hermes admission belongs to a different scope');
+      throw new Error('Hermes 受理记录的作用域不符');
     }
   }
 
@@ -473,7 +473,7 @@ export class CanonicalConnector {
     const receipt = parseAdmissionReceipt(await session.gateway.rpc('prompt.receipt', {
       session_id: session.binding.sessionId, admission_id: admissionId, include_result: true,
     }));
-    if (receipt.kind !== 'admission' || receipt.admissionId !== admissionId) throw new Error('Invalid Hermes admission ID');
+    if (receipt.kind !== 'admission' || receipt.admissionId !== admissionId) throw new Error('Hermes 受理记录 ID 无效');
     this.#checkReceipt(session, receipt);
     return receipt;
   }
@@ -501,7 +501,7 @@ export class CanonicalConnector {
     const buffer = session ? session.buffer : typeof sessionId === 'string' ? profile.creating : undefined;
     if (buffer) {
       if (buffer.frames.length >= 8_192 || buffer.bytes + bytes > 8 * 1024 * 1024) {
-        throw new Error('Hermes catch-up buffer overflowed');
+        throw new Error('Hermes 补发事件超出缓冲区容量');
       }
       buffer.bytes += bytes;
       buffer.frames.push(frame);
@@ -515,7 +515,7 @@ export class CanonicalConnector {
   }
 
   #rejectRequest(gateway: Gateway, id: string): Promise<void> {
-    return gateway.send({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Unsupported client request' } });
+    return gateway.send({ jsonrpc: '2.0', id, error: { code: -32601, message: '客户端不支持此请求' } });
   }
 
   #drain(session: Session): void {
@@ -589,7 +589,7 @@ export class CanonicalConnector {
           : projection.text || previousText;
         publishMessage = !!text;
       }
-      // A receipt may settle before buffered stream frames are drained.
+      // 回执可能在处理完积压的流式帧之前就已确认。
       if (!existing || !['final', 'failed', 'cancelled'].includes(existing.status)) {
         this.#setTurn(session, { topicId: binding.topicId, admissionId, submissionId, text, status },
           key, publishMessage, cursor);
@@ -666,6 +666,7 @@ export class CanonicalConnector {
     const topicId = session.binding.topicId;
     const clean = {
       ...control,
+      // 回放可能复用同一个事件 ID，默认提示保持字节一致，由客户端翻译。
       prompt: boundedText(control.prompt, 64 * 1024).trim() || 'Hermes requires an answer',
       choices: [...new Set(control.choices.filter((choice) => text(choice, control.kind === 'clarify' ? MAX_CLARIFY_CHOICE_BYTES : 1024)))].slice(0, 30),
     };

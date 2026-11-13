@@ -2,7 +2,7 @@ import { buildApp } from "./app.js";
 
 const { DATABASE_URL, APP_PAIRING_TOKEN, CONNECTOR_TOKEN, HERMES_PROFILES, HOST, PORT } = process.env;
 if (!DATABASE_URL || !APP_PAIRING_TOKEN || !CONNECTOR_TOKEN || APP_PAIRING_TOKEN === CONNECTOR_TOKEN) {
-  throw new Error("DATABASE_URL and distinct APP_PAIRING_TOKEN and CONNECTOR_TOKEN are required");
+  throw new Error("请设置 DATABASE_URL，并为 APP_PAIRING_TOKEN 和 CONNECTOR_TOKEN 分别设置不同的令牌。");
 }
 
 const app = buildApp({
@@ -16,7 +16,7 @@ try {
   await app.listen({ host: HOST ?? "127.0.0.1", port: Number(PORT ?? 3000) });
 } catch (error) {
   const code = error instanceof Error && "code" in error ? error.code : undefined;
-  app.log.error({ code }, "BFF failed to start");
+  app.log.error({ code }, "BFF 启动失败");
   await app.close();
   process.exitCode = 1;
 }

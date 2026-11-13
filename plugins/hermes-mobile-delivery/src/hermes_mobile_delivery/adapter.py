@@ -1,4 +1,4 @@
-"""Hermes gateway and standalone send entry points."""
+"""Hermes 网关和独立发送命令的入口。"""
 
 import asyncio
 from pathlib import Path
@@ -17,7 +17,7 @@ from .spool import enqueue
 PLATFORM = "hermes_mobile"
 HOME_CHANNEL_ENV = "HERMES_MOBILE_HOME_CHANNEL"
 SPOOL_PATH_ENV = "HERMES_MOBILE_SPOOL_PATH"
-MEDIA_ERROR = "Hermes Mobile accepts text only; no attachment was stored"
+MEDIA_ERROR = "Hermes 移动端仅支持投递文本，附件未保存"
 MAX_TEXT_BYTES = 128 * 1024
 
 
@@ -34,34 +34,34 @@ def register_platform(ctx):
     def env_enablement():
         configured = route()
         if configured:
-            return {"home_channel": {"chat_id": configured[1], "name": "Hermes Mobile Inbox"}}
+            return {"home_channel": {"chat_id": configured[1], "name": "Hermes 移动端收件箱"}}
         return None
 
     async def standalone_send(pconfig, chat_id, message, *, thread_id=None, media_files=None, force_document=False):
         configured = route()
         if not configured or chat_id != configured[1] or thread_id:
-            return {"error": "Hermes Mobile target or profile is not configured for delivery"}
+            return {"error": "Hermes 移动端的投递目标或配置档案尚未设置"}
         if media_files:
             return {"error": MEDIA_ERROR}
         if not isinstance(message, str) or not message.strip():
-            return {"error": "Hermes Mobile delivery text is empty"}
+            return {"error": "投递到 Hermes 移动端的文本为空"}
         try:
             text = redact_sensitive_text(message, force=True, redact_url_credentials=True)
         except Exception:
-            return {"error": "Hermes Mobile could not redact delivery text"}
+            return {"error": "Hermes 移动端无法对投递文本中的敏感信息脱敏"}
         try:
             text_size = len(text.encode("utf-8"))
         except UnicodeEncodeError:
-            return {"error": "Hermes Mobile delivery text must be valid UTF-8"}
+            return {"error": "投递到 Hermes 移动端的文本必须采用有效的 UTF-8 编码"}
         if "\x00" in text:
-            return {"error": "Hermes Mobile delivery text contains a null character"}
+            return {"error": "投递到 Hermes 移动端的文本含有空字符"}
         if text_size > MAX_TEXT_BYTES:
-            return {"error": "Hermes Mobile delivery text exceeds 128 KiB"}
+            return {"error": "投递到 Hermes 移动端的文本超过 128 KiB"}
         try:
-            # shortcut: without a stable upstream part ID, every admission gets a UUID; reuse source IDs once exposed.
+            # shortcut: 上游缺少稳定的分段 ID，当前为每次受理分配 UUID，待上游提供后改用源 ID。
             delivery_id = await asyncio.to_thread(enqueue, configured[2], configured[0], text)
         except (OSError, sqlite3.Error, ValueError):
-            return {"error": "Hermes Mobile could not persist delivery in the local spool"}
+            return {"error": "Hermes 移动端无法将投递内容保存到本地队列"}
         return {"success": True, "message_id": delivery_id, "delivery_reconciliation": "limited"}
 
     class Adapter(BasePlatformAdapter):
@@ -78,7 +78,7 @@ def register_platform(ctx):
             self._mark_disconnected()
 
         async def get_chat_info(self, chat_id):
-            return {"name": "Hermes Mobile Inbox", "type": "channel", "chat_id": chat_id}
+            return {"name": "Hermes 移动端收件箱", "type": "channel", "chat_id": chat_id}
 
         async def send(self, chat_id, content, reply_to=None, metadata=None):
             result = await standalone_send(self.config, chat_id, content, thread_id=(metadata or {}).get("thread_id"))
@@ -97,7 +97,7 @@ def register_platform(ctx):
         options["standalone_send"] = StandaloneSendPolicy(media=True)
     ctx.register_platform(
         name=PLATFORM,
-        label="Hermes Mobile",
+        label="Hermes 移动端",
         adapter_factory=Adapter,
         check_fn=lambda: True,
         is_connected=lambda config: route() is not None,

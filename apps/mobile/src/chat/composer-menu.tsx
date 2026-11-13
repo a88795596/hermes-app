@@ -3,14 +3,15 @@ import { ActivityIndicator, FlatList, Modal, Pressable, StyleSheet, Text, View, 
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { Skill } from "@hermes-mobile/protocol";
 import type { useWorkspace } from "../sync/use-workspace";
+import { profileLabel } from "../ui/text";
 import { Action, Icon, Notice, useTheme } from "../ui/theme";
 
 const commands = [
   { name: "status", label: "查看会话状态" },
   { name: "model", label: "选择模型" },
-  { name: "stop", label: "停止当前响应" },
+  { name: "stop", label: "停止当前回复" },
   { name: "skills", label: "浏览技能" },
-  { name: "new", label: "创建新会话" },
+  { name: "new", label: "新建话题" },
   { name: "version", label: "查看 Hermes 版本" },
 ] as const;
 
@@ -53,7 +54,7 @@ function Skills({ call, path, onSelect }: {
       data={skills}
       style={{ maxHeight: height * 0.58, flexGrow: 0 }}
       keyExtractor={(item, index) => `${item.name}:${index}`}
-      ListEmptyComponent={<Text style={styles.muted}>当前 Profile 没有可用技能。</Text>}
+      ListEmptyComponent={<Text style={styles.muted}>此配置档案暂无可用技能。</Text>}
       renderItem={({ item }) => (
         <Pressable accessibilityRole="button" accessibilityLabel={item.name} accessibilityHint="带入输入框"
           onPress={() => onSelect(item)}
@@ -95,7 +96,7 @@ export function ComposerMenu({
             <View style={menu.header}>
               <View style={menu.grow}>
                 <Text accessibilityRole="header" style={styles.heading}>{kind === "skills" ? "技能" : "命令"}</Text>
-                {kind === "skills" && profile && <Text style={styles.caption}>{profile}</Text>}
+                {kind === "skills" && profile && <Text style={styles.caption}>{profileLabel(profile)}</Text>}
               </View>
               <Action title="关闭" onPress={onClose} />
             </View>

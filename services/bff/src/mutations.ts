@@ -18,7 +18,7 @@ async function prior<T>(db: PoolClient, id: string, kind: Command["kind"], targe
   const existingTarget = payload.kind === "create" ? payload.profile_ref
     : payload.kind === "respond" ? control_id : payload.topic_id;
   if (payload.kind !== kind || existingTarget !== target || !isDeepStrictEqual(existingBody, body)) {
-    conflict("This request ID is already used for another operation");
+    conflict("此请求 ID 已用于另一项操作。");
   }
   return existing.receipt as T;
 }
@@ -41,7 +41,7 @@ export async function createTopic(db: PoolClient, requestId: string, profile: st
 }
 
 function requireReady(row: Awaited<ReturnType<typeof topicRow>>) {
-  if (row.status !== "ready" || !row.session_id) throw new ApiError(409, "TOPIC_NOT_READY", "Topic is not ready");
+  if (row.status !== "ready" || !row.session_id) throw new ApiError(409, "TOPIC_NOT_READY", "话题尚未就绪。");
   return row.session_id;
 }
 
@@ -70,7 +70,7 @@ export async function interrupt(db: PoolClient, refs: Set<string>, topicId: stri
   const { rowCount } = await db.query(
     "SELECT id FROM submissions WHERE id = $1 AND topic_id = $2 AND data->>'status' = 'streaming'", [submissionId, topicId],
   );
-  if (!rowCount) throw new ApiError(409, "NO_ACTIVE_SUBMISSION", "The selected submission is no longer running");
+  if (!rowCount) throw new ApiError(409, "NO_ACTIVE_SUBMISSION", "这条消息已不在处理中。");
   await enqueue(db, { type: "command", command_id: requestId, topic_id: topicId, profile_ref: row.profile_ref,
     session_id: sessionId, kind: "interrupt", body }, receipt);
   return receipt;
@@ -89,7 +89,7 @@ export async function requestModel(
   if (selection) {
     const { rowCount } = await db.query(`SELECT 1 FROM submissions WHERE topic_id = $1
       AND data->>'status' IN ('accepted', 'queued', 'streaming') LIMIT 1`, [topicId]);
-    if (rowCount) throw new ApiError(409, "TOPIC_BUSY", "Wait for the current response before switching models.");
+    if (rowCount) throw new ApiError(409, "TOPIC_BUSY", "请等当前回复结束后再切换模型。");
   }
   await enqueue(db, selection ? { ...envelope, kind: "select_model", body: selection }
     : { ...envelope, kind: "model_options", body: {} }, receipt);
@@ -99,15 +99,15 @@ export async function requestModel(
 export async function respond(db: PoolClient, refs: Set<string>, controlId: string, responseId: string, answer: string) {
   const { rows } = await db.query<{ topic_id: string; data: Control }>("SELECT topic_id, data FROM controls WHERE id = $1", [controlId]);
   const control = rows[0];
-  if (!control) missing("Control");
+  if (!control) missing("交互请求");
   const row = await topicRow(db, control.topic_id, refs);
   const body = { control_id: controlId, response_id: responseId, answer };
   const saved = await prior<{ status: "responding" }>(db, responseId, "respond", controlId, body);
   if (saved) return { topicId: row.id, result: { status: saved.status } };
   const sessionId = requireReady(row);
-  if (control.data.status !== "pending") throw new ApiError(409, "CONTROL_ALREADY_HANDLED", "Control is no longer pending");
+  if (control.data.status !== "pending") throw new ApiError(409, "CONTROL_ALREADY_HANDLED", "此请求已不再等待答复。");
   if (control.data.kind === "approval" && !control.data.choices.includes(answer)) {
-    throw new ApiError(422, "VALIDATION_FAILED", "Answer must match an approval option");
+    throw new ApiError(422, "VALIDATION_FAILED", "请从给定的审批选项中选择。");
   }
   const result = { status: "responding" as const };
   await db.query("UPDATE controls SET data = $2 WHERE id = $1", [controlId, { ...control.data, ...result }]);
@@ -118,6 +118,6 @@ export async function respond(db: PoolClient, refs: Set<string>, controlId: stri
 
 export function findProfile(refs: Set<string>, id: string) {
   const ref = [...refs].find((ref) => profileId(ref) === id);
-  if (!ref) missing("Profile");
+  if (!ref) missing("配置档案");
   return ref;
 }

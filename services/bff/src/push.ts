@@ -62,7 +62,7 @@ export function startPushWorker(store: Store, log: FastifyBaseLogger) {
   let active: Promise<void> | undefined;
   const accessToken = process.env.EXPO_ACCESS_TOKEN;
   async function flush() {
-    // shortcut: one worker per BFF instance, add a DB claim lease before running replicas.
+    // shortcut: 每个 BFF 实例运行一个推送工作进程。部署多副本前，在数据库中增加任务领取租约。
     const { rows } = await store.query<Job>(`
       SELECT o.inbox_id, o.device_id, o.attempts, d.token
       FROM push_outbox o JOIN push_devices d USING (device_id)
@@ -77,7 +77,7 @@ export function startPushWorker(store: Store, log: FastifyBaseLogger) {
         headers: { "Content-Type": "application/json", ...(accessToken && { Authorization: `Bearer ${accessToken}` }) },
         body: JSON.stringify(rows.map((job) => ({
           to: job.token,
-          title: "Hermes Mobile",
+          title: "Hermes 移动端",
           body: "打开应用查看新结果",
           channelId: "inbox",
           ttl: 3600,
@@ -91,7 +91,7 @@ export function startPushWorker(store: Store, log: FastifyBaseLogger) {
         if (Array.isArray(body.data) && body.data.length === rows.length) tickets = body.data;
       }
     } catch {
-      log.warn("Expo Push request failed; will retry queued reminders");
+      log.warn("Expo 推送请求失败，将重试队列中的通知");
     }
     for (const [i, job] of rows.entries()) {
       const ticket = tickets[i];
@@ -108,7 +108,7 @@ export function startPushWorker(store: Store, log: FastifyBaseLogger) {
     }
   }
   const timer = setInterval(() => {
-    if (!active) active = flush().catch(() => log.warn("Could not process the push queue")).finally(() => { active = undefined; });
+    if (!active) active = flush().catch(() => log.warn("处理推送队列失败")).finally(() => { active = undefined; });
   }, 3_000);
   timer.unref();
   return async () => {

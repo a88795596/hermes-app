@@ -71,7 +71,7 @@ export function useWorkspace(session: Session, topicId: string | null) {
       setPending(savedPending);
       setCache(db);
     }).catch((failure: unknown) => {
-      if (!cancelled) setStorageError(failure instanceof Error ? failure.message : "Local history is unavailable.");
+      if (!cancelled) setStorageError(failure instanceof Error ? failure.message : "无法访问本地历史记录。");
     });
     return () => {
       cancelled = true;
@@ -89,14 +89,14 @@ export function useWorkspace(session: Session, topicId: string | null) {
     revoked.current = true;
     setSessionEnded(true);
     await cache?.set("session-ended", true).catch((failure: unknown) => {
-      if (active.current) setStorageError(failure instanceof Error ? failure.message : "The local session state could not be saved.");
+      if (active.current) setStorageError(failure instanceof Error ? failure.message : "无法保存本地会话状态。");
     });
   }, [cache]);
 
   const call = useCallback(async <T,>(
     path: string, options: Omit<NonNullable<Parameters<typeof request>[2]>, "token"> = {},
   ) => {
-    if (revoked.current) throw new Error("This device session has ended.");
+    if (revoked.current) throw new Error("此设备的会话已结束。");
     try {
       return await request<T>(session.origin, path, { token: session.token, ...options });
     } catch (error) {
@@ -127,7 +127,7 @@ export function useWorkspace(session: Session, topicId: string | null) {
       } catch (failure) {
         if (!active.current || revoked.current) return;
         if (!(failure instanceof ApiError)) setNetwork("offline");
-        setError(failure instanceof Error ? failure.message : "Could not refresh the workspace.");
+        setError(failure instanceof Error ? failure.message : "无法刷新工作区。");
       } finally {
         directoryLoad.current = undefined;
       }
@@ -154,7 +154,7 @@ export function useWorkspace(session: Session, topicId: string | null) {
           await cache.remove(topicKey(id)).catch(() => {});
         }
         if (visibleTopic.current === id) {
-          setError(failure instanceof Error ? failure.message : "Could not refresh the topic.");
+          setError(failure instanceof Error ? failure.message : "无法刷新话题。");
         }
       } finally {
         detailLoads.current.delete(id);
@@ -174,7 +174,7 @@ export function useWorkspace(session: Session, topicId: string | null) {
         const saved = await cache.get<TopicDetail>(topicKey(topicId));
         if (!cancelled && saved) setDetail((current) => current?.topic.topic_id === topicId ? current : saved);
       } catch (failure) {
-        if (!cancelled) setError(failure instanceof Error ? failure.message : "Local history could not be read.");
+        if (!cancelled) setError(failure instanceof Error ? failure.message : "无法读取本地历史记录。");
       }
       if (!cancelled && foreground) await loadTopic(topicId);
     })();
@@ -201,7 +201,7 @@ export function useWorkspace(session: Session, topicId: string | null) {
             await cache.set(pendingKey(item.submission_id), { ...item, error: failure.message });
             continue;
           }
-          // Keep the queued bubble until the server's accepted copy can be written locally.
+          // 服务端接收的消息写入本地缓存后，再移除待发送气泡。
           await detailLoads.current.get(item.topic_id);
           const next = await loadTopic(item.topic_id);
           if (!active.current || revoked.current) return;
@@ -210,13 +210,13 @@ export function useWorkspace(session: Session, topicId: string | null) {
         }
       } catch (failure) {
         if (active.current && !revoked.current) {
-          setError(failure instanceof Error ? failure.message : "Could not update the outbox.");
+          setError(failure instanceof Error ? failure.message : "无法更新待发送的消息。");
         }
       } finally {
         try {
           if (active.current && !revoked.current) setPending(await cache.list<Pending>("pending:"));
         } catch (failure) {
-          if (active.current) setStorageError(failure instanceof Error ? failure.message : "The local outbox is unavailable.");
+          if (active.current) setStorageError(failure instanceof Error ? failure.message : "无法访问本地待发送的消息。");
         }
         outboxLoad.current = undefined;
       }
@@ -297,7 +297,7 @@ export function useWorkspace(session: Session, topicId: string | null) {
             const value = JSON.parse(event.data) as MobileNotice | null;
             if (value?.type === "changed") schedule(typeof value.topic_id === "string" ? value.topic_id : undefined);
           } catch {
-            // The periodic HTTP refresh repairs dropped or unsupported notices.
+            // 定时 HTTP 刷新可弥补丢失或无法识别的通知。
           }
         };
         socket.onerror = () => socket?.close();
@@ -322,7 +322,7 @@ export function useWorkspace(session: Session, topicId: string | null) {
   }, [cache, call, flush, foreground, loadDirectory, loadTopic, refresh, session.origin, sessionEnded]);
 
   async function enqueue(item: Pending) {
-    if (!cache || revoked.current || signingOut.current) throw new Error("Local history is unavailable.");
+    if (!cache || revoked.current || signingOut.current) throw new Error("无法访问本地历史记录。");
     enqueueWrites.current += 1;
     try {
       await cache.set(pendingKey(item.submission_id), item);
@@ -340,14 +340,14 @@ export function useWorkspace(session: Session, topicId: string | null) {
   }
 
   async function finishSession(onSignOut: () => Promise<void>, discardIds: readonly string[] = []) {
-    if (!cache) throw new Error("The local outbox must be available before signing out.");
-    if (signingOut.current || enqueueWrites.current) throw new Error("A message is being saved. Try again shortly.");
+    if (!cache) throw new Error("需要能够访问本地待发送的消息才能退出。");
+    if (signingOut.current || enqueueWrites.current) throw new Error("正在保存消息，请稍后重试。");
     signingOut.current = true;
     try {
       const savedPending = await cache.list<Pending>("pending:");
       if (savedPending.some((item) => !revoked.current || !discardIds.includes(item.submission_id))) {
         setPending(savedPending);
-        throw new Error(revoked.current ? "Review the pending messages before pairing again." : "Resolve your pending messages before signing out.");
+        throw new Error(revoked.current ? "请先查看待发送的消息，再重新配对。" : "请先处理待发送的消息，再退出登录。");
       }
       if (!revoked.current) {
         try {
@@ -379,7 +379,7 @@ export function useWorkspace(session: Session, topicId: string | null) {
       if (result.status !== "pending") return result;
       await new Promise((resolve) => setTimeout(resolve, 650));
     }
-    throw new Error("Hermes has not confirmed the request yet. Try again to check its status.");
+    throw new Error("Hermes 尚未确认请求，请重试以查看状态。");
   }
 
   return {

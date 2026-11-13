@@ -73,7 +73,7 @@ export function openStore(connectionString: string) {
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
-        // shortcut: single-account writes share one lock, partition by account for a multi-tenant deployment.
+        // shortcut: 单账户的写入共用一把锁。部署多租户时，按账户加锁。
         await client.query("SELECT pg_advisory_xact_lock(41831011)");
         const result = await run(client);
         await client.query("COMMIT");

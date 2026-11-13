@@ -11,16 +11,16 @@ import { ManagementMenu, ManagementScreen, type ManagementPage } from "../manage
 import { enablePushNotifications, pushAvailable } from "../notifications";
 import { pairDevice } from "../sync/api";
 import { useWorkspace } from "../sync/use-workspace";
+import { formatDateTime, profileLabel } from "../ui/text";
 import { Action, Card, EmptyState, Field, Icon, Notice, useTheme, type IconName } from "../ui/theme";
 
-type Section = "Topics" | "Inbox" | "Manage" | "Connection";
-
-const sections = [
-  { title: "Topics", icon: "topics" },
-  { title: "Inbox", icon: "inbox" },
-  { title: "Manage", icon: "manage" },
-  { title: "Connection", icon: "settings" },
-] as const;
+const sections = {
+  topics: { title: "话题", icon: "topics" },
+  inbox: { title: "收件箱", icon: "inbox" },
+  manage: { title: "管理", icon: "manage" },
+  connection: { title: "连接", icon: "settings" },
+} as const;
+type Section = keyof typeof sections;
 
 function ConnectionRow({ icon, label, value, online }: { icon: IconName; label: string; value: string; online: boolean }) {
   const { colors, styles } = useTheme();
@@ -40,7 +40,7 @@ function Workspace({
   onSignOut: () => Promise<void>;
 }) {
   const { colors, styles } = useTheme();
-  const [section, setSection] = useState<Section>("Topics");
+  const [section, setSection] = useState<Section>("topics");
   const [managementPage, setManagementPage] = useState<ManagementPage>();
   const [topicId, setTopicId] = useState<string | null>(null);
   const [profileId, setProfileId] = useState<string>();
@@ -57,9 +57,9 @@ function Workspace({
   const topic = workspace.detail?.topic ?? workspace.topics.find((item) => item.topic_id === topicId);
   const visibleTopics = workspace.topics.filter((item) => !profile || item.profile_id === profile.profile_id);
   const connected = workspace.network === "online" && workspace.connector_online === true;
-  const connection = workspace.network === "offline" ? "Offline"
-    : workspace.network === "connecting" ? "Connecting…"
-    : connected ? "Hermes connected" : "Connector offline";
+  const connection = workspace.network === "offline" ? "离线"
+    : workspace.network === "connecting" ? "连接中…"
+    : connected ? "Hermes 已连接" : "连接器离线";
 
   useEffect(() => {
     if (Platform.OS !== "android") return;
@@ -73,12 +73,12 @@ function Workspace({
         setTopicId(null);
         return true;
       }
-      if (section === "Topics" && composing && !creating) {
+      if (section === "topics" && composing && !creating) {
         setComposing(false);
         return true;
       }
-      if (section !== "Topics") {
-        setSection("Topics");
+      if (section !== "topics") {
+        setSection("topics");
         return true;
       }
       return false;
@@ -105,7 +105,7 @@ function Workspace({
       setTopicId(next.topic_id);
       await workspace.refresh();
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "The topic could not be created.");
+      setError(failure instanceof Error ? failure.message : "无法创建话题。");
     } finally {
       setCreating(false);
     }
@@ -119,7 +119,7 @@ function Workspace({
       setPush("enabled");
     } catch (failure) {
       setPush("idle");
-      setError(failure instanceof Error ? failure.message : "Could not enable notifications.");
+      setError(failure instanceof Error ? failure.message : "无法启用通知。");
     }
   }
 
@@ -130,7 +130,7 @@ function Workspace({
     try {
       await workspace.finishSession(onSignOut, discardIds);
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "Sign-out failed.");
+      setError(failure instanceof Error ? failure.message : "退出登录失败。");
     } finally {
       setSigningOut(false);
     }
@@ -139,10 +139,10 @@ function Workspace({
   if (workspace.sessionEnded) {
     return (
       <ScrollView contentContainerStyle={styles.content}>
-        <Text accessibilityRole="header" style={styles.title}>Device session ended</Text>
+        <Text accessibilityRole="header" style={styles.title}>设备会话已结束</Text>
         {workspace.pending.length > 0 && (
           <>
-            <Text style={styles.muted}>Copy your pending text before pairing again. Delivery of these messages could not be confirmed.</Text>
+            <Text style={styles.muted}>请先复制下方待发送的内容，再重新配对。这些消息的送达状态尚未确认。</Text>
             {workspace.pending.map((item) => (
               <Card key={item.submission_id}><Text selectable style={styles.text}>{item.text}</Text></Card>
             ))}
@@ -151,7 +151,7 @@ function Workspace({
         {error && <Notice>{error}</Notice>}
         {workspace.storageError && <Notice>{workspace.storageError}</Notice>}
         <Action
-          title={workspace.pending.length ? "Discard pending text and pair again" : "Pair again"}
+          title={workspace.pending.length ? "丢弃待发送内容并重新配对" : "重新配对"}
           disabled={signingOut}
           onPress={() => void disconnect(workspace.pending.map((item) => item.submission_id))}
         />
@@ -175,12 +175,12 @@ function Workspace({
     return (
       <>
         <View style={[styles.header, layout.chatHeader, { borderBottomColor: colors.edge, backgroundColor: colors.surface }]}>
-          <Pressable accessibilityRole="button" accessibilityLabel="Back to topics" hitSlop={6} onPress={() => setTopicId(null)}
+          <Pressable accessibilityRole="button" accessibilityLabel="返回话题列表" hitSlop={6} onPress={() => setTopicId(null)}
             style={({ pressed }) => [layout.back, pressed && styles.faded]}>
             <Icon name="back" size={17} color={colors.accent} />
-            <Text style={[styles.text, { color: colors.accent }]}>Topics</Text>
+            <Text style={[styles.text, { color: colors.accent }]}>{sections.topics.title}</Text>
           </Pressable>
-          <Text accessibilityRole="header" numberOfLines={2} style={[styles.heading, layout.grow, layout.chatTitle]}>{topic?.title ?? "Topic"}</Text>
+          <Text accessibilityRole="header" numberOfLines={2} style={[styles.heading, layout.grow, layout.chatTitle]}>{topic?.title ?? "话题"}</Text>
           <View style={layout.backSpace} />
         </View>
         <Conversation
@@ -191,7 +191,7 @@ function Workspace({
           draft={drafts[topicId] ?? ""}
           onDraftChange={(value) => setDrafts((current) => ({ ...current, [topicId]: value }))}
           onNewTopic={() => {
-            showSection("Topics");
+            showSection("topics");
             setProfileId(topic?.profile_id);
             setTitle("");
             setComposing(true);
@@ -211,9 +211,9 @@ function Workspace({
         refreshControl={<RefreshControl refreshing={workspace.syncing} onRefresh={() => void workspace.refresh()} tintColor={colors.accent} colors={[colors.accent]} />}
       >
         <View style={layout.pageHeader}>
-          <Text accessibilityRole="header" style={[styles.title, layout.grow]}>{section}</Text>
-          {section === "Topics" && profile && (
-            <Pressable accessibilityRole="button" accessibilityLabel={composing ? "Close new topic" : "New topic"}
+          <Text accessibilityRole="header" style={[styles.title, layout.grow]}>{sections[section].title}</Text>
+          {section === "topics" && profile && (
+            <Pressable accessibilityRole="button" accessibilityLabel={composing ? "关闭新建话题" : "新建话题"}
               accessibilityState={{ expanded: composing, disabled: creating }} disabled={creating}
               onPress={() => { if (composing) Keyboard.dismiss(); setComposing(!composing); setError(undefined); }}
               style={({ pressed }) => [layout.compose, { backgroundColor: colors.tint }, (pressed || creating) && styles.faded]}>
@@ -221,8 +221,8 @@ function Workspace({
             </Pressable>
           )}
         </View>
-        {section === "Topics" && (
-          <Pressable accessibilityRole="button" accessibilityLabel={connection + ". Open connection settings"} onPress={() => showSection("Connection")}
+        {section === "topics" && (
+          <Pressable accessibilityRole="button" accessibilityLabel={connection + "。打开连接设置"} onPress={() => showSection("connection")}
             style={({ pressed }) => [layout.connectionSummary, pressed && styles.faded]}>
             <View style={[layout.dot, { backgroundColor: connected ? colors.success : colors.muted }]} />
             <Text style={styles.muted}>{connection}</Text>
@@ -231,21 +231,21 @@ function Workspace({
         {error && <Notice>{error}</Notice>}
         {workspace.error && <Notice>{workspace.error}</Notice>}
         {workspace.storageError && <Notice>{workspace.storageError}</Notice>}
-        {section === "Topics" && (
+        {section === "topics" && (
           <>
             {workspace.profiles.length > 1 && (
               <View style={styles.row}>
                 {workspace.profiles.map((item) => (
-                  <Action key={item.profile_id} title={item.label} selected={profile?.profile_id === item.profile_id} onPress={() => setProfileId(item.profile_id)} />
+                  <Action key={item.profile_id} title={profileLabel(item.label)} selected={profile?.profile_id === item.profile_id} onPress={() => setProfileId(item.profile_id)} />
                 ))}
               </View>
             )}
             {composing && profile && (
               <Card>
-                <Text accessibilityRole="header" style={styles.heading}>New topic</Text>
-                <Field autoFocus accessibilityLabel="Topic title" placeholder="Topic title" value={title} editable={!creating}
+                <Text accessibilityRole="header" style={styles.heading}>新建话题</Text>
+                <Field autoFocus accessibilityLabel="话题名称" placeholder="话题名称" value={title} editable={!creating}
                   onChangeText={setTitle} onSubmitEditing={() => void create()} returnKeyType="done" />
-                <Action primary title={creating ? "Creating…" : "Create topic"}
+                <Action primary title={creating ? "创建中…" : "创建话题"}
                   disabled={!title.trim() || creating || workspace.network !== "online"} onPress={() => void create()} />
               </Card>
             )}
@@ -257,35 +257,35 @@ function Workspace({
                     <View style={[layout.rowIcon, { backgroundColor: colors.tint }]}><Icon name="chat" size={17} color={colors.accent} /></View>
                     <View style={layout.grow}>
                       <Text style={styles.heading}>{item.title}</Text>
-                      {item.status !== "ready" && <Text style={styles.caption}>{item.status === "creating" ? "Creating…" : "Creation failed"}</Text>}
+                      {item.status !== "ready" && <Text style={styles.caption}>{item.status === "creating" ? "创建中…" : "创建失败"}</Text>}
                     </View>
                     <Icon name="chevron" size={14} color={colors.muted} />
                   </Pressable>
                 ))}
               </View>
             ) : workspace.ready && !composing ? (
-              <EmptyState icon="topics" title="No topics yet" description="Tap the compose button to start a conversation." />
+              <EmptyState icon="topics" title="暂无话题" description="点击新建按钮开始对话。" />
             ) : null}
           </>
         )}
-        {section === "Inbox" && (workspace.inbox.length > 0 ? (
+        {section === "inbox" && (workspace.inbox.length > 0 ? (
           <View style={[layout.group, { backgroundColor: colors.surface }]}>
             {workspace.inbox.map((item, index) => (
               <View key={item.inbox_id} style={[styles.listItem, layout.inboxRow, index > 0 && layout.divided, { borderColor: colors.edge }]}>
                 <View style={[layout.rowIcon, { backgroundColor: colors.tint }]}><Icon name="inbox" size={17} color={colors.accent} /></View>
                 <View style={layout.grow}>
                   <Text selectable style={styles.text}>{item.text}</Text>
-                  <Text style={[styles.caption, layout.date]}>{new Date(item.created_at).toLocaleString()}</Text>
+                  <Text style={[styles.caption, layout.date]}>{formatDateTime(item.created_at)}</Text>
                 </View>
               </View>
             ))}
           </View>
-        ) : workspace.ready ? <EmptyState icon="inbox" title="No deliveries yet" description="Scheduled results and messages from Hermes appear here." /> : null)}
-        {section === "Manage" && <ManagementMenu profiles={workspace.profiles} profile={profile} onProfile={setProfileId} onOpen={setManagementPage} />}
-        {section === "Connection" && (
+        ) : workspace.ready ? <EmptyState icon="inbox" title="暂无消息" description="这里会显示定时任务结果和 Hermes 主动发送的消息。" /> : null)}
+        {section === "manage" && <ManagementMenu profiles={workspace.profiles} profile={profile} onProfile={setProfileId} onOpen={setManagementPage} />}
+        {section === "connection" && (
           <>
             <View>
-              <Text accessibilityRole="header" style={styles.sectionLabel}>Server</Text>
+              <Text accessibilityRole="header" style={styles.sectionLabel}>服务器</Text>
               <View style={[layout.group, { backgroundColor: colors.surface }]}>
                 <View style={styles.listItem}>
                   <View style={[layout.rowIcon, { backgroundColor: colors.tint }]}><Icon name="server" size={17} color={colors.accent} /></View>
@@ -294,36 +294,37 @@ function Workspace({
               </View>
             </View>
             <View>
-              <Text accessibilityRole="header" style={styles.sectionLabel}>Status</Text>
+              <Text accessibilityRole="header" style={styles.sectionLabel}>状态</Text>
               <View style={[layout.group, { backgroundColor: colors.surface }]}>
-                <ConnectionRow icon="link" label="App connection" value={{ online: "Online", offline: "Offline", connecting: "Connecting…" }[workspace.network]} online={workspace.network === "online"} />
+                <ConnectionRow icon="link" label="应用连接" value={{ online: "在线", offline: "离线", connecting: "连接中…" }[workspace.network]} online={workspace.network === "online"} />
                 <View style={[layout.divided, { borderColor: colors.edge }]} />
-                <ConnectionRow icon="activity" label="Live updates" value={workspace.live ? "Connected" : "Reconnecting"} online={workspace.live} />
+                <ConnectionRow icon="activity" label="实时更新" value={workspace.live ? "已连接" : "重新连接中…"} online={workspace.live} />
                 <View style={[layout.divided, { borderColor: colors.edge }]} />
-                <ConnectionRow icon="server" label="Hermes Connector" value={workspace.connector_online === undefined ? "Unknown" : workspace.connector_online ? "Online" : "Offline"} online={workspace.connector_online === true} />
+                <ConnectionRow icon="server" label="Hermes 连接器" value={workspace.connector_online === undefined ? "未知" : workspace.connector_online ? "在线" : "离线"} online={workspace.connector_online === true} />
               </View>
             </View>
             <View style={styles.row}>
-              <Action icon="refresh" title="Refresh" disabled={workspace.syncing} onPress={() => void workspace.refresh()} />
+              <Action icon="refresh" title="刷新" disabled={workspace.syncing} onPress={() => void workspace.refresh()} />
               {pushAvailable && (
-                <Action icon="bell" title={push === "enabled" ? "Notifications enabled" : push === "enabling" ? "Enabling…" : "Enable notifications"}
+                <Action icon="bell" title={push === "enabled" ? "通知已启用" : push === "enabling" ? "启用中…" : "启用通知"}
                   disabled={push !== "idle" || workspace.network !== "online"} onPress={() => void enablePush()} />
               )}
             </View>
             {workspace.pending.length > 0 && (
-              <Text style={styles.muted}>Resolve pending messages in their topics before signing out.</Text>
+              <Text style={styles.muted}>请先在对应的话题中处理待发送的消息，再退出登录。</Text>
             )}
-            <Action icon="logout" destructive title={signingOut ? "Signing out…" : "Sign out device"}
+            <Action icon="logout" destructive title={signingOut ? "正在退出…" : "退出此设备"}
               disabled={signingOut || !workspace.ready || workspace.pending.length > 0} onPress={() => void disconnect()} />
           </>
         )}
       </ScrollView>
       <View accessibilityRole="tablist" style={[layout.tabs, { borderColor: colors.edge, backgroundColor: colors.surface }]}>
-        {sections.map(({ title, icon }) => {
-          const active = section === title;
+        {(Object.keys(sections) as Section[]).map((id) => {
+          const { title, icon } = sections[id];
+          const active = section === id;
           const color = active ? colors.accent : colors.muted;
           return (
-            <Pressable key={title} accessibilityRole="tab" accessibilityLabel={title} accessibilityState={{ selected: active }} onPress={() => showSection(title)}
+            <Pressable key={id} accessibilityRole="tab" accessibilityLabel={title} accessibilityState={{ selected: active }} onPress={() => showSection(id)}
               style={({ pressed }) => [layout.tab, active && { backgroundColor: colors.tint }, pressed && styles.faded]}>
               <Icon name={icon} size={19} color={color} />
               <Text style={[layout.tabLabel, { color }]}>{title}</Text>
@@ -341,7 +342,7 @@ export default function HomeScreen() {
   const [error, setError] = useState<string>();
   useEffect(() => {
     void loadSession().then(setSession).catch((failure: unknown) => {
-      setError(failure instanceof Error ? failure.message : "The device session could not be restored.");
+      setError(failure instanceof Error ? failure.message : "无法恢复设备会话，请重新配对。");
       setSession(null);
     });
   }, []);
@@ -363,7 +364,7 @@ export default function HomeScreen() {
       <StatusBar style={dark ? "light" : "dark"} />
       {session === undefined ? (
         <View style={styles.pairContent}>
-          <ActivityIndicator accessibilityLabel="Restoring device session" color={colors.accent} />
+          <ActivityIndicator accessibilityLabel="正在恢复设备会话" color={colors.accent} />
         </View>
       ) : session ? (
         <Workspace session={session} onSignOut={signOut} />

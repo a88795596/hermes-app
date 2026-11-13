@@ -1,5 +1,5 @@
-# Mobile module boundaries
+# 移动端模块边界
 
-Expo Router mounts the personal client in `src/app`. Auth stores the device session in SecureStore. The connection layer opens an authenticated WebSocket for change notices and fetches complete projections over HTTP on changes, reconnect and foreground refresh.
+Expo Router 在 `src/app` 挂载个人版客户端。鉴权模块将设备会话保存到 SecureStore。连接层通过经过身份验证的 WebSocket 接收变更通知，并在收到变更、重新连接或应用回到前台刷新时通过 HTTP 拉取完整的数据投影。
 
-Native SQLite persists the directory, topic projections and queued text per server and device credential. The client keeps a queued message until its accepted copy is durably cached. Retries reuse the same submission ID. The web preview keeps the session and cache in memory for the page lifetime.
+原生应用使用 SQLite，按服务器和设备凭据保存目录、话题投影及待发文本。客户端在收到服务端已接纳的消息并写入本地缓存后，才从待发队列删除该消息。重试沿用原提交 ID。网页预览仅在当前页面的内存中保留会话与缓存。

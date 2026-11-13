@@ -22,7 +22,7 @@ export function Pairing({
     try {
       await onPair(parseOrigin(address), token.trim());
     } catch (error) {
-      setError(error instanceof Error ? error.message : "Pairing failed.");
+      setError(error instanceof Error ? error.message : "配对失败。");
     } finally {
       setBusy(false);
     }
@@ -36,14 +36,14 @@ export function Pairing({
             <View style={[local.icon, { backgroundColor: colors.tint }]}>
               <Icon name="lock" size={18} color={colors.accent} />
             </View>
-            <Text accessibilityRole="header" style={styles.title}>Hermes Mobile</Text>
-            <Text style={styles.muted}>Pair this device with your Hermes Mobile server.</Text>
+            <Text accessibilityRole="header" style={styles.title}>Hermes 移动端</Text>
+            <Text style={styles.muted}>将此设备与 Hermes 移动端服务器配对。</Text>
           </View>
           <View style={[local.group, { backgroundColor: colors.surface }]}>
             <View style={local.field}>
-              <Text style={[styles.sectionLabel, local.fieldLabel]}>Server address</Text>
+              <Text style={[styles.sectionLabel, local.fieldLabel]}>服务器地址</Text>
               <Field
-                accessibilityLabel="Server address"
+                accessibilityLabel="服务器地址"
                 autoCapitalize="none"
                 autoCorrect={false}
                 editable={!busy}
@@ -56,9 +56,9 @@ export function Pairing({
             </View>
             <View style={[local.divider, { backgroundColor: colors.edge }]} />
             <View style={local.field}>
-              <Text style={[styles.sectionLabel, local.fieldLabel]}>Pairing token</Text>
+              <Text style={[styles.sectionLabel, local.fieldLabel]}>配对令牌</Text>
               <Field
-                accessibilityLabel="Pairing token"
+                accessibilityLabel="配对令牌"
                 autoCapitalize="none"
                 autoComplete="off"
                 autoCorrect={false}
@@ -75,7 +75,7 @@ export function Pairing({
           {error && <Notice>{error}</Notice>}
           <Action
             primary
-            title={busy ? "Pairing…" : "Pair device"}
+            title={busy ? "正在配对…" : "配对设备"}
             disabled={busy || !address.trim() || !token.trim()}
             onPress={() => void submit()}
           />

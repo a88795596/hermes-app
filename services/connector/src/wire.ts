@@ -38,13 +38,13 @@ export function bridgeFrame(source: string): BridgeFrame {
     const input = object(frame.input);
     if (!uuid(request_id) || typeof profile_ref !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,63}$/u.test(profile_ref)
       || profile_ref === 'all' || profile_ref === 'current' || !isManagementOperation(operation) || !input) {
-      throw new Error('Invalid BFF management request');
+      throw new Error('BFF 管理请求无效');
     }
     return { type, request_id, profile_ref, operation, input };
   }
   if (frame?.type !== 'command' || !uuid(frame.command_id) || !uuid(frame.topic_id)
     || typeof frame.profile_ref !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,63}$/u.test(frame.profile_ref)) {
-    throw new Error('Invalid BFF command envelope');
+    throw new Error('BFF 命令报文无效');
   }
   const { command_id, topic_id, profile_ref } = frame;
   const base = { type: 'command' as const, command_id, topic_id, profile_ref };
@@ -52,7 +52,7 @@ export function bridgeFrame(source: string): BridgeFrame {
   if (frame.kind === 'create' && topic_id === command_id && body?.request_id === command_id && frame.session_id === undefined) {
     return { ...base, kind: 'create', body: { request_id: command_id } };
   }
-  if (!body || !text(frame.session_id, 512)) throw new Error('Invalid BFF command session');
+  if (!body || !text(frame.session_id, 512)) throw new Error('BFF 命令的会话信息无效');
   const session_id = frame.session_id;
   switch (frame.kind) {
     case 'watch':
@@ -86,7 +86,7 @@ export function bridgeFrame(source: string): BridgeFrame {
       }
       break;
   }
-  throw new Error('Invalid BFF command body');
+  throw new Error('BFF 命令内容无效');
 }
 
 export function result(id: string, status: CommandResult['status'], fields: Partial<CommandResult> = {}): CommandResult {
