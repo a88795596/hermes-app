@@ -43,6 +43,7 @@ export function openStore(connectionString: string) {
           topic_id uuid NOT NULL REFERENCES topics(id),
           data jsonb NOT NULL
         );
+        ALTER TABLE controls ADD COLUMN IF NOT EXISTS position bigint GENERATED ALWAYS AS IDENTITY;
         CREATE TABLE IF NOT EXISTS commands (
           id uuid PRIMARY KEY,
           topic_id uuid NOT NULL REFERENCES topics(id),

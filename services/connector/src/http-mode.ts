@@ -1,10 +1,12 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import type { Command, Control, TopicQuery, TopicQueryData } from '@hermes-mobile/protocol';
+import type { Command, Control, ModelSelection, TopicQuery, TopicQueryData } from '@hermes-mobile/protocol';
+import { MAX_CLARIFY_CHOICE_BYTES } from '@hermes-mobile/protocol';
 import { integer, object, string } from './gateway.js';
 import type { JsonObject } from './gateway.js';
+import { hasModel, modelCatalog } from './models.js';
 import type { Binding, Spool, Turn } from './spool.js';
 import { QueryUnavailable, queryTimeout, sessionStatus, skillList } from './topic-query.js';
-import { boundedText, commandDigest, result, stableId } from './wire.js';
+import { boundedText, commandDigest, result, stableId, text } from './wire.js';
 
 const unknown = 'Hermes could not confirm the outcome';
 const runId = /^run_[a-f0-9]{32}$/;
@@ -17,7 +19,7 @@ function httpId(...identity: unknown[]): string {
 type Prompt = {
   id: string;
   generation?: number;
-  control: Pick<Control, 'control_id' | 'kind' | 'prompt' | 'choices'>;
+  control: Pick<Control, 'control_id' | 'kind' | 'prompt' | 'choices' | 'multi_select'>;
 };
 
 type RunState = { text: string; prompts: Prompt[] };
@@ -38,13 +40,12 @@ function pendingPrompts(id: string, run: JsonObject): Prompt[] {
     if (!display.trim() || !Array.isArray(item.choices)) return [];
     // shortcut: incomplete approval details allow denial until the full request can be reviewed.
     const denyOnly = kind === 'approval' && (Object.hasOwn(item, 'edit') || display !== prompt);
-    const choices = item.choices.filter((choice): choice is string => typeof choice === 'string' && Boolean(choice.trim()) &&
-      !choice.includes('\0') && Buffer.byteLength(choice) <= 1024 && Buffer.from(choice).toString() === choice &&
-      (!denyOnly || choice === 'deny')).slice(0, 30);
+    const maxChoice = kind === 'clarify' ? MAX_CLARIFY_CHOICE_BYTES : 1024;
+    const choices = [...new Set(item.choices.filter((choice) => text(choice, maxChoice) && (!denyOnly || choice === 'deny')))].slice(0, 30);
     if (kind === 'approval' && !choices.length) return [];
     return [{ id: requestId, generation, control: {
       control_id: httpId(id, 'control', kind, requestId, generation), kind,
-      prompt: display, choices,
+      prompt: display, choices, ...(kind === 'clarify' && item.multi_select === true ? { multi_select: true } : {}),
     } }];
   });
 }
@@ -190,7 +191,8 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
         if (data?.run_id === id || missingRun) {
           const status = data?.status;
           const frames: JsonObject[] = [];
-          const next = pendingPrompts(id, data ?? {});
+          const terminal = status === 'completed' || status === 'failed' || status === 'cancelled';
+          const next = terminal ? [] : pendingPrompts(id, data ?? {});
           const state: Turn['status'] | undefined = status === 'completed' ? 'final'
             : status === 'failed' ? 'failed'
             : status === 'cancelled' ? 'cancelled'
@@ -201,14 +203,14 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
             const saved = JSON.parse(turn.text) as RunState;
             for (const prompt of saved.prompts) {
               if (!next.some(({ control }) => control.control_id === prompt.control.control_id)) {
-                frames.push({ type: 'control', ...prompt.control, status: state === 'unknown' ? 'unknown' : 'closed' });
+                frames.push({ type: 'control', ...prompt.control, submission_id: turn.submissionId,
+                  status: state === 'unknown' ? 'unknown' : 'closed' });
               }
             }
             for (const prompt of next) {
               if (saved.prompts.some(({ control }) => control.control_id === prompt.control.control_id)) continue;
-              frames.push({ type: 'control', ...prompt.control, status: 'pending' });
+              frames.push({ type: 'control', ...prompt.control, submission_id: turn.submissionId, status: 'pending' });
             }
-            const terminal = ['final', 'failed', 'cancelled'].includes(state);
             const finalText = terminal ? (state === 'final' && typeof data?.output === 'string'
               ? boundedText(data.output, 256 * 1024) : saved.text) : undefined;
             const updated = { ...turn, status: state, text: JSON.stringify({ text: finalText ?? saved.text, prompts: next }) };
@@ -258,6 +260,7 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
     let receipt = result(command_id, 'unknown', { error: unknown });
     let binding: Binding | undefined;
     let turn: Turn | undefined;
+    let selection: (ModelSelection & { topicId: string }) | undefined;
     try {
       if (!profileName.test(profile_ref)) {
         receipt = result(command_id, 'error', { error: 'Invalid Hermes profile' });
@@ -276,9 +279,30 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
         }
       } else if (!bound) {
         receipt = result(command_id, 'error', { error: 'Hermes topic binding does not match' });
+      } else if (command.kind === 'model_options' || command.kind === 'select_model') {
+        receipt = result(command_id, 'error', { error: 'Hermes could not load the model catalog' });
+        const { response, data } = await json(profile_ref, '/api/model/options?include_unconfigured=false');
+        if (!response.ok) {
+          receipt = result(command_id, 'error', {
+            error: response.status === 404 ? 'This Hermes API version does not support model options' : 'Hermes could not load the model catalog',
+          });
+        } else {
+          const catalog = modelCatalog(data, spool.modelSelection(topic_id));
+          if (command.kind === 'model_options') {
+            receipt = result(command_id, 'ok', { model_result: { type: 'catalog', catalog } });
+          } else {
+            const { provider, model, confirm } = command.body;
+            if (confirm || !hasModel(catalog, { provider, model })) {
+              receipt = result(command_id, 'error', { error: 'This model is no longer available. Open /model again.' });
+            } else if (current() && !shutdown.signal.aborted) {
+              selection = { topicId: topic_id, provider, model };
+              receipt = result(command_id, 'ok', { model_result: { type: 'selected', selection: { provider, model } } });
+            }
+          }
+        }
       } else if (command.kind === 'submit') {
         const { response, data } = await json(profile_ref, '/v1/runs', {
-          session_id: bound.sessionId, input: command.body.text,
+          session_id: bound.sessionId, input: command.body.text, ...spool.modelSelection(topic_id),
         }, command_id);
         const id = string(data?.run_id);
         if (response.status === 202 && id && runId.test(id)) {
@@ -296,29 +320,44 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
             receipt = result(command_id, 'ok');
           }
         }
-      } else {
-        for (const active of spool.activeTurns(topic_id)) {
-          if (!runId.test(active.admissionId)) continue;
+      } else if (command.kind === 'respond') {
+        receipt = result(command_id, 'error', {
+          control_status: 'closed', error: 'This request has expired or was already answered.',
+        });
+        const active = spool.activeTurns(topic_id).find((turn) => runId.test(turn.admissionId) &&
+          (JSON.parse(turn.text) as RunState).prompts.some(({ control }) => control.control_id === command.body.control_id));
+        if (active) {
+          receipt = result(command_id, 'unknown', { error: 'Hermes could not confirm the response' });
           const path = `/v1/runs/${active.admissionId}`;
-          const { data } = await json(profile_ref, path);
-          if (!current() || shutdown.signal.aborted) break;
-          if (data?.run_id !== active.admissionId) continue;
-          const controlId = command.body.control_id;
-          const prompt = pendingPrompts(active.admissionId, data).find((item) => item.control.control_id === controlId);
-          if (!prompt) continue;
-          const { kind, choices } = prompt.control;
-          if (kind === 'approval' && !choices.includes(command.body.answer)) break;
-          const { response, data: reply } = await json(profile_ref, `${path}/${kind}`, {
-            request_id: prompt.id,
-            ...(prompt.generation === undefined ? {} : { execution_generation: prompt.generation }),
-            [kind === 'approval' ? 'choice' : 'answer']: command.body.answer,
-          });
-          if (response.ok && reply?.run_id === active.admissionId &&
-              ((reply.prompt_id === prompt.id && ['resolved', 'already_resolved'].includes(String(reply.status))) ||
-                (reply.request_id === prompt.id && (integer(reply.resolved) ?? 0) > 0))) {
-            receipt = result(command_id, 'ok', { control_status: 'closed' });
+          const { response: snapshot, data } = await json(profile_ref, path);
+          const prompt = data?.run_id === active.admissionId
+            ? pendingPrompts(active.admissionId, data).find(({ control }) => control.control_id === command.body.control_id)
+            : undefined;
+          if (!prompt && (data?.run_id === active.admissionId ||
+            (snapshot.status === 404 && object(data?.error)?.code === 'run_not_found'))) {
+            receipt = result(command_id, 'error', { control_status: 'closed', error: 'This request has expired or was already answered.' });
+          } else if (prompt && current() && !shutdown.signal.aborted) {
+            const { kind, choices } = prompt.control;
+            if (kind === 'approval' && !choices.includes(command.body.answer)) {
+              receipt = result(command_id, 'error', { error: 'The answer is not available for this control' });
+            } else {
+              const { response, data: reply } = await json(profile_ref, `${path}/${kind}`, {
+                request_id: prompt.id,
+                ...(prompt.generation === undefined ? {} : { execution_generation: prompt.generation }),
+                // The gateway uses a sentinel to distinguish a deliberate skip from an unanswered wait.
+                [kind === 'approval' ? 'choice' : 'answer']: kind === 'clarify' && command.body.answer === ''
+                  ? '\u0000skipped' : command.body.answer,
+              });
+              if (response.ok && reply?.run_id === active.admissionId &&
+                  ((reply.prompt_id === prompt.id && reply.status === 'resolved') ||
+                    (reply.request_id === prompt.id && (integer(reply.resolved) ?? 0) > 0))) {
+                receipt = result(command_id, 'ok', { control_status: 'closed' });
+              } else if ((reply?.prompt_id === prompt.id && reply.status === 'already_resolved') ||
+                (response.status === 409 && ['stale_generation', 'approval_not_pending'].includes(String(object(reply?.error)?.code)))) {
+                receipt = result(command_id, 'error', { control_status: 'closed', error: 'This request has expired or was already answered.' });
+              }
+            }
           }
-          break;
         }
       }
     } catch {
@@ -327,7 +366,7 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
       commands.delete(command_id);
     }
     if (shutdown.signal.aborted) return;
-    spool.finish(command_id, { ...receipt }, binding, turn);
+    spool.finish(command_id, { ...receipt }, binding, turn, selection);
     send({ ...receipt });
     if (turn && bound) watch(bound, turn);
   }

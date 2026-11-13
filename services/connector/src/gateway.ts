@@ -56,6 +56,7 @@ function identity(value: JsonObject | undefined): Identity | undefined {
 export type GatewayConfig = { binary: string; profile: string };
 
 export class Gateway {
+  clarifyBatch = false;
   readonly #pending = new Map<string, Pending>();
   readonly ready: Promise<JsonObject>;
   #ping: ReturnType<typeof setInterval> | undefined;
@@ -182,6 +183,7 @@ export class Gateway {
       if (!Array.isArray(capabilities.server_requests)) {
         throw new Error('Hermes did not negotiate server requests');
       }
+      gateway.clarifyBatch = capabilities.canonical_clarify_batch === true && capabilities.server_requests.includes('clarify');
       gateway.#keepAlive();
       return gateway;
     } catch (error) {

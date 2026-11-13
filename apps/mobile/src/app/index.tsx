@@ -59,7 +59,7 @@ function Workspace({
     : connected ? "Hermes connected" : "Connector offline";
 
   useEffect(() => {
-    if (Platform.OS === "web") return;
+    if (Platform.OS !== "android") return;
     const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
       if (topicId) {
         setTopicId(null);

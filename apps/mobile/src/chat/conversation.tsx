@@ -5,6 +5,7 @@ import type { Control, Message, Topic } from "@hermes-mobile/protocol";
 import type { useWorkspace } from "../sync/use-workspace";
 import { Action, Card, EmptyState, Field, Icon, Notice, useTheme } from "../ui/theme";
 import { ComposerMenu } from "./composer-menu";
+import { ModelPicker } from "./model-picker";
 
 const messageStatus: Record<Message["status"], string> = {
   accepted: "Accepted",
@@ -27,13 +28,21 @@ function ControlCard({
 }) {
   const { styles } = useTheme();
   const [text, setText] = useState("");
+  const [other, setOther] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
   const [sending, setSending] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string>();
   const attempt = useRef<{ id: string; answer: string }>(undefined);
-  const canAnswer = enabled && !sending && control.status === "pending";
+  const answering = useRef(false);
+  const canAnswer = enabled && !sending && !submitted && control.status === "pending";
+  const clarify = control.kind === "clarify";
+  const showText = clarify && (!control.choices.length || other);
+  const multiSelect = clarify && control.multi_select === true;
 
   async function answer(value: string) {
-    if (!canAnswer) return;
+    if (!canAnswer || answering.current) return;
+    answering.current = true;
     const prior = attempt.current;
     const id = prior?.answer === value ? prior.id : randomUUID();
     attempt.current = { id, answer: value };
@@ -41,36 +50,81 @@ function ControlCard({
     setError(undefined);
     try {
       await onAnswer(control, id, value);
+      setSubmitted(true);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "The response could not be confirmed.");
     } finally {
+      answering.current = false;
       setSending(false);
+    }
+  }
+
+  function pick(choice: string) {
+    if (!multiSelect) {
+      void answer(choice);
+      return;
+    }
+    setSelected((current) => current.includes(choice) ? current.filter((item) => item !== choice) : [...current, choice]);
+  }
+
+  let savedAnswer = control.answer;
+  if (multiSelect && savedAnswer) {
+    try {
+      const values: unknown = JSON.parse(savedAnswer);
+      if (Array.isArray(values) && values.every((value) => typeof value === "string")) savedAnswer = values.join(", ");
+    } catch {
+      // Earlier clients stored plain text for single button taps.
     }
   }
 
   return (
     <Card>
-      <Text style={styles.label}>{control.kind === "approval" ? "Approval" : "Clarification"}</Text>
+      <Text style={styles.label}>{clarify ? "Clarification" : "Approval"}</Text>
       <Text selectable style={styles.text}>{control.prompt}</Text>
-      {control.status !== "pending" ? (
-        <Text style={styles.muted}>{{
-          responding: "Sending response…",
-          closed: "Closed",
-          unknown: "Response unconfirmed",
-        }[control.status]}</Text>
-      ) : control.choices.length ? (
-        <View style={styles.row}>
-          {control.choices.map((choice) => (
-            <Action key={choice} title={choice} disabled={!canAnswer} onPress={() => void answer(choice)} />
-          ))}
-        </View>
-      ) : control.kind === "clarify" ? (
+      {control.status !== "pending" || submitted ? (
+        <Text accessibilityLiveRegion="polite" style={styles.muted}>
+          {savedAnswer === "" ? "Skipped" : savedAnswer ? `You answered: ${savedAnswer}` : {
+            responding: "Sending response…",
+            pending: "Sending response…",
+            closed: "No longer awaiting an answer",
+            unknown: "Response unconfirmed",
+          }[control.status]}
+        </Text>
+      ) : (
         <>
-          <Field accessibilityLabel="Clarification answer" placeholder="Your answer" value={text} editable={canAnswer} onChangeText={setText} />
-          <Action title="Reply" disabled={!canAnswer || !text.trim()} onPress={() => void answer(text.trim())} />
+          {multiSelect && !other && <Text style={styles.muted}>Select one or more options.</Text>}
+          {!other && control.choices.length > 0 && (
+            <View style={styles.row}>
+              {control.choices.map((choice) => (
+                <Action key={choice} title={choice} disabled={!canAnswer} selected={multiSelect ? selected.includes(choice) : undefined}
+                  icon={selected.includes(choice) ? "check" : undefined} onPress={() => pick(choice)} />
+              ))}
+            </View>
+          )}
+          {showText && (
+            <Field accessibilityLabel="Clarification answer" placeholder="Your answer" value={text} editable={canAnswer}
+              onChangeText={setText} autoFocus={other} />
+          )}
+          {clarify ? (
+            <View style={styles.row}>
+              {showText && (
+                <Action title="Reply" primary disabled={!canAnswer || !text.trim()}
+                  onPress={() => void answer(multiSelect ? JSON.stringify([text.trim()]) : text.trim())} />
+              )}
+              {multiSelect && !other && (
+                <Action title="Reply" primary disabled={!canAnswer || !selected.length}
+                  onPress={() => void answer(JSON.stringify(selected))} />
+              )}
+              {control.choices.length > 0 && (
+                <Action title={other ? "Show choices" : "Other"} disabled={!canAnswer} onPress={() => setOther(!other)} />
+              )}
+              <Action title="Skip" disabled={!canAnswer} onPress={() => void answer("")} />
+            </View>
+          ) : !control.choices.length && <Text style={styles.muted}>No approval choices available.</Text>}
         </>
-      ) : <Text style={styles.muted}>No approval choices available.</Text>}
-      {error && <Notice>{error}</Notice>}
+      )}
+      {control.status === "pending" && !submitted && !enabled && <Text style={styles.muted}>Reconnect to Hermes to answer.</Text>}
+      {(error ?? control.error) && <Notice>{error ?? control.error}</Notice>}
     </Card>
   );
 }
@@ -95,17 +149,35 @@ export function Conversation({
   const [sendFocused, setSendFocused] = useState(false);
   const [menu, setMenu] = useState<"commands" | "skills">();
   const [error, setError] = useState<string>();
+  const [modelPicker, setModelPicker] = useState(false);
+  const [modelNotice, setModelNotice] = useState<string>();
   const interruptId = useRef<string>(undefined);
   const messages = workspace.detail?.messages ?? [];
   const controls = workspace.detail?.controls ?? [];
+  const submitted = new Set(messages.filter((message) => message.role === "user").map((message) => message.submission_id));
+  const historyControls = new Map<string, Control[]>();
+  const trailingControls: Control[] = [];
+  for (const control of controls) {
+    const submission = control.submission_id;
+    if (!submission || !submitted.has(submission) || control.status !== "closed") {
+      trailingControls.push(control);
+      continue;
+    }
+    const group = historyControls.get(submission) ?? [];
+    group.push(control);
+    historyControls.set(submission, group);
+  }
   const pending = workspace.pending
     .filter((item) => item.topic_id === id && !messages.some((message) => message.submission_id === item.submission_id))
     .sort((a, b) => a.created_at - b.created_at);
   const canSend = topic?.status === "ready" && workspace.ready && !sending;
-  const sendDisabled = !canSend || !draft.trim();
   const canControl = workspace.network === "online" && workspace.connector_online === true;
+  const isModelCommand = draft.trim().toLowerCase() === "/model";
+  const sendDisabled = !canSend || !draft.trim() || (isModelCommand && !canControl);
   const activeSubmission = messages.find((message) => message.role === "user" && message.status === "streaming")?.submission_id;
   const running = Boolean(activeSubmission);
+  const modelBusy = pending.length > 0 || messages.some((message) => message.role === "user" &&
+    ["accepted", "queued", "streaming"].includes(message.status));
 
   function keepLatestVisible() {
     if (pinned.current) scroll.current?.scrollToEnd({ animated: false });
@@ -118,11 +190,21 @@ export function Conversation({
   async function send() {
     const text = draft.trim();
     if (!text || !canSend) return;
+    if (isModelCommand) {
+      if (!canControl) return;
+      Keyboard.dismiss();
+      setError(undefined);
+      setModelNotice(undefined);
+      setModelPicker(true);
+      onDraftChange("");
+      return;
+    }
     setSending(true);
     setError(undefined);
     try {
       await workspace.enqueue({ submission_id: randomUUID(), topic_id: id, text, created_at: Date.now() });
       onDraftChange("");
+      setModelNotice(undefined);
       pinned.current = true;
       scroll.current?.scrollToEnd({ animated: true });
     } catch (failure) {
@@ -195,29 +277,35 @@ export function Conversation({
         {messages.map((message, index) => {
           const outgoing = message.role === "user";
           const startGroup = messages[index - 1]?.role !== message.role;
+          const attachedControls = outgoing && message.submission_id ? historyControls.get(message.submission_id) : undefined;
           return (
-            <View key={message.message_id} style={[chat.message, { maxWidth: messageWidth }, outgoing && chat.outgoing, startGroup && chat.startGroup]}>
-              {!!message.text && (
-                <View style={[
-                  chat.bubble,
-                  outgoing ? chat.outgoingBubble : chat.incomingBubble,
-                  { backgroundColor: outgoing ? colors.accentFill : colors.secondary },
-                ]}>
-                  <Text
-                    selectable
-                    accessibilityLabel={`${outgoing ? "You" : "Hermes"}: ${message.text}`}
-                    style={[styles.text, chat.messageText, outgoing && { color: colors.onAccent }]}
-                  >
-                    {message.text}
+            <View key={message.message_id} style={chat.messageGroup}>
+              <View style={[chat.message, { maxWidth: messageWidth }, outgoing && chat.outgoing, startGroup && chat.startGroup]}>
+                {!!message.text && (
+                  <View style={[
+                    chat.bubble,
+                    outgoing ? chat.outgoingBubble : chat.incomingBubble,
+                    { backgroundColor: outgoing ? colors.accentFill : colors.secondary },
+                  ]}>
+                    <Text
+                      selectable
+                      accessibilityLabel={`${outgoing ? "You" : "Hermes"}: ${message.text}`}
+                      style={[styles.text, chat.messageText, outgoing && { color: colors.onAccent }]}
+                    >
+                      {message.text}
+                    </Text>
+                  </View>
+                )}
+                {messageStatus[message.status] ? (
+                  <Text style={[styles.caption, outgoing && chat.outgoingStatus]}>
+                    {!outgoing && !message.text && message.status === "streaming" ? "Hermes is responding…" : messageStatus[message.status]}
                   </Text>
-                </View>
-              )}
-              {messageStatus[message.status] ? (
-                <Text style={[styles.caption, outgoing && chat.outgoingStatus]}>
-                  {!outgoing && !message.text && message.status === "streaming" ? "Hermes is responding…" : messageStatus[message.status]}
-                </Text>
-              ) : null}
-              {message.error && <Notice>{message.error}</Notice>}
+                ) : null}
+                {message.error && <Notice>{message.error}</Notice>}
+              </View>
+              {attachedControls?.map((control) => (
+                <ControlCard key={control.control_id} control={control} enabled={canControl} onAnswer={workspace.answer} />
+              ))}
             </View>
           );
         })}
@@ -242,12 +330,14 @@ export function Conversation({
             ) : <Text style={[styles.caption, chat.outgoingStatus]}>Waiting to send</Text>}
           </View>
         ))}
-        {controls.map((control) => (
+        {trailingControls.map((control) => (
           <ControlCard key={control.control_id} control={control} enabled={canControl} onAnswer={workspace.answer} />
         ))}
       </ScrollView>
       <View style={[chat.composer, { borderTopColor: colors.edge }]}>
         {error && <Notice>{error}</Notice>}
+        {modelNotice && <Text accessibilityLiveRegion="polite" style={styles.muted}>{modelNotice}</Text>}
+        {isModelCommand && !canControl && <Text style={styles.muted}>Connect to Hermes to choose a model.</Text>}
         <View style={styles.row}>
           <Action title="Commands" disabled={topic?.status !== "ready"} onPress={() => { Keyboard.dismiss(); setMenu("commands"); }} />
           <Action title="Skills" disabled={topic?.status !== "ready"} onPress={() => { Keyboard.dismiss(); setMenu("skills"); }} />
@@ -292,6 +382,19 @@ export function Conversation({
           </Pressable>
         </View>
       </View>
+      {modelPicker && (
+        <ModelPicker
+          enabled={canControl && !modelBusy}
+          unavailable={modelBusy ? "Wait for the current response before switching models."
+            : !canControl ? "Reconnect to Hermes to choose a model." : undefined}
+          onClose={() => setModelPicker(false)}
+          onRequest={(requestId, selection, signal) => workspace.requestModel(id, requestId, selection, signal)}
+          onSelected={({ selection, type }) => {
+            setModelPicker(false);
+            setModelNotice(type === "deferred" ? `Queued model change · ${selection.model}` : `Model selected · ${selection.model}`);
+          }}
+        />
+      )}
     </KeyboardAvoidingView>
   );
 }
@@ -301,6 +404,7 @@ const chat = StyleSheet.create({
   empty: { flex: 1, justifyContent: "center" },
   progress: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, marginVertical: 12 },
   message: { alignSelf: "flex-start", alignItems: "flex-start", gap: 3 },
+  messageGroup: { gap: 6 },
   outgoing: { alignSelf: "flex-end", alignItems: "flex-end" },
   startGroup: { marginTop: 5 },
   bubble: { borderRadius: 16, paddingHorizontal: 11, paddingVertical: 7 },

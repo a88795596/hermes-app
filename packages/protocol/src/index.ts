@@ -32,8 +32,34 @@ export interface Control {
   kind: "approval" | "clarify";
   prompt: string;
   choices: string[];
+  multi_select?: boolean;
+  submission_id?: string;
   status: "pending" | "responding" | "closed" | "unknown";
+  answer?: string;
+  error?: string;
 }
+
+export interface ModelSelection {
+  provider: string;
+  model: string;
+}
+
+export interface ModelCatalog extends ModelSelection {
+  providers: { id: string; name: string; models: string[] }[];
+}
+
+export const MAX_CLARIFY_CHOICE_BYTES = 32 * 1024;
+export const MAX_CONTROL_ANSWER_BYTES = 192 * 1024;
+
+export type ModelResult =
+  | { type: "catalog"; catalog: ModelCatalog }
+  | { type: "selected" | "deferred"; selection: ModelSelection }
+  | { type: "confirmation"; confirm: string; message: string };
+
+export type ModelRequest =
+  | { status: "pending" }
+  | { status: "ok"; model_result: ModelResult }
+  | { status: "error" | "unknown"; error: string };
 
 export interface TopicDetail {
   topic: Topic;
@@ -95,6 +121,8 @@ export type Command = CommandEnvelope & (
   | { kind: "submit"; body: { submission_id: string; text: string } }
   | { kind: "interrupt"; body: { submission_id: string } }
   | { kind: "respond"; body: { control_id: string; response_id: string; answer: string } }
+  | { kind: "model_options"; body: Record<string, never> }
+  | { kind: "select_model"; body: ModelSelection & { confirm?: string } }
   | { kind: "watch"; body: Record<string, never> }
 );
 
@@ -106,6 +134,7 @@ export interface CommandResult {
   admission_id?: string;
   error?: string;
   control_status?: Control["status"];
+  model_result?: ModelResult;
 }
 
 interface EventEnvelope {
@@ -124,7 +153,7 @@ export interface DeliveryFrame {
 export type ConnectorEvent =
   | (EventEnvelope & { type: "message"; message_id: string; submission_id?: string; text: string; status: "streaming" | "final" })
   | (EventEnvelope & { type: "submission"; submission_id: string; status: Exclude<MessageStatus, "accepted">; error?: string })
-  | (EventEnvelope & Control & { type: "control" });
+  | (EventEnvelope & Omit<Control, "answer" | "error"> & { type: "control" });
 
 export type ConnectorFrame = CommandResult | ConnectorEvent | DeliveryFrame | TopicQueryResult;
 export type BridgeFrame = Command | { type: "ack"; id: string } | TopicQuery;

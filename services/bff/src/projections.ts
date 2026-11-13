@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Control, Message, Profile, Topic } from "@hermes-mobile/protocol";
+import type { Command, CommandResult, Control, Message, ModelRequest, Profile, Topic } from "@hermes-mobile/protocol";
 import type { Store } from "./store.js";
 import { missing } from "./validation.js";
 
@@ -45,12 +45,25 @@ export async function topics(store: Store, refs: Set<string>) {
   return rows.map(topicData);
 }
 
+export async function modelRequest(store: Store, refs: Set<string>, topicId: string, requestId: string): Promise<ModelRequest> {
+  await topicRow(store, topicId, refs);
+  const { rows } = await store.query<{ payload: Command; result: CommandResult | null }>(
+    "SELECT payload, result FROM commands WHERE id = $1 AND topic_id = $2", [requestId, topicId],
+  );
+  const row = rows[0];
+  if (!row || (row.payload.kind !== "model_options" && row.payload.kind !== "select_model")) missing("Model request");
+  if (!row.result) return { status: "pending" };
+  if (row.result.status === "ok" && row.result.model_result) return { status: "ok", model_result: row.result.model_result };
+  return { status: row.result.status === "error" ? "error" : "unknown",
+    error: row.result.error ?? "Hermes could not confirm the model request." };
+}
+
 export function detail(store: Store, id: string, refs: Set<string>) {
   return store.transaction(async (db) => {
     const row = await topicRow(db, id, refs);
     // shortcut: return full history for personal topics, add cursor pagination for long-lived sessions.
     const messages = await db.query<{ data: Message }>("SELECT data FROM messages WHERE topic_id = $1 ORDER BY position", [id]);
-    const controls = await db.query<{ data: Control }>("SELECT data FROM controls WHERE topic_id = $1 ORDER BY id", [id]);
+    const controls = await db.query<{ data: Control }>("SELECT data FROM controls WHERE topic_id = $1 ORDER BY position", [id]);
     return { topic: topicData(row), messages: messages.rows.map(({ data }) => data), controls: controls.rows.map(({ data }) => data) };
   });
 }
