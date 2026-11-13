@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { isManagementOperation } from "@hermes-mobile/protocol";
 import type { InboxItem, MobileNotice } from "@hermes-mobile/protocol";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
@@ -86,6 +87,15 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
   });
 
   api.get(`${prefix}/profiles`, requireDevice, (request) => success(request, profiles(refs)));
+  api.post(`${prefix}/profiles/:id/manage/:operation`, requireDevice, async (request) => {
+    const params = record(request.params);
+    const profile_ref = findProfile(refs, pathId(request));
+    const operation = params.operation;
+    if (!isManagementOperation(operation)) throw new ApiError(404, "NOT_FOUND", "Management operation not found");
+    if (profile_ref === "all" || profile_ref === "current") invalid("Select a named Hermes profile");
+    const { input } = record(request.body ?? {}, ["input"]);
+    return success(request, await bridge.manage({ profile_ref, operation, input: input === undefined ? {} : record(input) }));
+  });
   api.get(`${prefix}/status`, requireDevice, (request) => success(request, { connector_online: bridge.online() }));
   api.get(`${prefix}/topics`, requireDevice, async (request) => success(request, await topics(store, refs)));
   api.get(`${prefix}/topics/:id`, requireDevice, async (request) => success(request, await detail(store, pathId(request), refs)));

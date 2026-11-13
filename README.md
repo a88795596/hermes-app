@@ -73,3 +73,19 @@ pnpm typecheck
 4. To package the Connector for local npm installation, run `pnpm --filter @hermes-mobile/connector pack` and install the resulting tarball. For Cron and `hermes send`, install the [Hermes delivery plugin](plugins/hermes-mobile-delivery/README.md) on the Hermes machine, with the spool available to the Connector.
 
 The [implemented wire](docs/superpowers/plans/2026-11-13-personal-mvp-wire.md) is the first slice of the design. It uses a single account, text chat, and WSS change notices with HTTP catch-up. Media attachments, system share-in, snapshot cursors, and production-grade deployment and device validation remain separate work.
+
+## Enable Manage on mobile
+
+Run a version of Hermes that provides the [Dashboard API](https://hermes-agent.nousresearch.com/docs/user-guide/features/web-dashboard) on the same machine and in the same environment as the Connector. Use the same Hermes installation and profile data as your chat and scheduler. Set a Dashboard session token in both process environments. For example, from the Hermes host:
+
+```sh
+export HERMES_DASHBOARD_SESSION_TOKEN="$(openssl rand -hex 32)"
+hermes --profile default serve --isolated --host 127.0.0.1 --port 9119 &
+
+export HERMES_DASHBOARD_URL='http://127.0.0.1:9119'
+pnpm dev:connector
+```
+
+Keep the existing Connector variables (`BFF_URL`, `CONNECTOR_TOKEN`, and any Runs API settings). If Hermes runs in a container, run the management-enabled Connector in the same container or network namespace so it can reach the loopback Dashboard. For an existing Dashboard process, configure the Connector with its loopback origin and the matching provisioned session token. If the BFF uses a reverse proxy, allow at least 60 seconds for a management response.
+
+Restart the updated BFF and Connector, then open **Manage** in the paired app. Choose a Profile listed in `HERMES_PROFILES` to see its scheduled tasks, models, logs, skills, and MCP servers. Updates are saved by Hermes. Its scheduler must be running to execute tasks, and `hermes_mobile` delivery uses the existing Inbox plugin. The log level takes effect when the relevant Hermes process restarts. For an MCP server that requires OAuth, complete sign-in in Hermes Dashboard. Tests for servers that reference credentials in environment variables use the Dashboard process for that profile.

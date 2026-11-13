@@ -9,3 +9,5 @@ pnpm dev:mobile
 ```
 
 Pair with the BFF origin and its pairing token. The iOS and Android app supports text chat, stop, pending approvals or clarifications, and Inbox. SecureStore keeps the device credential and app-private SQLite keeps cached history and queued text. Native remote notifications require a configured development build.
+
+Open **Manage** to configure scheduled tasks, models, logs, skills, and MCP servers for the selected Hermes profile. See [Enable Manage on mobile](../../README.md#enable-manage-on-mobile) for the Connector setup.

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { BridgeFrame, Command, CommandResult } from '@hermes-mobile/protocol';
+import { isManagementOperation, type BridgeFrame, type Command, type CommandResult } from '@hermes-mobile/protocol';
 import { object } from './gateway.js';
 
 export function stableId(parts: string[]): string {
@@ -26,6 +26,15 @@ function text(value: unknown, max: number, empty = false): value is string {
 export function bridgeFrame(source: string): BridgeFrame {
   const frame = object(JSON.parse(source));
   if (frame?.type === 'ack' && uuid(frame.id)) return { type: 'ack', id: frame.id };
+  if (frame?.type === 'management_request') {
+    const { type, request_id, profile_ref, operation } = frame;
+    const input = object(frame.input);
+    if (!uuid(request_id) || typeof profile_ref !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,63}$/u.test(profile_ref)
+      || profile_ref === 'all' || profile_ref === 'current' || !isManagementOperation(operation) || !input) {
+      throw new Error('Invalid BFF management request');
+    }
+    return { type, request_id, profile_ref, operation, input };
+  }
   if (frame?.type !== 'command' || !uuid(frame.command_id) || !uuid(frame.topic_id)
     || typeof frame.profile_ref !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,63}$/u.test(frame.profile_ref)) {
     throw new Error('Invalid BFF command envelope');

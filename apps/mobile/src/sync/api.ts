@@ -12,16 +12,18 @@ export class ApiError extends Error {
 export async function request<T>(
   origin: string,
   path: string,
-  { token, method = "GET", body, signal }: {
+  { token, method = "GET", body, signal, timeoutMs = 12_000 }: {
     token?: string;
     method?: "GET" | "POST" | "DELETE";
     body?: object;
     signal?: AbortSignal;
+    timeoutMs?: number;
   } = {},
 ): Promise<T> {
+  const timeout = AbortSignal.timeout(timeoutMs);
   const response = await fetch(`${origin}/mobile/v1${path}`, {
     method,
-    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(12_000)]) : AbortSignal.timeout(12_000),
+    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
     redirect: "error",
     headers: {
       Accept: "application/json",

@@ -7,7 +7,7 @@
     "dev": "tsx watch src/main.ts",
     "start": "tsx src/main.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/health.test.ts"
+    "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.0.0",

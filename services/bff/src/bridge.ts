@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { BridgeFrame, Command } from "@hermes-mobile/protocol";
+import { managementOperations, managementTimeout, type BridgeFrame, type Command, type ManagementRequest, type ManagementResult } from "@hermes-mobile/protocol";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import { matchesToken, readBearer } from "./auth.js";
@@ -9,14 +9,15 @@ import type { Store } from "./store.js";
 import { ApiError, invalid } from "./validation.js";
 
 export function registerBridge(api: FastifyInstance, store: Store, refs: Set<string>, secret: string, changed: (topicId?: string) => void) {
-  let active: { socket: WebSocket; pump: () => void } | undefined;
+  type ManagementCall = Omit<ManagementRequest, "type" | "request_id">;
+  let active: { socket: WebSocket; pump: () => void; manage?: (call: ManagementCall) => Promise<unknown> } | undefined;
 
   api.get("/internal/connector/v1/events", {
     websocket: true,
     preValidation: async (request) => {
       if (!matchesToken(readBearer(request), secret)) throw new ApiError(401, "UNAUTHORIZED", "Invalid Connector credentials");
     },
-  }, (socket) => {
+  }, (socket, request) => {
     if (active) {
       socket.close(1008, "Connector already connected");
       return;
@@ -24,6 +25,7 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
     const sent = new Map<string, number>();
     const sessions = new Map<string, string>();
     const watches = new Set<string>();
+    const management = new Map<string, (result?: ManagementResult) => void>();
     let serial = Promise.resolve();
     let queuedFrames = 0;
     let pumping = false;
@@ -74,7 +76,32 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
         }
       });
     };
-    active = { socket, pump };
+    const manage = (call: ManagementCall) => {
+      if (!isCurrent()) throw new ApiError(503, "MANAGEMENT_UNAVAILABLE", "Connect the Hermes Connector to use Manage.");
+      if (management.size >= 16) throw new ApiError(429, "MANAGEMENT_BUSY", "Hermes is handling other management requests.");
+      const request_id = randomUUID();
+      const write = managementOperations[call.operation] === "write";
+      return new Promise<unknown>((resolve, reject) => {
+        const finish = (result?: ManagementResult, timedOut = false) => {
+          management.delete(request_id);
+          clearTimeout(timeout);
+          if (result?.ok) resolve(result.data);
+          else if (result) reject(new ApiError(result.status, "HERMES_MANAGEMENT_ERROR", result.message));
+          else reject(new ApiError(timedOut ? 504 : 503, write ? "MANAGEMENT_UNCONFIRMED" : "MANAGEMENT_UNAVAILABLE",
+            write ? "Hermes could not confirm this change. Refresh to check the current state before trying again."
+              : "The Connector did not return a response. Try refreshing."));
+        };
+        const timeout = setTimeout(() => finish(undefined, true), managementTimeout(call.operation) + 4_000);
+        timeout.unref();
+        management.set(request_id, finish);
+        try {
+          if (!send({ type: "management_request", request_id, ...call })) finish();
+        } catch {
+          finish();
+        }
+      });
+    };
+    active = { socket, pump, manage: request.headers["x-hermes-mobile-management"] === "1" ? manage : undefined };
     socket.on("pong", () => { alive = true; });
     const heartbeat = setInterval(() => {
       if (!alive || [...sent.values()].some((sentAt) => Date.now() - sentAt > 90_000)) return socket.terminate();
@@ -84,6 +111,7 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
     heartbeat.unref();
     socket.once("close", () => {
       clearInterval(heartbeat);
+      for (const finish of management.values()) finish();
       if (active?.socket === socket) {
         active = undefined;
         changed();
@@ -100,7 +128,9 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
       run(async () => {
         try {
           const frame = connectorFrame(JSON.parse(raw.toString()));
-          if (frame.type === "command_result") {
+          if (frame.type === "management_result") {
+            management.get(frame.request_id)?.(frame);
+          } else if (frame.type === "command_result") {
             if (watches.delete(frame.command_id)) return;
             if (!sent.has(frame.command_id)) {
               // The Connector can resend a result after the original socket lost the ACK.
@@ -147,5 +177,10 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
   return {
     online: () => active !== undefined && active.socket.readyState === active.socket.OPEN,
     pump: () => active?.pump(),
+    manage(call: ManagementCall) {
+      if (!active?.manage) throw new ApiError(503, "MANAGEMENT_UNAVAILABLE",
+        "Manage requires a connected Connector with the Hermes Dashboard URL and token configured.");
+      return active.manage(call);
+    },
   };
 }

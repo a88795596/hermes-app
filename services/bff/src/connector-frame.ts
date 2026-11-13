@@ -11,6 +11,15 @@ function option<const T extends string>(value: unknown, allowed: readonly T[]): 
 export function connectorFrame(value: unknown): ConnectorFrame {
   const { type } = record(value);
   switch (type) {
+    case "management_result": {
+      const { request_id, ok, data, status, message } = record(value, ["type", "request_id", "ok", "data", "status", "message"]);
+      const id = uuid(request_id, "request_id");
+      if (ok === true && data !== undefined) return { type, request_id: id, ok, data };
+      if (ok === false && typeof status === "number" && [400, 404, 409, 422, 429, 502, 503, 504].includes(status)) {
+        return { type, request_id: id, ok, status, message: string(message, "message", 2048) };
+      }
+      invalid("Invalid management result");
+    }
     case "command_result": {
       const body = record(value, ["type", "command_id", "status", "session_id", "admission_id", "error", "control_status"]);
       return { type, command_id: uuid(body.command_id, "command_id"), status: option(body.status, ["ok", "error", "unknown"]),

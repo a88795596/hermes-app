@@ -96,8 +96,43 @@ export type ConnectorEvent =
   | (EventEnvelope & { type: "submission"; submission_id: string; status: Exclude<MessageStatus, "accepted">; error?: string })
   | (EventEnvelope & Control & { type: "control" });
 
-export type ConnectorFrame = CommandResult | ConnectorEvent | DeliveryFrame;
-export type BridgeFrame = Command | { type: "ack"; id: string };
+export type ConnectorFrame = CommandResult | ConnectorEvent | DeliveryFrame | ManagementResult;
+export type BridgeFrame = Command | { type: "ack"; id: string } | ManagementRequest;
+
+export const managementOperations = {
+  "cron.list": "read", "cron.runs": "read", "cron.create": "write", "cron.edit": "write",
+  "cron.pause": "write", "cron.resume": "write", "cron.trigger": "write", "cron.remove": "write",
+  "model.list": "read", "model.options": "read", "model.set": "write",
+  "model.keys": "read", "model.key": "write", "model.key.remove": "write",
+  "logs.read": "read", "logs.level": "write",
+  "skill.list": "read", "skill.read": "read", "skill.create": "write", "skill.edit": "write",
+  "skill.toggle": "write", "skill.install": "write",
+  "mcp.list": "read", "mcp.add": "write", "mcp.edit": "write", "mcp.token": "write", "mcp.toggle": "write", "mcp.test": "read",
+  "mcp.remove": "write", "mcp.catalog": "read", "mcp.install": "write", "action.status": "read",
+} as const;
+
+export type ManagementOperation = keyof typeof managementOperations;
+
+export function isManagementOperation(value: unknown): value is ManagementOperation {
+  return typeof value === "string" && Object.hasOwn(managementOperations, value);
+}
+
+export function managementTimeout(operation: ManagementOperation): number {
+  return operation === "mcp.test" ? 45_000 : 28_000;
+}
+
+export interface ManagementRequest {
+  type: "management_request";
+  request_id: string;
+  profile_ref: string;
+  operation: ManagementOperation;
+  input: Record<string, unknown>;
+}
+
+export type ManagementResult = { type: "management_result"; request_id: string } & (
+  | { ok: true; data: unknown }
+  | { ok: false; status: number; message: string }
+);
 
 export interface ApiSuccess<T> {
   data: T;
