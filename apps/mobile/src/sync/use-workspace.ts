@@ -94,7 +94,7 @@ export function useWorkspace(session: Session, topicId: string | null) {
   }, [cache]);
 
   const call = useCallback(async <T,>(
-    path: string, options: { method?: "GET" | "POST" | "DELETE"; body?: object; signal?: AbortSignal } = {},
+    path: string, options: Omit<NonNullable<Parameters<typeof request>[2]>, "token"> = {},
   ) => {
     if (revoked.current) throw new Error("This device session has ended.");
     try {

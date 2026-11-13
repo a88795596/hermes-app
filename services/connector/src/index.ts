@@ -7,6 +7,7 @@ import { CanonicalConnector } from './connector.js';
 import { createDeliverySpool } from './delivery.js';
 import type { JsonObject } from './gateway.js';
 import { createHttpConnector } from './http-mode.js';
+import { createDashboardManagement } from './management.js';
 import { Spool } from './spool.js';
 import { QueryUnavailable } from './topic-query.js';
 import { bridgeFrame, result } from './wire.js';
@@ -36,6 +37,9 @@ async function main(): Promise<void> {
   const httpUrl = process.env.HERMES_API_URL;
   const httpKey = process.env.HERMES_API_KEY;
   if (httpUrl && !httpKey?.trim()) throw new Error('HERMES_API_KEY is required with HERMES_API_URL');
+  const dashboardUrl = process.env.HERMES_DASHBOARD_URL;
+  const dashboardToken = process.env.HERMES_DASHBOARD_SESSION_TOKEN;
+  const manage = dashboardUrl ? createDashboardManagement(dashboardUrl, dashboardToken ?? '') : undefined;
   const path = process.env.CONNECTOR_DB_PATH ?? join(homedir(), '.hermes-mobile', 'connector.sqlite');
   const spool = new Spool(path);
   const deliveryPath = process.env.HERMES_MOBILE_SPOOL_PATH;
@@ -63,7 +67,8 @@ async function main(): Promise<void> {
     while (!shutdown.signal.aborted) {
       const started = Date.now();
       const peer = new WebSocket(url, {
-        headers: { Authorization: `Bearer ${token}`, 'X-Hermes-Mobile-Topic-Query': '1' },
+        headers: { Authorization: `Bearer ${token}`, 'X-Hermes-Mobile-Topic-Query': '1',
+          ...(manage && { 'X-Hermes-Mobile-Management': '1' }) },
         handshakeTimeout: 10_000, maxPayload: 1024 * 1024, perMessageDeflate: false,
       });
       socket = peer;
@@ -76,6 +81,7 @@ async function main(): Promise<void> {
       let polling = false;
       let queued = 0;
       let querying = 0;
+      let managementPending = 0;
       let alive = true;
       function send(frame: JsonObject): boolean {
         if (!current() || peer.bufferedAmount > 1024 * 1024) return false;
@@ -181,6 +187,16 @@ async function main(): Promise<void> {
           }).finally(() => { querying -= 1; });
           return;
         }
+        if (frame.type === 'management_request') {
+          if (!manage || managementPending >= 16) {
+            send({ type: 'management_result', request_id: frame.request_id, ok: false,
+              status: manage ? 429 : 503, message: manage ? 'Hermes is handling other management requests.' : 'Configure Hermes Dashboard in the Connector.' });
+            return;
+          }
+          managementPending += 1;
+          void manage(frame).then((reply) => { send(reply); }).catch(() => peer.terminate()).finally(() => { managementPending -= 1; });
+          return;
+        }
         if (queued >= 256) {
           peer.terminate();
           return;
@@ -221,6 +237,6 @@ async function main(): Promise<void> {
 }
 
 void main().catch(() => {
-  process.stderr.write('Connector startup failed. Check BFF_URL, CONNECTOR_TOKEN, the spool path and the configured Hermes mode.\n');
+  process.stderr.write('Connector startup failed. Check BFF_URL, CONNECTOR_TOKEN, the spool path and the configured Hermes and Dashboard settings.\n');
   process.exitCode = 1;
 });

@@ -7,16 +7,18 @@ import type { Topic } from "@hermes-mobile/protocol";
 import { Pairing } from "../auth/pairing";
 import { loadSession, saveSession, type Session } from "../auth/session";
 import { Conversation } from "../chat/conversation";
+import { ManagementMenu, ManagementScreen, type ManagementPage } from "../manage";
 import { enablePushNotifications, pushAvailable } from "../notifications";
 import { pairDevice } from "../sync/api";
 import { useWorkspace } from "../sync/use-workspace";
 import { Action, Card, EmptyState, Field, Icon, Notice, useTheme, type IconName } from "../ui/theme";
 
-type Section = "Topics" | "Inbox" | "Connection";
+type Section = "Topics" | "Inbox" | "Manage" | "Connection";
 
 const sections = [
   { title: "Topics", icon: "topics" },
   { title: "Inbox", icon: "inbox" },
+  { title: "Manage", icon: "manage" },
   { title: "Connection", icon: "settings" },
 ] as const;
 
@@ -39,6 +41,7 @@ function Workspace({
 }) {
   const { colors, styles } = useTheme();
   const [section, setSection] = useState<Section>("Topics");
+  const [managementPage, setManagementPage] = useState<ManagementPage>();
   const [topicId, setTopicId] = useState<string | null>(null);
   const [profileId, setProfileId] = useState<string>();
   const [title, setTitle] = useState("");
@@ -61,6 +64,11 @@ function Workspace({
   useEffect(() => {
     if (Platform.OS !== "android") return;
     const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (managementPage) {
+        Keyboard.dismiss();
+        setManagementPage(undefined);
+        return true;
+      }
       if (topicId) {
         setTopicId(null);
         return true;
@@ -76,7 +84,7 @@ function Workspace({
       return false;
     });
     return () => subscription.remove();
-  }, [composing, creating, section, topicId]);
+  }, [composing, creating, managementPage, section, topicId]);
 
   async function create() {
     const name = title.trim();
@@ -153,8 +161,14 @@ function Workspace({
 
   function showSection(name: Section) {
     Keyboard.dismiss();
+    setManagementPage(undefined);
     setSection(name);
     setError(undefined);
+  }
+
+  if (managementPage && profile) {
+    return <ManagementScreen key={`${profile.profile_id}:${managementPage}`} page={managementPage} profile={profile}
+      request={workspace.call} onBack={() => setManagementPage(undefined)} />;
   }
 
   if (topicId) {
@@ -260,6 +274,7 @@ function Workspace({
             ))}
           </View>
         ) : workspace.ready ? <EmptyState icon="inbox" title="No deliveries yet" description="Scheduled results and messages from Hermes appear here." /> : null)}
+        {section === "Manage" && <ManagementMenu profiles={workspace.profiles} profile={profile} onProfile={setProfileId} onOpen={setManagementPage} />}
         {section === "Connection" && (
           <>
             <View>

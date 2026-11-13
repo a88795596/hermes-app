@@ -9,7 +9,9 @@
   "bin": {
     "hermes-mobile-connector": "dist/main.cjs"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "dev": "tsx src/index.ts",
     "start": "node dist/main.cjs",
@@ -21,9 +23,11 @@
   "devDependencies": {
     "@hermes-mobile/hermes-adapter": "workspace:*",
     "@hermes-mobile/protocol": "workspace:*",
+    "@types/js-yaml": "4.0.9",
     "@types/node": "^24.0.0",
     "@types/ws": "^8.18.0",
     "esbuild": "^0.28.0",
+    "js-yaml": "4.3.2",
     "tsx": "^4.0.0",
     "typescript": "~6.0.3",
     "ws": "^8.23.0"

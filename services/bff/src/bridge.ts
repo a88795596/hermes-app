@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { BridgeFrame, Command, TopicQuery, TopicQueryResult } from "@hermes-mobile/protocol";
+import { managementOperations, managementTimeout } from "@hermes-mobile/protocol";
+import type { BridgeFrame, Command, ManagementRequest, ManagementResult, TopicQuery, TopicQueryResult } from "@hermes-mobile/protocol";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import { matchesToken, readBearer } from "./auth.js";
@@ -9,10 +10,12 @@ import type { Store } from "./store.js";
 import { ApiError, invalid } from "./validation.js";
 
 export function registerBridge(api: FastifyInstance, store: Store, refs: Set<string>, secret: string, changed: (topicId?: string) => void) {
+  type ManagementCall = Omit<ManagementRequest, "type" | "request_id">;
   let active: {
     socket: WebSocket;
     pump: () => void;
     query: (target: Omit<TopicQuery, "type" | "request_id">) => Promise<TopicQueryResult>;
+    manage?: (call: ManagementCall) => Promise<unknown>;
   } | undefined;
 
   api.get("/internal/connector/v1/events", {
@@ -32,6 +35,7 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
       kind: TopicQuery["kind"];
       finish: (result?: TopicQueryResult) => void;
     }>();
+    const management = new Map<string, (result?: ManagementResult) => void>();
     let serial = Promise.resolve();
     let queuedFrames = 0;
     let pumping = false;
@@ -105,7 +109,32 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
         if (!send({ ...target, type: "topic_query", request_id })) finish();
       });
     };
-    active = { socket, pump, query };
+    const manage = (call: ManagementCall) => {
+      if (!isCurrent()) throw new ApiError(503, "MANAGEMENT_UNAVAILABLE", "Connect the Hermes Connector to use Manage.");
+      if (management.size >= 16) throw new ApiError(429, "MANAGEMENT_BUSY", "Hermes is handling other management requests.");
+      const request_id = randomUUID();
+      const write = managementOperations[call.operation] === "write";
+      return new Promise<unknown>((resolve, reject) => {
+        const finish = (result?: ManagementResult, timedOut = false) => {
+          management.delete(request_id);
+          clearTimeout(timeout);
+          if (result?.ok) resolve(result.data);
+          else if (result) reject(new ApiError(result.status, "HERMES_MANAGEMENT_ERROR", result.message));
+          else reject(new ApiError(timedOut ? 504 : 503, write ? "MANAGEMENT_UNCONFIRMED" : "MANAGEMENT_UNAVAILABLE",
+            write ? "Hermes could not confirm this change. Refresh to check the current state before trying again."
+              : "The Connector did not return a response. Try refreshing."));
+        };
+        const timeout = setTimeout(() => finish(undefined, true), managementTimeout(call.operation) + 4_000);
+        timeout.unref();
+        management.set(request_id, finish);
+        try {
+          if (!send({ type: "management_request", request_id, ...call })) finish();
+        } catch {
+          finish();
+        }
+      });
+    };
+    active = { socket, pump, query, manage: request.headers["x-hermes-mobile-management"] === "1" ? manage : undefined };
     socket.on("pong", () => { alive = true; });
     const heartbeat = setInterval(() => {
       if (!alive || [...sent.values()].some((sentAt) => Date.now() - sentAt > 90_000)) return socket.terminate();
@@ -116,6 +145,7 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
     socket.once("close", () => {
       clearInterval(heartbeat);
       for (const query of queries.values()) query.finish();
+      for (const finish of management.values()) finish();
       if (active?.socket === socket) {
         active = undefined;
         changed();
@@ -137,6 +167,8 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
             if (!query) return;
             if ("data" in frame && frame.data.kind !== query.kind) invalid("Mismatched topic query result");
             query.finish(frame);
+          } else if (frame.type === "management_result") {
+            management.get(frame.request_id)?.(frame);
           } else if (frame.type === "command_result") {
             if (watches.delete(frame.command_id)) return;
             if (!sent.has(frame.command_id)) {
@@ -200,6 +232,11 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
       throw new ApiError(502, "TOPIC_QUERY_FAILED", target.kind === "skills"
         ? "Hermes could not list skills for this profile. Try again."
         : "Hermes could not read this session’s status. Try again.");
+    },
+    manage(call: ManagementCall) {
+      if (!active?.manage) throw new ApiError(503, "MANAGEMENT_UNAVAILABLE",
+        "Manage requires a connected Connector with the Hermes Dashboard URL and token configured.");
+      return active.manage(call);
     },
   };
 }

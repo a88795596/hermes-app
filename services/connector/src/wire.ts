@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { BridgeFrame, Command, CommandResult } from '@hermes-mobile/protocol';
-import { MAX_CONTROL_ANSWER_BYTES } from '@hermes-mobile/protocol';
+import { isManagementOperation, MAX_CONTROL_ANSWER_BYTES } from '@hermes-mobile/protocol';
 import { object } from './gateway.js';
 
 export function stableId(parts: string[]): string {
@@ -32,6 +32,15 @@ export function bridgeFrame(source: string): BridgeFrame {
     && text(frame.session_id, 512) && (frame.kind === 'skills' || frame.kind === 'status')) {
     const { type, request_id, topic_id, profile_ref, session_id, kind } = frame;
     return { type, request_id, topic_id, profile_ref, session_id, kind };
+  }
+  if (frame?.type === 'management_request') {
+    const { type, request_id, profile_ref, operation } = frame;
+    const input = object(frame.input);
+    if (!uuid(request_id) || typeof profile_ref !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,63}$/u.test(profile_ref)
+      || profile_ref === 'all' || profile_ref === 'current' || !isManagementOperation(operation) || !input) {
+      throw new Error('Invalid BFF management request');
+    }
+    return { type, request_id, profile_ref, operation, input };
   }
   if (frame?.type !== 'command' || !uuid(frame.command_id) || !uuid(frame.topic_id)
     || typeof frame.profile_ref !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,63}$/u.test(frame.profile_ref)) {
