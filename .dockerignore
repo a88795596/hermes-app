@@ -1,0 +1,14 @@
+.git
+**/.env
+**/.env.*
+**/.npmrc
+**/.data
+**/.expo
+**/.pnpm-store
+**/*.db*
+**/*.sqlite*
+**/node_modules
+**/dist
+**/coverage
+**/__pycache__
+**/.venv

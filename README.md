@@ -21,6 +21,54 @@
 - [个人版已实现的通信协议](docs/superpowers/plans/2026-11-13-personal-mvp-wire.md)
 - [工程设计规格书 v2](docs/reference/hermes-expo-engineering-spec-v2.md)
 
+## Docker Compose 部署
+
+BFF 和连接器在同一个容器运行，PostgreSQL 由 Compose 单独启动。Hermes Agent 在同一台宿主机运行，手机继续使用 Expo 客户端。应用容器通过 host 网络访问宿主机的回环地址。Linux Docker Engine 可直接使用，Docker Desktop 需要 4.34 或以上版本，并在 **Settings → Resources → Network** 中启用 **Enable host networking**。 [Docker host 网络](https://docs.docker.com/engine/network/drivers/host/)
+
+1. 在宿主机启用 Hermes HTTP Runs API。Hermes 版本须支持按配置档案创建会话和运行聊天，即 `/p/<profile>/api/sessions` 和 `/p/<profile>/v1/runs`。若尚未启用，在 Hermes 配置档案的 `.env`（默认 `~/.hermes/.env`）加入以下设置，再重启该档案的网关。已有 API 密钥时直接复用。 [Hermes API Server](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server/)
+
+   ```dotenv
+   API_SERVER_ENABLED=true
+   API_SERVER_HOST=127.0.0.1
+   API_SERVER_PORT=8642
+   API_SERVER_KEY=<已有密钥或用 openssl rand -hex 32 生成>
+   ```
+
+   已安装为服务的网关用 `hermes gateway restart` 重启。首次在前台启动可用 `hermes gateway run`。运行 `curl -fsS http://127.0.0.1:8642/health` 检查宿主机上的 API 是否可达。
+
+2. 首次部署时，在仓库根目录生成一份权限受限的 `.env`。已有 `.env` 时保留其中的配对令牌和数据库密码，对照模板补齐缺失项。 [配置模板](.env.example)
+
+   ```sh
+   (set -eu
+     umask 077
+     set -C
+     printf "HERMES_API_KEY=''\nAPP_PAIRING_TOKEN=%s\nPOSTGRES_PASSWORD=%s\n" \
+       "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" > .env
+   )
+   ```
+
+   编辑仓库根目录的 `.env`，将宿主机的 API 密钥填入 `HERMES_API_KEY` 的单引号内。`APP_PAIRING_TOKEN` 用于手机配对。`CONNECTOR_TOKEN` 省略时由容器在启动时随机生成，并同时传给 BFF 和连接器。
+
+3. 构建并启动。BFF 默认监听 `127.0.0.1:4317`。健康检查通过后，应用日志应显示「Hermes 连接器已连接 BFF」。
+
+   ```sh
+   docker compose up -d --build --wait
+   docker compose logs --tail=50 app
+   curl -fsS http://127.0.0.1:4317/health
+   ```
+
+4. 在移动端填写 BFF 地址和 `APP_PAIRING_TOKEN`，然后新建话题验证 Hermes 连接。本机 iOS 模拟器使用 `http://127.0.0.1:4317`，Android 模拟器使用 `http://10.0.2.2:4317`。真机使用宿主机上的 HTTPS 反向代理，将 HTTPS 和 WebSocket 请求转发至 `127.0.0.1:4317`。代理须允许至少 9 MiB 的请求体，管理请求的响应超时至少设为 60 秒。
+
+端口冲突时，在 `.env` 中调整 `BFF_PORT` 或 `POSTGRES_PORT`，数据库默认仅通过宿主机的 `127.0.0.1:55433` 访问。若 Hermes 使用其他端口，设置 `HERMES_API_URL` 为对应的 `http://127.0.0.1:<端口>`。`HERMES_PROFILES` 默认为 `default`，可填写当前 API 密钥能访问的配置档案，多个名称用逗号分隔。
+
+启用移动端管理时，在宿主机启动控制台，再将 `HERMES_DASHBOARD_URL` 和 `HERMES_DASHBOARD_SESSION_TOKEN` 填入仓库的 `.env`。Expo 推送可通过 `EXPO_ACCESS_TOKEN` 注入访问令牌。 [控制台配置](#enable-manage-on-mobile)
+
+自动标题和普通文件暂存需要宿主机 Hermes 提供本项目的扩展接口。已有扩展实现可直接复用。宿主机安装可在兼容的 Hermes 版本上应用仓库提供的扩展代码和 HTTP Runs 补丁。 [Hermes 扩展构建步骤](services/connector/Dockerfile.hermes)
+
+启用定时任务向移动端收件箱投递时，在宿主机安装插件。通过 Compose 覆盖文件将队列所在目录以读写方式挂载到 `app`，并设置 `HERMES_MOBILE_SPOOL_PATH` 为容器内的队列绝对路径。队列目录和文件须由连接器运行的 UID 持有，镜像默认使用 UID 1000。 [Hermes 投递插件](plugins/hermes-mobile-delivery/README.md)
+
+升级时重新执行 `docker compose up -d --build --wait`。`docker compose down` 停止部署并保留两个命名卷 `postgres-data` 和 `connector-data`。它们分别保存配对和聊天数据、连接器的会话绑定和待发送记录。备份或迁移时应成对保留，`docker compose down -v` 会删除这两个卷。PostgreSQL 首次初始化使用 `POSTGRES_PASSWORD`，之后如需轮换密码，请同步修改数据库角色密码与 `.env`。
+
 <a name="run-the-personal-mvp"></a>
 
 ## 本地运行个人版
