@@ -7,3 +7,18 @@ RUN sed -i 's/skip_disabled=False, include_editorial=True/skip_disabled=False/' 
 # shortcut: 上游 Runs 转发思考和阶段说明后，移除此镜像补丁。
 COPY hermes-runs-process.patch /tmp/hermes-runs-process.patch
 RUN git -C /opt/hermes apply --recount /tmp/hermes-runs-process.patch && rm /tmp/hermes-runs-process.patch
+
+COPY hermes-topic-title.py /opt/hermes/gateway/platforms/hermes_mobile_title.py
+# shortcut: HTTP Runs 尚未提供 llm.oneshot，等上游开放该接口后移除此路由。
+RUN python - <<'PY'
+from pathlib import Path
+
+path = Path('/opt/hermes/gateway/platforms/api_server.py')
+source = path.read_text()
+anchor = '        routes.extend(_room_grants._http_routes(self))'
+assert source.count(anchor) == 1
+path.write_text(source.replace(anchor, '''        from functools import partial
+        from gateway.platforms.hermes_mobile_title import title_handler
+        routes.append(("POST", "/api/hermes-mobile/title", partial(title_handler, self)))
+''' + anchor))
+PY

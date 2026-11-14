@@ -14,7 +14,7 @@ const commands = [
   { name: "model", label: "选择模型" },
   { name: "stop", label: "停止当前回复" },
   { name: "skills", label: "浏览技能" },
-  { name: "new", label: "新建话题" },
+  { name: "new", label: "新建会话" },
   { name: "version", label: "查看 Hermes 版本" },
 ] as const;
 
@@ -189,11 +189,10 @@ export function ComposerMenu({
   return (
     <ComposerSheet title={kind === "skills" ? "技能" : "命令"} subtitle={kind === "skills" && profile ? profileLabel(profile) : undefined}
       onClose={onClose}>
-      {kind === "skills" ? <Skills call={call} path={`/topics/${id}`} onSelect={onSkill} /> : !connected ? (
-        <Text style={styles.muted}>连接 Hermes 后可执行命令。</Text>
-      ) : (
+      {kind === "commands" && !connected && <Text style={styles.muted}>连接 Hermes 后可执行其他命令。</Text>}
+      {kind === "skills" ? <Skills call={call} path={`/topics/${id}`} onSelect={onSkill} /> : (
         <FlatList
-          data={commands.filter(({ name }) => canStop || name !== "stop")}
+          data={commands.filter(({ name }) => name === "new" || (connected && (canStop || name !== "stop")))}
           style={{ maxHeight: height * 0.58, flexGrow: 0 }}
           keyExtractor={({ name }) => name}
           renderItem={({ item: { name, label } }) => (

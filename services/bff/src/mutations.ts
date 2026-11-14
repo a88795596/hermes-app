@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { DEFAULT_TOPIC_TITLE, topicTitlePreview } from "@hermes-mobile/protocol";
 import type { Command, Control, Message, ModelSelection, ReasoningEffort, Topic } from "@hermes-mobile/protocol";
 import type { PoolClient } from "pg";
 import { profileId, topicData, topicRow } from "./projections.js";
@@ -12,8 +13,8 @@ async function prior<T>(db: PoolClient, id: string, kind: Command["kind"], targe
   const existing = rows[0];
   if (!existing) return;
   const payload = existing.payload;
-  const { title, control_id } = existing.receipt as { title?: string; control_id?: string };
-  const existingBody = payload.kind === "create" ? { ...payload.body, title }
+  const { title, auto_title, control_id } = existing.receipt as { title?: string; auto_title?: boolean; control_id?: string };
+  const existingBody = payload.kind === "create" ? { ...payload.body, title: auto_title ? undefined : title }
     : payload.body;
   const existingTarget = payload.kind === "create" ? payload.profile_ref
     : payload.kind === "respond" ? control_id : payload.topic_id;
@@ -28,15 +29,17 @@ async function enqueue(db: PoolClient, payload: Command, receipt: object) {
     [payload.command_id, payload.topic_id, payload, receipt]);
 }
 
-export async function createTopic(db: PoolClient, requestId: string, profile: string, title: string) {
+export async function createTopic(db: PoolClient, requestId: string, profile: string, title?: string) {
   const saved = await prior<Topic>(db, requestId, "create", profile, { request_id: requestId, title });
-  if (saved) return saved;
+  if (saved) return topicData(await topicRow(db, requestId, new Set([profile])));
+  const autoTitle = title === undefined;
   const row = await db.query<Parameters<typeof topicData>[0]>(
-    "INSERT INTO topics (id, profile_ref, title) VALUES ($1, $2, $3) RETURNING *", [requestId, profile, title],
+    "INSERT INTO topics (id, profile_ref, title, auto_title) VALUES ($1, $2, $3, $4) RETURNING *",
+    [requestId, profile, title ?? DEFAULT_TOPIC_TITLE, autoTitle],
   );
   const topic = topicData(row.rows[0]);
   await enqueue(db, { type: "command", command_id: requestId, topic_id: topic.topic_id,
-    profile_ref: profile, kind: "create", body: { request_id: requestId } }, topic);
+    profile_ref: profile, kind: "create", body: { request_id: requestId } }, { ...topic, auto_title: autoTitle });
   return topic;
 }
 
@@ -57,6 +60,10 @@ export async function submit(db: PoolClient, refs: Set<string>, topicId: string,
   const saved = await prior<Message>(db, submissionId, "submit", topicId, body);
   if (saved) return saved;
   const sessionId = requireReady(row);
+  if (row.auto_title && row.title === DEFAULT_TOPIC_TITLE) {
+    await db.query(`UPDATE topics SET title = $2 WHERE id = $1 AND NOT EXISTS
+      (SELECT 1 FROM submissions WHERE topic_id = $1)`, [topicId, topicTitlePreview(text)]);
+  }
   const message: Message = { message_id: randomUUID(), role: "user", text, status: "accepted", submission_id: submissionId };
   await db.query("INSERT INTO messages (id, topic_id, data) VALUES ($1, $2, $3)", [message.message_id, topicId, message]);
   await db.query("INSERT INTO submissions (id, topic_id, message_id, data) VALUES ($1, $2, $3, $4)",
@@ -64,6 +71,28 @@ export async function submit(db: PoolClient, refs: Set<string>, topicId: string,
   await enqueue(db, { type: "command", command_id: submissionId, topic_id: topicId, profile_ref: row.profile_ref,
     session_id: sessionId, kind: "submit", body }, message);
   return message;
+}
+
+export async function queueTopicTitle(db: PoolClient, topic: Awaited<ReturnType<typeof topicRow>>) {
+  if (!topic.auto_title || !topic.session_id) return false;
+  const { rows: [revision] } = await db.query<{ title_revision: string }>(
+    "UPDATE topics SET title_revision = title_revision + 1 WHERE id = $1 RETURNING title_revision", [topic.id],
+  );
+  // shortcut: 用现有标题和最近四轮控制提示长度，长会话需要覆盖更早内容时再加入滚动摘要。
+  const { rows } = await db.query<{ user: string; assistant: string | null }>(`
+    SELECT left(u.data->>'text', 600) AS "user", (
+      SELECT left(a.data->>'text', 600) FROM messages AS a
+      WHERE a.topic_id = s.topic_id AND a.data->>'submission_id' = s.id::text
+        AND a.data->>'role' = 'assistant' AND a.data->>'status' = 'final'
+      ORDER BY a.position DESC LIMIT 1
+    ) AS assistant
+    FROM submissions AS s JOIN messages AS u ON u.id = s.message_id
+    WHERE s.topic_id = $1 AND s.data->>'status' = 'final'
+    ORDER BY u.position DESC LIMIT 4`, [topic.id]);
+  const input = JSON.stringify({ title: topic.title, turns: rows.reverse() });
+  await enqueue(db, { type: "command", command_id: randomUUID(), topic_id: topic.id, profile_ref: topic.profile_ref,
+    session_id: topic.session_id, kind: "summarize_title", body: { input } }, revision);
+  return true;
 }
 
 export async function interrupt(db: PoolClient, refs: Set<string>, topicId: string, requestId: string, submissionId: string) {

@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { Command, CommandResult, ConnectorEvent, Control, DeliveryFrame, InboxItem, Message } from "@hermes-mobile/protocol";
 import type { PoolClient } from "pg";
+import { queueTopicTitle } from "./mutations.js";
 import { topicRow } from "./projections.js";
 import { queueInboxPush } from "./push.js";
 import { conflict, invalid, missing } from "./validation.js";
@@ -22,10 +23,11 @@ async function applySubmission(db: PoolClient, topicId: string, id: string, stat
   await db.query("UPDATE messages SET data = (data - 'error') || $2::jsonb WHERE id = $1", [submission.message_id, {
     status, ...(error ? { error } : {}),
   }]);
+  return status === "final";
 }
 
 export async function applyResult(db: PoolClient, frame: CommandResult, refs: Set<string>) {
-  const { rows } = await db.query<{ payload: Command; result: CommandResult | null; receipt: { was_unconfirmed?: boolean } }>(
+  const { rows } = await db.query<{ payload: Command; result: CommandResult | null; receipt: { was_unconfirmed?: boolean; title_revision?: string } }>(
     "SELECT payload, result, receipt FROM commands WHERE id = $1", [frame.command_id],
   );
   const command = rows[0];
@@ -43,6 +45,9 @@ export async function applyResult(db: PoolClient, frame: CommandResult, refs: Se
   if ((frame.model_result !== undefined && (!isModel || frame.status !== "ok" ||
       (frame.model_result.type === "catalog") !== (payload.kind === "model_options"))) ||
       (isModel && frame.status === "ok" && !frame.model_result)) invalid("命令的模型结果无效。");
+  if ((frame.title !== undefined) !== (payload.kind === "summarize_title" && frame.status === "ok")) {
+    invalid("命令的标题结果无效。");
+  }
   if (payload.kind === "create") {
     if (frame.status === "ok" && !frame.session_id) invalid("创建结果缺少会话 ID。");
     const success = frame.status === "ok";
@@ -60,6 +65,9 @@ export async function applyResult(db: PoolClient, frame: CommandResult, refs: Se
     await db.query("UPDATE topics SET reasoning_effort = $2, reasoning_status = $3 WHERE id = $1", [topic.id,
       frame.status === "ok" ? payload.body.effort : topic.reasoning_effort,
       frame.status === "unknown" || (frame.status === "error" && command.receipt.was_unconfirmed) ? "unknown" : null]);
+  } else if (payload.kind === "summarize_title" && frame.title) {
+    await db.query("UPDATE topics SET title = $2 WHERE id = $1 AND auto_title AND title_revision = $3",
+      [topic.id, frame.title, command.receipt.title_revision]);
   } else if (payload.kind === "respond") {
     const closed = frame.control_status === "closed";
     const answer = closed && frame.status === "ok" ? payload.body.answer : undefined;
@@ -90,7 +98,8 @@ export async function applyEvent(db: PoolClient, frame: ConnectorEvent, refs: Se
   if (!await recordEvent(db, "event", frame.event_id, frame)) return;
 
   if (frame.type === "submission") {
-    await applySubmission(db, topic.id, frame.submission_id, frame.status, frame.error);
+    const completed = await applySubmission(db, topic.id, frame.submission_id, frame.status, frame.error);
+    if (completed) return queueTopicTitle(db, topic);
   } else if (frame.type === "message") {
     if (frame.submission_id) {
       const { rowCount } = await db.query("SELECT id FROM submissions WHERE id = $1 AND topic_id = $2", [frame.submission_id, topic.id]);

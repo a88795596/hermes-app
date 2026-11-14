@@ -1,5 +1,5 @@
 import type { ConnectorFrame, MessageProcessStep, ModelResult } from "@hermes-mobile/protocol";
-import { MAX_CLARIFY_CHOICE_BYTES, MAX_MESSAGE_PROCESS_STEPS, MAX_MESSAGE_PROCESS_TEXT_BYTES } from "@hermes-mobile/protocol";
+import { MAX_CLARIFY_CHOICE_BYTES, MAX_MESSAGE_PROCESS_STEPS, MAX_MESSAGE_PROCESS_TEXT_BYTES, MAX_TOPIC_TITLE_BYTES } from "@hermes-mobile/protocol";
 import { invalid, record, string, uuid } from "./validation.js";
 
 const controlStatuses = ["pending", "responding", "closed", "unknown"] as const;
@@ -66,13 +66,14 @@ export function connectorFrame(value: unknown): ConnectorFrame {
       invalid("管理操作结果无效。");
     }
     case "command_result": {
-      const body = record(value, ["type", "command_id", "status", "session_id", "admission_id", "error", "control_status", "model_result"]);
+      const body = record(value, ["type", "command_id", "status", "session_id", "admission_id", "error", "control_status", "model_result", "title"]);
       return { type, command_id: uuid(body.command_id, "命令 ID"), status: option(body.status, ["ok", "error", "unknown"]),
         ...(body.session_id === undefined ? {} : { session_id: string(body.session_id, "会话 ID", 512) }),
         ...(body.admission_id === undefined ? {} : { admission_id: string(body.admission_id, "受理 ID", 512) }),
         ...(body.error === undefined ? {} : { error: string(body.error, "错误提示", 1024) }),
         ...(body.control_status === undefined ? {} : { control_status: option(body.control_status, controlStatuses) }),
-        ...(body.model_result === undefined ? {} : { model_result: modelResult(body.model_result) }) };
+        ...(body.model_result === undefined ? {} : { model_result: modelResult(body.model_result) }),
+        ...(body.title === undefined ? {} : { title: string(body.title, "话题标题", MAX_TOPIC_TITLE_BYTES) }) };
     }
     case "topic_query_result": {
       const body = record(value, ["type", "request_id", "data", "error"]);

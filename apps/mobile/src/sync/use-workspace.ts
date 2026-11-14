@@ -16,6 +16,7 @@ interface Directory {
 export interface Pending {
   submission_id: string;
   topic_id: string;
+  profile_id?: string;
   text: string;
   created_at: number;
   error?: string;
@@ -26,7 +27,7 @@ const topicKey = (id: string) => `topic:${id}`;
 const pendingKey = (id: string) => `pending:${id}`;
 const revokeError = (error: unknown) => error instanceof ApiError && error.status === 401;
 
-export function useWorkspace(session: Session, topicId: string | null) {
+export function useWorkspace(session: Session, topicId: string | null, localTopic: boolean) {
   const [cache, setCache] = useState<Cache>();
   const [directory, setDirectory] = useState(emptyDirectory);
   const [detail, setDetail] = useState<TopicDetail>();
@@ -38,8 +39,12 @@ export function useWorkspace(session: Session, topicId: string | null) {
   const [storageError, setStorageError] = useState<string>();
   const [syncing, setSyncing] = useState(false);
   const [sessionEnded, setSessionEnded] = useState(false);
+  const hasRemoteTopic = !localTopic || detail?.topic.topic_id === topicId
+    || directory.topics.some((topic) => topic.topic_id === topicId);
+  const remoteId = hasRemoteTopic ? topicId : null;
   const active = useRef(true);
   const visibleTopic = useRef(topicId);
+  const remoteTopic = useRef(remoteId);
   const directoryLoad = useRef<Promise<void>>(undefined);
   const detailLoads = useRef(new Map<string, Promise<TopicDetail | undefined>>());
   const outboxLoad = useRef<Promise<void>>(undefined);
@@ -108,6 +113,10 @@ export function useWorkspace(session: Session, topicId: string | null) {
     }
   }, [endSession, session]);
 
+  const createTopic = useCallback((id: string, profileId: string, signal?: AbortSignal) => call<Topic>("/topics", {
+    method: "POST", body: { request_id: id, profile_id: profileId }, signal,
+  }), [call]);
+
   const loadDirectory = useCallback(() => {
     if (!cache || !active.current || revoked.current) return Promise.resolve();
     if (directoryLoad.current) return directoryLoad.current;
@@ -146,7 +155,14 @@ export function useWorkspace(session: Session, topicId: string | null) {
         const next = await call<TopicDetail>(`/topics/${id}`);
         if (!active.current || revoked.current) return;
         await cache.set(topicKey(id), next);
-        if (active.current && !revoked.current && visibleTopic.current === id) setDetail(next);
+        if (active.current && !revoked.current) {
+          if (visibleTopic.current === id) setDetail(next);
+          setDirectory((current) => {
+            const topic = current.topics.find((topic) => topic.topic_id === id);
+            if (!topic || (topic.title === next.topic.title && topic.status === next.topic.status)) return current;
+            return { ...current, topics: current.topics.map((topic) => topic.topic_id === id ? next.topic : topic) };
+          });
+        }
         return next;
       } catch (failure) {
         if (!active.current || revoked.current) return;
@@ -167,6 +183,7 @@ export function useWorkspace(session: Session, topicId: string | null) {
 
   useEffect(() => {
     visibleTopic.current = topicId;
+    remoteTopic.current = remoteId;
     setError(undefined);
     if (!cache || !topicId || sessionEnded) return;
     let cancelled = false;
@@ -177,10 +194,10 @@ export function useWorkspace(session: Session, topicId: string | null) {
       } catch (failure) {
         if (!cancelled) setError(failure instanceof Error ? failure.message : "无法读取本地历史记录。");
       }
-      if (!cancelled && foreground) await loadTopic(topicId);
+      if (!cancelled && foreground && remoteId) await loadTopic(remoteId);
     })();
     return () => { cancelled = true; };
-  }, [cache, foreground, loadTopic, sessionEnded, topicId]);
+  }, [cache, foreground, loadTopic, remoteId, sessionEnded, topicId]);
 
   const flush = useCallback(() => {
     if (!cache || !foreground || !active.current || revoked.current) return Promise.resolve();
@@ -189,16 +206,31 @@ export function useWorkspace(session: Session, topicId: string | null) {
       try {
         const entries = await cache.list<Pending>("pending:");
         entries.sort((a, b) => a.created_at - b.created_at);
+        const waiting = new Set<string>();
         for (const item of entries) {
           if (!active.current || revoked.current) return;
-          if (item.error) continue;
+          if (item.error || waiting.has(item.topic_id)) continue;
           try {
+            if (item.profile_id) {
+              const saved = await cache.get<TopicDetail>(topicKey(item.topic_id));
+              const topic = saved?.topic ?? await createTopic(item.topic_id, item.profile_id);
+              if (topic.status === "error") {
+                throw new ApiError(409, "TOPIC_CREATE_FAILED", topic.error ?? "Hermes 无法创建此会话。", false);
+              }
+            }
             await call<Message>(`/topics/${item.topic_id}/submissions`, {
               method: "POST", body: { submission_id: item.submission_id, text: item.text },
             });
           } catch (failure) {
             if (revoked.current) return;
-            if (!(failure instanceof ApiError) || failure.retryable || failure.status === 429 || failure.code === "TOPIC_NOT_READY") break;
+            if (failure instanceof ApiError && failure.code === "TOPIC_NOT_READY") {
+              waiting.add(item.topic_id);
+              const next = await loadTopic(item.topic_id);
+              if (next?.topic.status !== "error") continue;
+              await cache.set(pendingKey(item.submission_id), { ...item, error: next.topic.error ?? "Hermes 无法创建此会话。" });
+              continue;
+            }
+            if (!(failure instanceof ApiError) || failure.retryable || failure.status === 429) break;
             await cache.set(pendingKey(item.submission_id), { ...item, error: failure.message });
             continue;
           }
@@ -224,13 +256,13 @@ export function useWorkspace(session: Session, topicId: string | null) {
     })();
     outboxLoad.current = task;
     return task;
-  }, [cache, call, foreground, loadTopic]);
+  }, [cache, call, createTopic, foreground, loadTopic]);
 
   const refresh = useCallback(async () => {
     setSyncing(true);
     setError(undefined);
     try {
-      const id = visibleTopic.current;
+      const id = remoteTopic.current;
       await Promise.all([loadDirectory(), id ? loadTopic(id) : undefined]);
       await flush();
     } finally {
@@ -255,8 +287,12 @@ export function useWorkspace(session: Session, topicId: string | null) {
       if (notice) return;
       notice = setTimeout(() => {
         notice = undefined;
-        const id = visibleTopic.current;
-        if (updateDirectory || !id || [...affected].some((topic) => topic !== id)) void loadDirectory();
+        const id = remoteTopic.current;
+        if (updateDirectory || !id || [...affected].some((topic) => topic !== id)) {
+          const existing = directoryLoad.current;
+          if (existing) void existing.then(() => { if (!closed) schedule(); });
+          else void loadDirectory();
+        }
         if (id && (updateDirectory || affected.has(id))) {
           const existing = detailLoads.current.get(id);
           if (existing) void existing.then(() => { if (!closed) schedule(id); });
@@ -371,6 +407,17 @@ export function useWorkspace(session: Session, topicId: string | null) {
     if (id) await loadTopic(id);
   }
 
+  async function prepareTopic(id: string, profileId: string, signal?: AbortSignal) {
+    let topic = await createTopic(id, profileId, signal);
+    for (let tries = 0; topic.status === "creating" && tries < 20; tries += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      signal?.throwIfAborted();
+      topic = (await call<TopicDetail>(`/topics/${id}`, { signal })).topic;
+    }
+    void loadTopic(id);
+    if (topic.status !== "ready") throw new Error(topic.error ?? "Hermes 会话尚未就绪，请稍后重试。");
+  }
+
   async function waitForRequest<T extends Exclude<ModelRequest | ReasoningRequest, { status: "pending" }>>(
     path: string, requestId: string, input: object | undefined, signal: AbortSignal,
   ) {
@@ -407,6 +454,7 @@ export function useWorkspace(session: Session, topicId: string | null) {
     ready: Boolean(cache),
     refresh,
     call,
+    prepareTopic,
     enqueue,
     discard,
     sessionEnded,

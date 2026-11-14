@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { InboxItem, MobileNotice, TopicQuery } from "@hermes-mobile/protocol";
-import { isManagementOperation, isReasoningEffort, MAX_CONTROL_ANSWER_BYTES } from "@hermes-mobile/protocol";
+import { isManagementOperation, isReasoningEffort, MAX_CONTROL_ANSWER_BYTES, MAX_TOPIC_TITLE_BYTES } from "@hermes-mobile/protocol";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
 import { deviceAuth, matchesToken } from "../auth.js";
@@ -126,7 +126,7 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
     const body = record(request.body, ["request_id", "profile_id", "title"]);
     const id = uuid(body.request_id, "请求 ID");
     const profile = findProfile(refs, uuid(body.profile_id, "配置档案 ID"));
-    const title = string(body.title, "话题标题", 256);
+    const title = body.title === undefined ? undefined : string(body.title, "话题标题", MAX_TOPIC_TITLE_BYTES);
     const topic = await store.transaction((db) => createTopic(db, id, profile, title));
     changed(topic.topic_id);
     bridge.pump();

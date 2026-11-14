@@ -7,6 +7,7 @@ interface TopicRow {
   id: string;
   profile_ref: string;
   title: string;
+  auto_title: boolean;
   status: Topic["status"];
   error: string | null;
   session_id: string | null;

@@ -1,10 +1,10 @@
 import { randomUUID } from "expo-crypto";
 import { StatusBar } from "expo-status-bar";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, BackHandler, Keyboard, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import Animated from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
-import type { Topic } from "@hermes-mobile/protocol";
+import { DEFAULT_TOPIC_TITLE, topicTitlePreview } from "@hermes-mobile/protocol";
 import { Pairing } from "../auth/pairing";
 import { loadSession, saveSession, type Session } from "../auth/session";
 import { Conversation } from "../chat/conversation";
@@ -12,10 +12,10 @@ import { ManagementMenu, ManagementScreen, type ManagementPage } from "../manage
 import { Group, Row } from "../manage/shared";
 import { enablePushNotifications, pushAvailable } from "../notifications";
 import { pairDevice } from "../sync/api";
-import { useWorkspace } from "../sync/use-workspace";
+import { useWorkspace, type Pending } from "../sync/use-workspace";
 import { motion, useReduceMotion } from "../ui/motion";
 import { formatDateTime, profileLabel } from "../ui/text";
-import { Action, Card, EmptyState, Field, Icon, Notice, useTheme, type IconName } from "../ui/theme";
+import { Action, Card, EmptyState, Icon, Notice, useTheme, type IconName } from "../ui/theme";
 
 const sections = {
   topics: { title: "话题", icon: "topics" },
@@ -50,20 +50,23 @@ function Workspace({
   const { colors, styles } = useTheme();
   const reduced = useReduceMotion();
   const [{ page, transition, fromTopics }, setNavigation] = useState<Navigation>({ page: "topics", transition: "fade" });
-  const [topicId, setTopicId] = useState<string | null>(null);
+  const [chat, setChat] = useState<{ id: string; newProfileId?: string }>();
   const [profileId, setProfileId] = useState<string>();
-  const [title, setTitle] = useState("");
-  const [composing, setComposing] = useState(false);
-  const [creating, setCreating] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [push, setPush] = useState<"idle" | "enabling" | "enabled">("idle");
   const [error, setError] = useState<string>();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [showProcess, setShowProcess] = useState<Record<string, boolean>>({});
-  const createAttempt = useRef<{ request_id: string; profile_id: string; title: string }>(undefined);
-  const workspace = useWorkspace(session, topicId);
+  const topicId = chat?.id ?? null;
+  const workspace = useWorkspace(session, topicId, chat?.newProfileId !== undefined);
   const profile = workspace.profiles.find((item) => item.profile_id === profileId) ?? workspace.profiles[0];
   const topic = workspace.detail?.topic ?? workspace.topics.find((item) => item.topic_id === topicId);
+  const pendingTopics = new Map<string, Pending>();
+  for (const item of workspace.pending) {
+    if (item.profile_id && (pendingTopics.get(item.topic_id)?.created_at ?? Infinity) > item.created_at) {
+      pendingTopics.set(item.topic_id, item);
+    }
+  }
   const visibleTopics = workspace.topics.filter((item) => !profile || item.profile_id === profile.profile_id);
   const section = page === "topics" || page === "inbox" ? page : "settings";
   const settingsPage = page === "topics" || page === "inbox" || page === "settings" ? undefined : page;
@@ -71,6 +74,21 @@ function Workspace({
   const settingsParent = managementPage && profile ? "manage" : fromTopics ? "topics" : "settings";
   const backLabel = backLabels[settingsParent];
   const pageTitle = settingsPage === "connection" ? "连接" : settingsPage ? "管理" : sections[section].title;
+  const rows = [
+    ...[...pendingTopics.values()].filter((item) => item.profile_id === profile?.profile_id
+      && !visibleTopics.some((topic) => topic.topic_id === item.topic_id)).map((item) => ({
+        id: item.topic_id, newProfileId: item.profile_id, title: topicTitlePreview(item.text),
+        status: item.error ? "发送失败" : "等待发送",
+      })),
+    ...visibleTopics.map((item) => ({
+      id: item.topic_id, newProfileId: pendingTopics.get(item.topic_id)?.profile_id, title: item.title,
+      status: item.status === "creating" ? "创建中…" : item.status === "error" ? "创建失败" : "",
+    })),
+  ];
+  const pendingFirst = chat && pendingTopics.get(chat.id);
+  const chatTitle = pendingFirst && (!topic || (topic.title === DEFAULT_TOPIC_TITLE
+    && !workspace.detail?.messages.some((message) => message.role === "user")))
+    ? topicTitlePreview(pendingFirst.text) : topic?.title ?? (chat?.newProfileId ? DEFAULT_TOPIC_TITLE : "话题");
   const connected = workspace.network === "online" && workspace.connector_online === true;
   const connection = workspace.network === "offline" ? "离线"
     : workspace.network === "connecting" ? "连接中…"
@@ -87,7 +105,7 @@ function Workspace({
   const closeTopic = useCallback(() => {
     Keyboard.dismiss();
     setNavigation((current) => ({ ...current, transition: "pop" }));
-    setTopicId(null);
+    setChat(undefined);
   }, []);
 
   useEffect(() => {
@@ -101,10 +119,6 @@ function Workspace({
         showPage(settingsParent, "pop");
         return true;
       }
-      if (page === "topics" && composing && !creating) {
-        setComposing(false);
-        return true;
-      }
       if (page !== "topics") {
         showPage("topics");
         return true;
@@ -112,32 +126,7 @@ function Workspace({
       return false;
     });
     return () => subscription.remove();
-  }, [closeTopic, composing, creating, page, settingsPage, settingsParent, showPage, topicId]);
-
-  async function create() {
-    const name = title.trim();
-    if (!profile || !name || creating) return;
-    const prior = createAttempt.current;
-    const body = prior?.title === name && prior.profile_id === profile.profile_id
-      ? prior
-      : { request_id: randomUUID(), profile_id: profile.profile_id, title: name };
-    createAttempt.current = body;
-    setCreating(true);
-    setError(undefined);
-    try {
-      const next = await workspace.call<Topic>("/topics", { method: "POST", body });
-      createAttempt.current = undefined;
-      setTitle("");
-      setComposing(false);
-      Keyboard.dismiss();
-      setTopicId(next.topic_id);
-      await workspace.refresh();
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "无法创建话题。");
-    } finally {
-      setCreating(false);
-    }
-  }
+  }, [closeTopic, page, settingsPage, settingsParent, showPage, topicId]);
 
   async function enablePush() {
     setPush("enabling");
@@ -187,23 +176,30 @@ function Workspace({
     );
   }
 
-  if (topicId) {
-    const processVisible = showProcess[topicId] ?? false;
+  function startConversation(newProfileId: string) {
+    showPage("topics");
+    setProfileId(newProfileId);
+    setChat({ id: randomUUID(), newProfileId });
+  }
+
+  if (chat) {
+    const { id, newProfileId } = chat;
+    const processVisible = showProcess[id] ?? false;
     return (
-      <Animated.View key={topicId} style={[styles.frame, !reduced && motion.push]}>
+      <Animated.View key={id} style={[styles.frame, !reduced && motion.push]}>
         <View style={[styles.header, layout.chatHeader, { borderBottomColor: colors.edge, backgroundColor: colors.surface }]}>
           <Pressable accessibilityRole="button" accessibilityLabel="返回话题列表" hitSlop={6} onPress={closeTopic}
             style={({ pressed }) => [layout.back, layout.chatBack, pressed && styles.faded]}>
             <Icon name="back" size={17} color={colors.accent} />
             <Text style={[styles.text, { color: colors.accent }]}>{sections.topics.title}</Text>
           </Pressable>
-          <Text accessibilityRole="header" numberOfLines={2} style={[styles.heading, layout.grow, layout.chatTitle]}>{topic?.title ?? "话题"}</Text>
+          <Text accessibilityRole="header" numberOfLines={2} style={[styles.heading, layout.grow, layout.chatTitle]}>{chatTitle}</Text>
           <View style={layout.processToggle}>
             <Text style={styles.caption} accessible={false}>过程</Text>
             <Switch
               accessibilityLabel="显示回复过程"
               value={processVisible}
-              onValueChange={(visible) => setShowProcess((current) => ({ ...current, [topicId]: visible }))}
+              onValueChange={(visible) => setShowProcess((current) => ({ ...current, [id]: visible }))}
               hitSlop={8}
               ios_backgroundColor={colors.edge}
               trackColor={{ false: colors.edge, true: colors.accentFill }}
@@ -211,18 +207,16 @@ function Workspace({
           </View>
         </View>
         <Conversation
-          id={topicId}
+          id={id}
           topic={topic}
+          newProfileId={newProfileId}
           showProcess={processVisible}
           workspace={workspace}
-          draft={drafts[topicId] ?? ""}
-          onDraftChange={(value) => setDrafts((current) => ({ ...current, [topicId]: value }))}
+          draft={drafts[id] ?? ""}
+          onDraftChange={(value) => setDrafts((current) => ({ ...current, [id]: value }))}
           onNewTopic={() => {
-            showPage("topics");
-            setProfileId(topic?.profile_id);
-            setTitle("");
-            setComposing(true);
-            setTopicId(null);
+            const profileId = topic?.profile_id ?? newProfileId;
+            if (profileId) startConversation(profileId);
           }}
         />
       </Animated.View>
@@ -240,11 +234,10 @@ function Workspace({
         <View style={layout.pageHeader}>
           <Text accessibilityRole="header" style={[styles.title, layout.grow]}>{pageTitle}</Text>
           {page === "topics" && profile && (
-            <Pressable accessibilityRole="button" accessibilityLabel={composing ? "关闭新建话题" : "新建话题"}
-              accessibilityState={{ expanded: composing, disabled: creating }} disabled={creating}
-              onPress={() => { if (composing) Keyboard.dismiss(); setComposing(!composing); setError(undefined); }}
-              style={({ pressed }) => [layout.compose, { backgroundColor: colors.tint }, (pressed || creating) && styles.faded]}>
-              <Icon name={composing ? "close" : "compose"} color={colors.accent} size={19} />
+            <Pressable accessibilityRole="button" accessibilityLabel="新建会话"
+              onPress={() => startConversation(profile.profile_id)}
+              style={({ pressed }) => [layout.compose, { backgroundColor: colors.tint }, pressed && styles.faded]}>
+              <Icon name="compose" color={colors.accent} size={19} />
             </Pressable>
           )}
         </View>
@@ -267,32 +260,21 @@ function Workspace({
                 ))}
               </View>
             )}
-            {composing && profile && (
-              <Animated.View style={!reduced && motion.reveal}>
-                <Card>
-                  <Text accessibilityRole="header" style={styles.heading}>新建话题</Text>
-                  <Field autoFocus accessibilityLabel="话题名称" placeholder="话题名称" value={title} editable={!creating}
-                    onChangeText={setTitle} onSubmitEditing={() => void create()} returnKeyType="done" />
-                  <Action primary title={creating ? "创建中…" : "创建话题"}
-                    disabled={!title.trim() || creating || workspace.network !== "online"} onPress={() => void create()} />
-                </Card>
-              </Animated.View>
-            )}
-            {visibleTopics.length > 0 ? (
+            {rows.length > 0 ? (
               <View style={[layout.group, { backgroundColor: colors.surface }]}>
-                {visibleTopics.map((item, index) => (
-                  <Pressable key={item.topic_id} accessibilityRole="button" onPress={() => setTopicId(item.topic_id)}
+                {rows.map(({ id, newProfileId, title, status }, index) => (
+                  <Pressable key={id} accessibilityRole="button" onPress={() => setChat({ id, newProfileId })}
                     style={({ pressed }) => [styles.listItem, index > 0 && layout.divided, { borderColor: colors.edge }, pressed && { backgroundColor: colors.secondary }]}>
                     <View style={[layout.rowIcon, { backgroundColor: colors.tint }]}><Icon name="chat" size={17} color={colors.accent} /></View>
                     <View style={layout.grow}>
-                      <Text style={styles.heading}>{item.title}</Text>
-                      {item.status !== "ready" && <Text style={styles.caption}>{item.status === "creating" ? "创建中…" : "创建失败"}</Text>}
+                      <Text numberOfLines={2} style={styles.heading}>{title}</Text>
+                      {!!status && <Text style={styles.caption}>{status}</Text>}
                     </View>
                     <Icon name="chevron" size={14} color={colors.muted} />
                   </Pressable>
                 ))}
               </View>
-            ) : workspace.ready && !composing ? (
+            ) : workspace.ready ? (
               <EmptyState icon="topics" title="暂无话题" description="点击新建按钮开始对话。" />
             ) : null}
           </>

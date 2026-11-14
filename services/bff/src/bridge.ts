@@ -30,6 +30,8 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
       return;
     }
     const sent = new Map<string, number>();
+    const summarizing = new Set<string>();
+    const titleSupported = request.headers["x-hermes-mobile-topic-title"] === "1";
     const sessions = new Map<string, string>();
     const watches = new Set<string>();
     const reasoning = request.headers["x-hermes-mobile-reasoning"] === "1";
@@ -74,15 +76,20 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
               `SELECT c.payload, (t.reasoning_effort IS NOT NULL OR t.reasoning_status IS NOT NULL) AS reasoning_required
                FROM commands c JOIN topics t ON t.id = c.topic_id
                WHERE c.result IS NULL AND t.profile_ref = ANY($1)
-               ORDER BY c.position`, [[...refs]],
+                 AND ($2::boolean OR c.payload->>'kind' <> 'summarize_title')
+               ORDER BY c.position`, [[...refs], titleSupported],
             );
             for (const { payload, reasoning_required } of rows) {
               if (sent.size >= 64 || !isCurrent()) break;
               if (sent.has(payload.command_id)) continue;
               if (!reasoning && (payload.kind === "select_reasoning" || (payload.kind === "submit" && reasoning_required))) continue;
               if (payload.session_id && sessions.get(payload.topic_id) !== payload.session_id) continue;
+              if (payload.kind === "summarize_title" && summarizing.size >= 4) continue;
               await store.query("UPDATE commands SET dispatched = true WHERE id = $1 AND NOT dispatched", [payload.command_id]);
-              if (send(payload)) sent.set(payload.command_id, Date.now());
+              if (send(payload)) {
+                sent.set(payload.command_id, Date.now());
+                if (payload.kind === "summarize_title") summarizing.add(payload.command_id);
+              }
             }
           } while (needsPump && isCurrent());
         } finally {
@@ -183,6 +190,7 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
             const topic = await store.transaction((db) => applyResult(db, frame, refs));
             if (topic.session_id) sessions.set(topic.id, topic.session_id);
             sent.delete(frame.command_id);
+            summarizing.delete(frame.command_id);
             send({ type: "ack", id: frame.command_id });
             changed(topic.id);
             pump();
@@ -191,9 +199,10 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
             send({ type: "ack", id: frame.event_id });
             changed();
           } else {
-            await store.transaction((db) => applyEvent(db, frame, refs, sessions));
+            const queuedTitle = await store.transaction((db) => applyEvent(db, frame, refs, sessions));
             send({ type: "ack", id: frame.event_id });
             changed(frame.topic_id);
+            if (queuedTitle) pump();
           }
         } finally {
           queuedFrames -= 1;

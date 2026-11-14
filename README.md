@@ -61,7 +61,7 @@ pnpm typecheck
 
    HTTP 适配器使用 Hermes API 管理的会话。如果安装了较新版本的 Hermes，可将 `HERMES_API_URL` 留空，以网关所用的账户在同一台主机上运行连接器，并将 `HERMES_BIN` 指向支持 `gateway attach --json` 的命令行程序。连接器与 BFF 的数据库应配套使用，绑定同一个 Hermes 后端和传输方式。试用其他后端时请使用独立的数据库。
 
-   HTTP 模式可使用配套的 `hermes-mobile-runtime` 镜像转发思考和阶段说明。它也修复了部分 Hermes 版本的「技能」菜单报错。构建后使用该镜像启动 Hermes 容器。
+   HTTP Runs 模式使用配套的 `hermes-mobile-runtime` 镜像生成自动标题、转发思考和阶段说明。它也修复了部分 Hermes 版本的「技能」菜单报错。构建后使用该镜像更新 Hermes 容器，并复用原有配置和数据卷。Canonical Gateway 模式使用 Hermes 自带的 `llm.oneshot` 生成标题。 [Hermes 单次模型调用](https://github.com/NousResearch/hermes-agent/blob/main/gateway/session_llm_oneshot.py)
 
    ```sh
    docker build -f services/connector/Dockerfile.hermes -t hermes-mobile-runtime services/connector
@@ -83,6 +83,8 @@ pnpm typecheck
 <a name="interactive-chat"></a>
 
 ## 聊天交互
+
+点击「新建会话」直接打开聊天。首条发送的消息会成为默认标题。每轮成功完成后，Hermes 使用当前标题和最近四轮已完成的对话生成标题，聊天顶部和话题列表会同步更新。
 
 点击会话标题右侧的「过程」开关，可以查看每条回复的思考、阶段说明和工具执行状态。开关在本次使用期间按话题记忆，默认关闭。能查看哪些过程取决于 Hermes 和模型实际提供的数据。
 

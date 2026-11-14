@@ -28,7 +28,9 @@ async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: Jso
     const path = req.url!.replace('/p/default', '');
     calls.push({ path, body });
     res.setHeader('content-type', 'application/json');
-    if (path === '/api/model/options?include_unconfigured=false') {
+    if (path === '/api/hermes-mobile/title') {
+      res.end(JSON.stringify({ text: '「移动端   同步排查」' }));
+    } else if (path === '/api/model/options?include_unconfigured=false') {
       res.end(JSON.stringify({
         provider: 'nous', model: 'default-model',
         providers: [
@@ -88,9 +90,11 @@ async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: Jso
     connector = createHttpConnector({ ...options, spool });
   }
   async function command(payload: Pick<Command, 'kind' | 'body'>, id = randomUUID() as string) {
-    await connector.command({
+    const frame = bridgeFrame(JSON.stringify({
       ...payload, type: 'command', command_id: id, topic_id: topicId, profile_ref: 'default', session_id: sessionId,
-    } as Command, () => true);
+    }));
+    assert(frame.type === 'command');
+    await connector.command(frame, () => true);
     return frames.find((frame) => frame.type === 'command_result' && frame.command_id === id);
   }
   return { calls, frames, restart, command, disconnectSession: () => { sessionAvailable = false; } };
@@ -114,6 +118,18 @@ async function waitForQuestion(frames: JsonObject[]) {
   assert(typeof control_id === 'string');
   return { control_id, choices, multi_select };
 }
+
+test('HTTP 模式使用单次模型调用生成标题，重放命令沿用已保存的结果', async (t) => {
+  const { command, calls, restart } = await harness(t);
+  const id = randomUUID();
+  const input = '{"turns":[{"user":"排查同步延迟","assistant":"已检查重试"}]}';
+  const payload = { kind: 'summarize_title', body: { input } } as const;
+  assert.equal((await command(payload, id))?.title, '移动端 同步排查');
+  restart();
+  assert.equal((await command(payload, id))?.title, '移动端 同步排查');
+  assert.deepEqual(calls.map(({ path }) => path), ['/api/hermes-mobile/title']);
+  assert.equal(calls[0].body.input, input);
+});
 
 test('HTTP 模式的模型选择器返回已配置的服务商目录，并在重启后保留选择', async (t) => {
   const { command, calls, restart } = await harness(t);
@@ -142,11 +158,13 @@ test('HTTP Runs 保留话题的思考强度，恢复默认后不再覆盖 Hermes
   const { command, calls, restart } = await harness(t);
   assert.equal((await command({ kind: 'select_reasoning', body: { effort: 'high' } }))?.status, 'ok');
   restart();
-  await command({ kind: 'submit', body: { submission_id: randomUUID(), text: '使用高强度' } });
+  const highId = randomUUID();
+  await command({ kind: 'submit', body: { submission_id: highId, text: '使用高强度' } }, highId);
   assert.deepEqual(calls.find((call) => call.path === '/v1/runs')?.body.model_options, { reasoning_effort: 'high' });
 
   assert.equal((await command({ kind: 'select_reasoning', body: { effort: null } }))?.status, 'ok');
-  await command({ kind: 'submit', body: { submission_id: randomUUID(), text: '使用档案默认值' } });
+  const defaultId = randomUUID();
+  await command({ kind: 'submit', body: { submission_id: defaultId, text: '使用档案默认值' } }, defaultId);
   assert.equal(calls.filter((call) => call.path === '/v1/runs').at(-1)?.body.model_options, undefined);
 });
 
@@ -254,4 +272,6 @@ test('HTTP Runs 将思考、阶段说明和工具状态随最终回复保存', {
     { kind: 'tool', id: 'call-1', name: 'read_file', status: 'succeeded' },
   ]);
   assert(replies.every((frame) => frame.message_id === finalReply()?.message_id && frame.submission_id === id));
+  const completed = frames.findIndex((frame) => frame.type === 'submission' && frame.status === 'final');
+  assert(completed > frames.indexOf(finalReply()!), '应先投影最终回复，再触发本轮标题摘要');
 });

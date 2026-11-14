@@ -27,6 +27,8 @@ export function openStore(connectionString: string) {
         );
         ALTER TABLE topics ADD COLUMN IF NOT EXISTS reasoning_effort text;
         ALTER TABLE topics ADD COLUMN IF NOT EXISTS reasoning_status text;
+        ALTER TABLE topics ADD COLUMN IF NOT EXISTS auto_title boolean NOT NULL DEFAULT false;
+        ALTER TABLE topics ADD COLUMN IF NOT EXISTS title_revision bigint NOT NULL DEFAULT 0;
         CREATE TABLE IF NOT EXISTS messages (
           id uuid PRIMARY KEY,
           topic_id uuid NOT NULL REFERENCES topics(id),
