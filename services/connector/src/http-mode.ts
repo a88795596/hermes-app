@@ -1,5 +1,5 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import type { Command, Control, ModelSelection, TopicQuery, TopicQueryData } from '@hermes-mobile/protocol';
+import type { Command, Control, ModelSelection, ReasoningEffort, TopicQuery, TopicQueryData } from '@hermes-mobile/protocol';
 import { MAX_CLARIFY_CHOICE_BYTES } from '@hermes-mobile/protocol';
 import { integer, object, string } from './gateway.js';
 import type { JsonObject } from './gateway.js';
@@ -263,7 +263,7 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
     let receipt = result(command_id, 'unknown', { error: unknown });
     let binding: Binding | undefined;
     let turn: Turn | undefined;
-    let selection: (ModelSelection & { topicId: string }) | undefined;
+    let selection: ((ModelSelection | { effort: ReasoningEffort | null }) & { topicId: string }) | undefined;
     try {
       if (!profileName.test(profile_ref)) {
         receipt = result(command_id, 'error', { error: 'Hermes 配置档案无效' });
@@ -303,9 +303,18 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
             }
           }
         }
+      } else if (command.kind === 'select_reasoning') {
+        receipt = result(command_id, 'error', { error: '无法访问 Hermes 会话，请检查连接后重试。' });
+        const { response, data } = await json(profile_ref, `/api/sessions/${encodeURIComponent(bound.sessionId)}`);
+        if (response.ok && object(data?.session)?.id === bound.sessionId && current() && !shutdown.signal.aborted) {
+          selection = { topicId: topic_id, effort: command.body.effort };
+          receipt = result(command_id, 'ok');
+        }
       } else if (command.kind === 'submit') {
+        const effort = spool.reasoningEffort(topic_id);
         const { response, data } = await json(profile_ref, '/v1/runs', {
           session_id: bound.sessionId, input: command.body.text, ...spool.modelSelection(topic_id),
+          ...(effort && { model_options: { reasoning_effort: effort } }),
         }, command_id);
         const id = string(data?.run_id);
         if (response.status === 202 && id && runId.test(id)) {

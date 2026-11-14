@@ -4,7 +4,7 @@ import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable,
 import type { Control, Message, SessionStatus, Skill, Topic } from "@hermes-mobile/protocol";
 import type { useWorkspace } from "../sync/use-workspace";
 import { Action, Card, EmptyState, Field, Icon, Notice, useTheme } from "../ui/theme";
-import { ComposerMenu, type ComposerCommand } from "./composer-menu";
+import { ComposerMenu, ReasoningMenu, reasoningLabels, type ComposerCommand } from "./composer-menu";
 import { ModelPicker } from "./model-picker";
 
 const messageStatus: Record<Message["status"], string> = {
@@ -164,7 +164,7 @@ export function Conversation({
   const [stopping, setStopping] = useState(false);
   const [draftFocused, setDraftFocused] = useState(false);
   const [sendFocused, setSendFocused] = useState(false);
-  const [menu, setMenu] = useState<"commands" | "skills">();
+  const [menu, setMenu] = useState<"commands" | "skills" | "reasoning">();
   const [error, setError] = useState<string>();
   const [modelPicker, setModelPicker] = useState(false);
   const [commandNotice, setCommandNotice] = useState<string>();
@@ -191,11 +191,21 @@ export function Conversation({
   const canSend = topic?.status === "ready" && workspace.ready && !sending;
   const canControl = workspace.network === "online" && workspace.connector_online === true;
   const isModelCommand = draft.trim().toLowerCase() === "/model";
-  const sendDisabled = !canSend || !draft.trim() || (isModelCommand && !canControl);
   const activeSubmission = messages.find((message) => message.role === "user" && message.status === "streaming")?.submission_id;
   const running = Boolean(activeSubmission);
-  const modelBusy = pending.length > 0 || messages.some((message) => message.role === "user" &&
+  const topicBusy = sending || pending.some((item) => !item.error) || messages.some((message) => message.role === "user" &&
     ["accepted", "queued", "streaming"].includes(message.status));
+  const reasoning = topic?.reasoning_effort ?? null;
+  const reasoningStatus = topic?.reasoning_status;
+  const reasoningLegacy = canControl && workspace.reasoning_supported !== true;
+  const reasoningBlocked = reasoningLegacy && (reasoningStatus !== undefined || reasoning !== null);
+  const sendDisabled = !canSend || !draft.trim() || (isModelCommand ? !canControl : reasoningBlocked);
+  const reasoningUnavailable = !canControl ? "重新连接 Hermes 后即可切换思考强度。"
+    : reasoningLegacy ? "更新服务端和连接器后即可切换思考强度。"
+    : topicBusy ? "请等待当前消息处理完成，再切换思考强度。" : undefined;
+  const reasoningLabel = reasoningBlocked ? "不可用"
+    : reasoningStatus === "pending" ? "切换中" : reasoningStatus === "unknown" ? "待确认"
+    : reasoning === null ? "跟随配置档案" : reasoningLabels[reasoning];
 
   function keepLatestVisible() {
     if (pinned.current) scroll.current?.scrollToEnd({ animated: false });
@@ -207,9 +217,8 @@ export function Conversation({
 
   async function send() {
     const text = draft.trim();
-    if (!text || !canSend) return;
+    if (sendDisabled) return;
     if (isModelCommand) {
-      if (!canControl) return;
       Keyboard.dismiss();
       setError(undefined);
       setCommandNotice(undefined);
@@ -301,7 +310,12 @@ export function Conversation({
 
   return (
     <KeyboardAvoidingView style={styles.frame} behavior={Platform.OS === "web" ? undefined : "padding"}>
-      {menu && (
+      {menu === "reasoning" ? (
+        <ReasoningMenu effort={reasoningStatus || reasoningBlocked ? undefined : reasoning}
+          status={reasoningStatus} unavailable={reasoningUnavailable}
+          onClose={() => setMenu(undefined)}
+          onRequest={(requestId, effort, signal) => workspace.requestReasoning(id, requestId, effort, signal)} />
+      ) : menu && (
         <ComposerMenu kind={menu} id={id} call={workspace.call}
           profile={workspace.profiles.find((item) => item.profile_id === topic?.profile_id)?.label}
           connected={canControl}
@@ -407,12 +421,16 @@ export function Conversation({
         {error && <Notice>{error}</Notice>}
         {commandNotice && <Text accessibilityLiveRegion="polite" style={styles.muted}>{commandNotice}</Text>}
         {isModelCommand && !canControl && <Text style={styles.muted}>连接 Hermes 后即可选择模型。</Text>}
-        <View style={styles.row}>
-          <Action title="命令" disabled={topic?.status !== "ready"} onPress={() => { Keyboard.dismiss(); setMenu("commands"); }} />
-          <Action title="技能" disabled={topic?.status !== "ready"} onPress={() => { Keyboard.dismiss(); setMenu("skills"); }} />
+        {reasoningBlocked && <Text accessibilityLiveRegion="polite" style={styles.muted}>更新 Hermes 连接器后可继续发送。</Text>}
+        <View style={[styles.row, chat.toolbar]}>
+          <Action compact title="命令" disabled={topic?.status !== "ready"} onPress={() => { Keyboard.dismiss(); setMenu("commands"); }} />
+          <Action compact title="技能" disabled={topic?.status !== "ready"} onPress={() => { Keyboard.dismiss(); setMenu("skills"); }} />
+          <Action compact disclosure title={reasoningLabel === "跟随配置档案" ? "思考强度" : `思考 · ${reasoningLabel}`}
+            accessibilityLabel={`思考强度：${reasoningLabel}`} selected={reasoning !== null && !reasoningLegacy} disabled={topic?.status !== "ready"}
+            onPress={() => { Keyboard.dismiss(); setMenu("reasoning"); }} />
           {running && (
-            <Action title={stopping ? "正在请求停止…" : "停止回复"} icon="stop"
-              disabled={!canControl || stopping} onPress={() => void stop()} />
+            <Action compact title={stopping ? "停止中…" : "停止回复"} icon="stop"
+              accessibilityLabel={stopping ? "正在请求停止回复" : undefined} disabled={!canControl || stopping} onPress={() => void stop()} />
           )}
         </View>
         <View style={[chat.composerRow, { backgroundColor: colors.field, borderColor: draftFocused ? colors.accent : colors.edge }]}>
@@ -453,8 +471,8 @@ export function Conversation({
       </View>
       {modelPicker && (
         <ModelPicker
-          enabled={canControl && !modelBusy}
-          unavailable={modelBusy ? "请等待当前回复结束，再切换模型。"
+          enabled={canControl && !topicBusy}
+          unavailable={topicBusy ? "请等待当前回复结束，再切换模型。"
             : !canControl ? "重新连接 Hermes 后即可选择模型。" : undefined}
           onClose={() => setModelPicker(false)}
           onRequest={(requestId, selection, signal) => workspace.requestModel(id, requestId, selection, signal)}
@@ -481,7 +499,8 @@ const chat = StyleSheet.create({
   outgoingBubble: { borderBottomEndRadius: 5 },
   messageText: { fontSize: 14, lineHeight: 20 },
   outgoingStatus: { textAlign: "right", marginEnd: 3 },
-  composer: { paddingHorizontal: 10, paddingVertical: 6, borderTopWidth: StyleSheet.hairlineWidth, gap: 6 },
+  composer: { paddingHorizontal: 10, paddingBottom: 6, borderTopWidth: StyleSheet.hairlineWidth, gap: 2 },
+  toolbar: { gap: 8 },
   composerRow: {
     flexDirection: "row",
     alignItems: "flex-end",

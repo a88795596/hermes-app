@@ -25,8 +25,8 @@ async function applySubmission(db: PoolClient, topicId: string, id: string, stat
 }
 
 export async function applyResult(db: PoolClient, frame: CommandResult, refs: Set<string>) {
-  const { rows } = await db.query<{ payload: Command; result: CommandResult | null }>(
-    "SELECT payload, result FROM commands WHERE id = $1", [frame.command_id],
+  const { rows } = await db.query<{ payload: Command; result: CommandResult | null; receipt: { was_unconfirmed?: boolean } }>(
+    "SELECT payload, result, receipt FROM commands WHERE id = $1", [frame.command_id],
   );
   const command = rows[0];
   if (!command) missing("命令");
@@ -56,6 +56,10 @@ export async function applyResult(db: PoolClient, frame: CommandResult, refs: Se
     if (frame.status === "ok" && !frame.admission_id) invalid("提交结果缺少受理 ID。");
     const status = frame.status === "ok" ? "queued" : frame.status === "error" ? "failed" : "unknown";
     await applySubmission(db, topic.id, payload.body.submission_id, status, frame.error, frame.admission_id);
+  } else if (payload.kind === "select_reasoning") {
+    await db.query("UPDATE topics SET reasoning_effort = $2, reasoning_status = $3 WHERE id = $1", [topic.id,
+      frame.status === "ok" ? payload.body.effort : topic.reasoning_effort,
+      frame.status === "unknown" || (frame.status === "error" && command.receipt.was_unconfirmed) ? "unknown" : null]);
   } else if (payload.kind === "respond") {
     const closed = frame.control_status === "closed";
     const answer = closed && frame.status === "ok" ? payload.body.answer : undefined;

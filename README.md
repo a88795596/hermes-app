@@ -82,6 +82,8 @@ pnpm typecheck
 
 在话题中发送 `/model`，先选择服务商，再选择模型。菜单会显示当前 Hermes 配置档案下可用的服务商，并标记当前选项。等本轮回复完成后即可切换模型，新选择对当前话题的后续对话生效。
 
+在输入框上方点「思考强度」，可为当前话题选择档位，或恢复使用 Hermes 配置档案的默认设置。切换需要会话空闲，并且移动端、BFF 和连接器均已更新。HTTP Runs 使用支持 `model_options.reasoning_effort` 的 Hermes API；Canonical Gateway 使用支持 `reasoning` 操作的 `session.mutate`。各模型实际采用的档位由 Hermes 和服务商决定。
+
 当智能体调用 `clarify` 时，点击选项即可回答当前的问题。澄清卡片也支持多选、输入自定义答案和跳过问题。
 
 使用 HTTP Runs 时，Hermes API 对应的配置档案须公开运行中等待处理的交互，并启用 `clarify` 工具。在开发容器中，用 Hermes 用户执行以下命令即可启用该工具。

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { BridgeFrame, Command, CommandResult } from '@hermes-mobile/protocol';
-import { isManagementOperation, MAX_CONTROL_ANSWER_BYTES } from '@hermes-mobile/protocol';
+import { isManagementOperation, isReasoningEffort, MAX_CONTROL_ANSWER_BYTES } from '@hermes-mobile/protocol';
 import { object } from './gateway.js';
 
 export function stableId(parts: string[]): string {
@@ -66,6 +66,11 @@ export function bridgeFrame(source: string): BridgeFrame {
         return { ...base, session_id, kind: 'select_model', body: {
           provider: body.provider, model: body.model, ...(body.confirm === undefined ? {} : { confirm: body.confirm }),
         } };
+      }
+      break;
+    case 'select_reasoning':
+      if (body.effort === null || isReasoningEffort(body.effort)) {
+        return { ...base, session_id, kind: 'select_reasoning', body: { effort: body.effort } };
       }
       break;
     case 'submit':

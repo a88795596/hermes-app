@@ -14,6 +14,8 @@ export interface Topic {
   title: string;
   status: "creating" | "ready" | "error";
   error?: string;
+  reasoning_effort?: ReasoningEffort;
+  reasoning_status?: "pending" | "unknown";
 }
 
 export type MessageStatus = "accepted" | "queued" | "streaming" | "final" | "failed" | "unknown" | "cancelled";
@@ -59,6 +61,18 @@ export type ModelResult =
 export type ModelRequest =
   | { status: "pending" }
   | { status: "ok"; model_result: ModelResult }
+  | { status: "error" | "unknown"; error: string };
+
+export const reasoningEfforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
+export type ReasoningEffort = (typeof reasoningEfforts)[number];
+
+export function isReasoningEffort(value: unknown): value is ReasoningEffort {
+  return reasoningEfforts.some((effort) => effort === value);
+}
+
+export type ReasoningRequest =
+  | { status: "pending" }
+  | { status: "ok" }
   | { status: "error" | "unknown"; error: string };
 
 export interface TopicDetail {
@@ -124,6 +138,7 @@ export type Command = CommandEnvelope & (
   | { kind: "respond"; body: { control_id: string; response_id: string; answer: string } }
   | { kind: "model_options"; body: Record<string, never> }
   | { kind: "select_model"; body: ModelSelection & { confirm?: string } }
+  | { kind: "select_reasoning"; body: { effort: ReasoningEffort | null } }
   | { kind: "watch"; body: Record<string, never> }
 );
 

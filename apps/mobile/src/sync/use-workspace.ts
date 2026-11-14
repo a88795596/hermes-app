@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
-import type { Control, InboxItem, Message, MobileNotice, ModelRequest, ModelSelection, Profile, Topic, TopicDetail } from "@hermes-mobile/protocol";
+import type { Control, InboxItem, Message, MobileNotice, ModelRequest, ModelSelection, Profile, ReasoningEffort, ReasoningRequest, Topic, TopicDetail } from "@hermes-mobile/protocol";
 import type { Session } from "../auth/session";
 import { openCache, type Cache } from "../db/cache";
 import { ApiError, request } from "./api";
@@ -10,6 +10,7 @@ interface Directory {
   topics: Topic[];
   inbox: InboxItem[];
   connector_online?: boolean;
+  reasoning_supported?: boolean;
 }
 
 export interface Pending {
@@ -116,7 +117,7 @@ export function useWorkspace(session: Session, topicId: string | null) {
           call<Profile[]>("/profiles"),
           call<Topic[]>("/topics"),
           call<InboxItem[]>("/inbox"),
-          call<{ connector_online: boolean }>("/status"),
+          call<{ connector_online: boolean; reasoning_supported?: boolean }>("/status"),
         ]);
         if (!active.current || revoked.current) return;
         const next = { profiles, topics, inbox, ...status };
@@ -370,16 +371,28 @@ export function useWorkspace(session: Session, topicId: string | null) {
     if (id) await loadTopic(id);
   }
 
-  async function requestModel(id: string, requestId: string, selection: ModelSelection & { confirm?: string } | undefined, signal: AbortSignal) {
-    const path = `/topics/${id}/model-requests`;
-    await call<ModelRequest>(path, { method: "POST", body: { request_id: requestId, ...selection }, signal });
+  async function waitForRequest<T extends Exclude<ModelRequest | ReasoningRequest, { status: "pending" }>>(
+    path: string, requestId: string, input: object | undefined, signal: AbortSignal,
+  ) {
+    await call(path, { method: "POST", body: { request_id: requestId, ...input }, signal });
     for (let tries = 0; tries < 50; tries += 1) {
       signal.throwIfAborted();
-      const result = await call<ModelRequest>(`${path}/${requestId}`, { signal });
+      const result = await call<T | { status: "pending" }>(`${path}/${requestId}`, { signal });
       if (result.status !== "pending") return result;
       await new Promise((resolve) => setTimeout(resolve, 650));
     }
     throw new Error("Hermes 尚未确认请求，请重试以查看状态。");
+  }
+
+  async function requestReasoning(id: string, requestId: string, effort: ReasoningEffort | null, signal: AbortSignal) {
+    try {
+      return await waitForRequest<Exclude<ReasoningRequest, { status: "pending" }>>(
+        `/topics/${id}/reasoning-requests`, requestId, { effort }, signal,
+      );
+    } finally {
+      await detailLoads.current.get(id);
+      await loadTopic(id);
+    }
   }
 
   return {
@@ -399,6 +412,8 @@ export function useWorkspace(session: Session, topicId: string | null) {
     sessionEnded,
     finishSession,
     answer,
-    requestModel,
+    requestModel: (id: string, requestId: string, selection: ModelSelection & { confirm?: string } | undefined, signal: AbortSignal) =>
+      waitForRequest<Exclude<ModelRequest, { status: "pending" }>>(`/topics/${id}/model-requests`, requestId, selection, signal),
+    requestReasoning,
   };
 }

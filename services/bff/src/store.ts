@@ -25,6 +25,8 @@ export function openStore(connectionString: string) {
           UNIQUE (profile_ref, session_id),
           created_at timestamptz NOT NULL DEFAULT now()
         );
+        ALTER TABLE topics ADD COLUMN IF NOT EXISTS reasoning_effort text;
+        ALTER TABLE topics ADD COLUMN IF NOT EXISTS reasoning_status text;
         CREATE TABLE IF NOT EXISTS messages (
           id uuid PRIMARY KEY,
           topic_id uuid NOT NULL REFERENCES topics(id),

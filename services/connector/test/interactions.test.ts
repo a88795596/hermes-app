@@ -6,9 +6,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import type { Command } from '@hermes-mobile/protocol';
-import type { JsonObject } from '../src/gateway.js';
+import { CanonicalConnector } from '../src/connector.js';
+import { Gateway, type JsonObject } from '../src/gateway.js';
 import { createHttpConnector } from '../src/http-mode.js';
 import { Spool } from '../src/spool.js';
+import { bridgeFrame } from '../src/wire.js';
 
 async function harness(t: TestContext, replyStatus = 'resolved') {
   const calls: { path: string; body: JsonObject }[] = [];
@@ -17,6 +19,7 @@ async function harness(t: TestContext, replyStatus = 'resolved') {
   const sessionId = 'mobile_test';
   const runId = 'run_' + '1'.repeat(32);
   let pending = true;
+  let sessionAvailable = true;
   const server = createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -33,6 +36,9 @@ async function harness(t: TestContext, replyStatus = 'resolved') {
           { slug: 'unconfigured', name: '未配置的服务商', models: ['ignored'], authenticated: false },
         ],
       }));
+    } else if (path === `/api/sessions/${sessionId}`) {
+      res.statusCode = sessionAvailable ? 200 : 503;
+      res.end(JSON.stringify(sessionAvailable ? { session: { id: sessionId } } : {}));
     } else if (path === '/v1/runs') {
       res.statusCode = 202;
       res.end(JSON.stringify({ run_id: runId }));
@@ -80,7 +86,7 @@ async function harness(t: TestContext, replyStatus = 'resolved') {
     } as Command, () => true);
     return frames.find((frame) => frame.type === 'command_result' && frame.command_id === id);
   }
-  return { calls, frames, restart, command };
+  return { calls, frames, restart, command, disconnectSession: () => { sessionAvailable = false; } };
 }
 
 async function waitForQuestion(frames: JsonObject[]) {
@@ -123,6 +129,67 @@ test('HTTP 模式的模型选择器返回已配置的服务商目录，并在重
   assert.deepEqual(calls.find((call) => call.path === '/v1/runs')?.body, {
     session_id: 'mobile_test', input: '你好', ...selection,
   });
+});
+
+test('HTTP Runs 保留话题的思考强度，恢复默认后不再覆盖 Hermes 配置', async (t) => {
+  const { command, calls, restart } = await harness(t);
+  assert.equal((await command({ kind: 'select_reasoning', body: { effort: 'high' } }))?.status, 'ok');
+  restart();
+  await command({ kind: 'submit', body: { submission_id: randomUUID(), text: '使用高强度' } });
+  assert.deepEqual(calls.find((call) => call.path === '/v1/runs')?.body.model_options, { reasoning_effort: 'high' });
+
+  assert.equal((await command({ kind: 'select_reasoning', body: { effort: null } }))?.status, 'ok');
+  await command({ kind: 'submit', body: { submission_id: randomUUID(), text: '使用档案默认值' } });
+  assert.equal(calls.filter((call) => call.path === '/v1/runs').at(-1)?.body.model_options, undefined);
+});
+
+test('HTTP 模式无法访问会话时拒绝切换思考强度', async (t) => {
+  const { command, disconnectSession } = await harness(t);
+  disconnectSession();
+  assert.equal((await command({ kind: 'select_reasoning', body: { effort: 'high' } }))?.status, 'error');
+});
+
+test('Canonical Gateway 按话题绑定的会话和当前版本切换思考强度', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'hermes-mobile-reasoning-'));
+  const spool = new Spool(join(directory, 'connector.sqlite'));
+  const topicId = randomUUID();
+  const sessionId = 'canonical-session';
+  spool.begin(topicId, 'create');
+  spool.finish(topicId, {}, { topicId, sessionId, profileId: 'default', profileRef: 'default' });
+  const snapshot = { session_id: sessionId, stored_session_id: sessionId, subscription_id: 'sub',
+    authority_epoch: 1, replay_epoch: 'replay', last_sequence: 0,
+    revision: 4, execution_generation: 2, running: false, pending: [], prompts: [] };
+  const mutations: JsonObject[] = [];
+  let deferred = false;
+  t.mock.method(Gateway, 'connect', async () => ({
+    connected: true, identity: { profileId: 'default', authorityEpoch: '1' }, close() {},
+    async rpc(method: string, params: JsonObject) {
+      if (method === 'session.events.since') return { events: [], snapshot_required: false };
+      if (method === 'session.resume') return snapshot;
+      assert.equal(method, 'session.mutate');
+      mutations.push(params);
+      return { session_id: sessionId, operation: 'reasoning', effort: 'none', revision: 5, execution_generation: 3,
+        ...(deferred ? { status: 'deferred' } : {}) };
+    },
+  }));
+  const connector = new CanonicalConnector('unused', spool, () => {});
+  t.after(() => { connector.close(); spool.close(); rmSync(directory, { recursive: true, force: true }); });
+
+  const id = randomUUID();
+  const frame = { type: 'command', command_id: id, topic_id: topicId, profile_ref: 'default',
+    session_id: sessionId, kind: 'select_reasoning', body: { effort: 'none' } };
+  assert.throws(() => bridgeFrame(JSON.stringify({ ...frame, body: { effort: 'unsupported' } })));
+  const command = bridgeFrame(JSON.stringify(frame));
+  assert(command.type === 'command');
+  await connector.command(command, () => true);
+  assert.deepEqual(mutations, [{ session_id: sessionId, request_id: id, operation: 'reasoning',
+    payload: { effort: 'none' }, expected_revision: 4, expected_generation: 2 }]);
+  assert.equal(JSON.parse(spool.command(id)!.result!).status, 'ok');
+
+  deferred = true;
+  const deferredId = randomUUID();
+  await connector.command({ ...command, command_id: deferredId }, () => true);
+  assert.equal(JSON.parse(spool.command(deferredId)!.result!).status, 'unknown');
 });
 
 test('HTTP Runs 投影多选问题并将回答转发给等待中的执行', async (t) => {

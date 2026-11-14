@@ -1,12 +1,12 @@
 import { randomBytes } from "node:crypto";
 import type { InboxItem, MobileNotice, TopicQuery } from "@hermes-mobile/protocol";
-import { isManagementOperation, MAX_CONTROL_ANSWER_BYTES } from "@hermes-mobile/protocol";
+import { isManagementOperation, isReasoningEffort, MAX_CONTROL_ANSWER_BYTES } from "@hermes-mobile/protocol";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
 import { deviceAuth, matchesToken } from "../auth.js";
 import { registerBridge } from "../bridge.js";
-import { createTopic, findProfile, interrupt, requestModel, respond, submit } from "../mutations.js";
-import { detail, modelRequest, profiles, topicRow, topics } from "../projections.js";
+import { createTopic, findProfile, interrupt, requestModel, requestReasoning, respond, submit } from "../mutations.js";
+import { detail, modelRequest, profiles, reasoningRequest, topicRow, topics } from "../projections.js";
 import { registerPushRoutes } from "../push.js";
 import type { Store } from "../store.js";
 import { ApiError, invalid, record, string, uuid } from "../validation.js";
@@ -96,7 +96,9 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
     const { input } = record(request.body ?? {}, ["input"]);
     return success(request, await bridge.manage({ profile_ref, operation, input: input === undefined ? {} : record(input) }));
   });
-  api.get(`${prefix}/status`, requireDevice, (request) => success(request, { connector_online: bridge.online() }));
+  api.get(`${prefix}/status`, requireDevice, (request) => success(request, {
+    connector_online: bridge.online(), reasoning_supported: bridge.reasoningSupported(),
+  }));
   api.get(`${prefix}/topics`, requireDevice, async (request) => success(request, await topics(store, refs)));
   api.get(`${prefix}/topics/:id`, requireDevice, async (request) => success(request, await detail(store, pathId(request), refs)));
   for (const kind of ["skills", "status", "version"] satisfies TopicQuery["kind"][]) {
@@ -170,6 +172,23 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
   api.get(`${prefix}/topics/:id/model-requests/:requestId`, requireDevice, async (request) => {
     const requestId = uuid(record(request.params).requestId, "请求 ID");
     return success(request, await modelRequest(store, refs, pathId(request), requestId));
+  });
+
+  api.post(`${prefix}/topics/:id/reasoning-requests`, requireDevice, async (request, reply) => {
+    const topicId = pathId(request);
+    const { request_id, effort } = record(request.body, ["request_id", "effort"]);
+    const id = uuid(request_id, "请求 ID");
+    if (effort !== null && !isReasoningEffort(effort)) invalid("思考强度无效。");
+    const result = await store.transaction((db) => requestReasoning(db, refs, topicId, id, effort,
+      !bridge.online() ? "offline" : bridge.reasoningSupported() ? "ready" : "legacy"));
+    changed(topicId);
+    bridge.pump();
+    return accepted(request, reply, result);
+  });
+
+  api.get(`${prefix}/topics/:id/reasoning-requests/:requestId`, requireDevice, async (request) => {
+    const requestId = uuid(record(request.params).requestId, "请求 ID");
+    return success(request, await reasoningRequest(store, refs, pathId(request), requestId));
   });
 
   api.post(`${prefix}/controls/:id/responses`, requireDevice, async (request, reply) => {

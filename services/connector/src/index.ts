@@ -67,7 +67,7 @@ async function main(): Promise<void> {
     while (!shutdown.signal.aborted) {
       const started = Date.now();
       const peer = new WebSocket(url, {
-        headers: { Authorization: `Bearer ${token}`, 'X-Hermes-Mobile-Topic-Query': '1',
+        headers: { Authorization: `Bearer ${token}`, 'X-Hermes-Mobile-Topic-Query': '1', 'X-Hermes-Mobile-Reasoning': '1',
           ...(manage && { 'X-Hermes-Mobile-Management': '1' }) },
         handshakeTimeout: 10_000, maxPayload: 1024 * 1024, perMessageDeflate: false,
       });
