@@ -1,8 +1,9 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import type { Command, Control, ModelSelection, ReasoningEffort, TopicQuery, TopicQueryData } from '@hermes-mobile/protocol';
+import type { Command, ConnectorEvent, Control, ModelSelection, ReasoningEffort, TopicQuery, TopicQueryData } from '@hermes-mobile/protocol';
 import { MAX_CLARIFY_CHOICE_BYTES } from '@hermes-mobile/protocol';
 import { integer, object, string } from './gateway.js';
 import type { JsonObject } from './gateway.js';
+import { addProcessText, removeStreamedCommentary, updateProcessTool } from './message-process.js';
 import { hasModel, modelCatalog } from './models.js';
 import type { Binding, Spool, Turn } from './spool.js';
 import { QueryUnavailable, queryTimeout, runtimeVersion, sessionStatus, skillList } from './topic-query.js';
@@ -11,6 +12,15 @@ import { boundedText, commandDigest, result, stableId, text } from './wire.js';
 const unknown = 'Hermes 无法确认执行结果';
 const runId = /^run_[a-f0-9]{32}$/;
 const profileName = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
+
+function terminalStatus(status: unknown): 'final' | 'failed' | 'cancelled' | 'unknown' | undefined {
+  switch (status) {
+    case 'completed': return 'final';
+    case 'failed': return 'failed';
+    case 'cancelled': return 'cancelled';
+    case 'interrupted': return 'unknown';
+  }
+}
 
 function httpId(...identity: unknown[]): string {
   return stableId(['hermes-http-runs', JSON.stringify(identity)]);
@@ -115,9 +125,25 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
     for (const frame of frames) send(frame.body);
   }
 
-  function message(turn: Turn, status: 'streaming' | 'final', text: string) {
+  function message(turn: Turn, status: 'streaming' | 'final', text: string): Omit<Extract<ConnectorEvent, { type: 'message' }>, 'topic_id' | 'event_id'> {
     return { type: 'message', message_id: httpId(turn.topicId, turn.admissionId, 'message'),
-      submission_id: turn.submissionId, status, text };
+      ...(turn.submissionId ? { submission_id: turn.submissionId } : {}), status, text: text.trim() ? text : '',
+      ...(turn.process?.length ? { process: turn.process } : {}) };
+  }
+
+  function finishRun(turn: Turn, state: NonNullable<ReturnType<typeof terminalStatus>>, output: unknown) {
+    const saved = JSON.parse(turn.text) as RunState;
+    const text = state === 'final' && typeof output === 'string' ? boundedText(output, 256 * 1024) : saved.text;
+    const updated = { ...turn, status: state, text: JSON.stringify({ text, prompts: [] }) };
+    const frames: JsonObject[] = saved.prompts.map(({ control }) => ({
+      type: 'control', ...control, submission_id: turn.submissionId, status: state === 'unknown' ? 'unknown' : 'closed',
+    }));
+    const error = state === 'unknown' ? unknown : state === 'failed' ? 'Hermes 报告执行失败' : undefined;
+    if (state !== turn.status || error) {
+      frames.push({ type: 'submission', submission_id: turn.submissionId, status: state, ...(error ? { error } : {}) });
+    }
+    if (text || saved.text || updated.process?.length) frames.push(message(updated, 'final', text));
+    record(updated, frames);
   }
 
   async function stream(binding: Binding, id: string, signal: AbortSignal) {
@@ -155,14 +181,36 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
           sequence = next;
           const turn = spool.turn(binding.topicId, id);
           if (!turn || !['queued', 'streaming', 'unknown'].includes(turn.status)) return;
-          if (event.event !== 'message.delta' || typeof event.delta !== 'string' || gap) {
+          if (typeof event.event === 'string' && event.event.startsWith('run.') && terminalStatus(event.event.slice(4))) {
             record(turn, [], sequence, gap);
-            continue;
+            return;
           }
           const state = JSON.parse(turn.text) as RunState;
-          const text = boundedText(state.text + event.delta, 256 * 1024);
-          const frames = text !== state.text ? [message(turn, 'streaming', text)] : [];
-          record({ ...turn, text: JSON.stringify({ ...state, text }) }, frames, sequence);
+          let answer = state.text;
+          let process = turn.process;
+          if (event.event === 'message.delta' && typeof event.delta === 'string' && !gap) {
+            answer = boundedText(answer + event.delta, 256 * 1024);
+          } else if (event.event === 'message.interim' && typeof event.text === 'string') {
+            process = addProcessText(process, 'commentary', event.text);
+            if (event.already_streamed === true) answer = removeStreamedCommentary(answer, event.text);
+          } else if (event.event === 'reasoning.available' || (event.event === 'reasoning.delta' && !gap)) {
+            process = addProcessText(process, 'reasoning', event.text, event.event === 'reasoning.delta');
+          } else if (event.event === 'tool.started' || event.event === 'tool.completed' || event.event === 'tool.failed') {
+            const started = event.event === 'tool.started';
+            let callId = string(event.tool_call_id);
+            if (!callId) {
+              // shortcut: 旧版 Runs 省略调用 ID 时按工具名匹配最早的待完成调用，升级后使用上游 ID。
+              const pending = started ? undefined : process?.find((step) =>
+                step.kind === 'tool' && step.name === event.tool && step.status === 'running');
+              callId = pending?.kind === 'tool' ? pending.id : httpId(id, sequence, 'tool');
+            }
+            const status = started ? 'running' : event.event === 'tool.failed' || event.error === true ? 'failed'
+              : event.error === false ? 'succeeded' : 'unknown';
+            process = updateProcessTool(process, callId, event.tool, status);
+          }
+          const updated = { ...turn, process, text: JSON.stringify({ ...state, text: answer }) };
+          const frames = answer !== state.text || process !== turn.process ? [message(updated, 'streaming', answer)] : [];
+          record(updated, frames, sequence, gap);
         }
         if (buffer.length > 2 * 1024 * 1024) return;
       }
@@ -177,10 +225,14 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
     const controller = new AbortController();
     const { signal } = controller;
     watchers.set(id, controller);
+    let reading: Promise<void> | undefined;
+    let finishing = false;
     void (async () => {
-      while (!signal.aborted) {
-        await stream(binding, id, signal).catch(() => undefined);
-        await delay(1000, undefined, { signal });
+      while (!signal.aborted && !finishing) {
+        reading = stream(binding, id, signal).catch(() => undefined);
+        await reading;
+        reading = undefined;
+        if (!finishing) await delay(1000, undefined, { signal });
       }
     })().catch(() => undefined);
     void (async () => {
@@ -188,20 +240,27 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
         const result = await json(binding.profileRef, `/v1/runs/${id}`).catch(() => undefined);
         if (signal.aborted) return;
         const turn = spool.turn(binding.topicId, id);
-        if (!turn || !turn.submissionId) return;
+        if (!turn?.submissionId || ['final', 'failed', 'cancelled'].includes(turn.status)) return;
         const data = result?.data;
         const missingRun = result?.response.status === 404 && object(data?.error)?.code === 'run_not_found';
         if (data?.run_id === id || missingRun) {
           const status = data?.status;
           const frames: JsonObject[] = [];
-          const terminal = status === 'completed' || status === 'failed' || status === 'cancelled';
-          const next = terminal ? [] : pendingPrompts(id, data ?? {});
-          const state: Turn['status'] | undefined = status === 'completed' ? 'final'
-            : status === 'failed' ? 'failed'
-            : status === 'cancelled' ? 'cancelled'
-            : status === 'queued' ? turn.status === 'streaming' ? 'streaming' : 'queued'
+          const finished = missingRun ? 'unknown' : terminalStatus(status);
+          if (finished) {
+            finishing = true;
+            // GET 状态可能先于已排入 SSE 的过程事件到达。
+            const drain = reading ?? (missingRun ? undefined : stream(binding, id, signal).catch(() => undefined));
+            if (drain) await Promise.race([drain, delay(1500, undefined, { signal, ref: false })]);
+            if (signal.aborted) return;
+            const latest = spool.turn(binding.topicId, id);
+            if (latest?.submissionId) finishRun(latest, finished, data?.output);
+            return;
+          }
+          const next = pendingPrompts(id, data ?? {});
+          const state: Turn['status'] | undefined = status === 'queued' ? turn.status === 'streaming' ? 'streaming' : 'queued'
             : status === 'running' || status === 'waiting_for_approval' || status === 'stopping' ? 'streaming'
-            : missingRun || status === 'interrupted' || status === 'unknown' ? 'unknown' : undefined;
+            : status === 'unknown' ? 'unknown' : undefined;
           if (state !== undefined) {
             const saved = JSON.parse(turn.text) as RunState;
             for (const prompt of saved.prompts) {
@@ -214,16 +273,12 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
               if (saved.prompts.some(({ control }) => control.control_id === prompt.control.control_id)) continue;
               frames.push({ type: 'control', ...prompt.control, submission_id: turn.submissionId, status: 'pending' });
             }
-            const finalText = terminal ? (state === 'final' && typeof data?.output === 'string'
-              ? boundedText(data.output, 256 * 1024) : saved.text) : undefined;
-            const updated = { ...turn, status: state, text: JSON.stringify({ text: finalText ?? saved.text, prompts: next }) };
+            const updated = { ...turn, status: state, text: JSON.stringify({ ...saved, prompts: next }) };
             if (state !== turn.status) {
-              const error = state === 'unknown' ? unknown : state === 'failed' ? 'Hermes 报告执行失败' : undefined;
+              const error = state === 'unknown' ? unknown : undefined;
               frames.push({ type: 'submission', submission_id: turn.submissionId, status: state, ...(error ? { error } : {}) });
             }
-            if (finalText) frames.push(message(updated, 'final', finalText));
             if (frames.length) record(updated, frames);
-            if (terminal || missingRun || status === 'interrupted') return;
           }
         }
         await delay(1500, undefined, { signal });

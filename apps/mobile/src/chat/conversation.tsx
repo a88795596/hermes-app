@@ -2,7 +2,7 @@ import { randomUUID } from "expo-crypto";
 import { useEffect, useRef, useState, type ComponentRef } from "react";
 import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import Animated from "react-native-reanimated";
-import type { Control, Message, SessionStatus, Skill, Topic } from "@hermes-mobile/protocol";
+import type { Control, Message, MessageProcessStep, SessionStatus, Skill, Topic } from "@hermes-mobile/protocol";
 import type { useWorkspace } from "../sync/use-workspace";
 import { motion, useReduceMotion } from "../ui/motion";
 import { Action, Card, EmptyState, Field, Icon, Notice, useTheme } from "../ui/theme";
@@ -17,6 +17,13 @@ const messageStatus: Record<Message["status"], string> = {
   failed: "失败",
   unknown: "执行状态待确认",
   cancelled: "已停止",
+};
+
+const toolStatus: Record<Extract<MessageProcessStep, { kind: "tool" }>["status"], string> = {
+  running: "执行中…",
+  succeeded: "已完成",
+  failed: "失败",
+  unknown: "结果未确认",
 };
 
 const approvalLabels = new Map([
@@ -148,12 +155,13 @@ function ControlCard({
 }
 
 export function Conversation({
-  id, topic, workspace, draft, onDraftChange, onNewTopic,
+  id, topic, workspace, draft, onDraftChange, onNewTopic, showProcess,
 }: {
   id: string;
   topic?: Topic;
   workspace: ReturnType<typeof useWorkspace>;
   draft: string;
+  showProcess: boolean;
   onDraftChange: (value: string) => void;
   onNewTopic: () => void;
 }) {
@@ -362,11 +370,29 @@ export function Conversation({
         )}
         {messages.map((message, index) => {
           const outgoing = message.role === "user";
+          const process = !outgoing && showProcess ? message.process : undefined;
+          if (!outgoing && !message.text && !process?.length && message.status === "final") return null;
           const startGroup = messages[index - 1]?.role !== message.role;
           const attachedControls = outgoing && message.submission_id ? historyControls.get(message.submission_id) : undefined;
           return (
             <View key={message.message_id} style={chat.messageGroup}>
               <View style={[chat.message, { maxWidth: messageWidth }, outgoing && chat.outgoing, startGroup && chat.startGroup]}>
+                {!!process?.length && (
+                  <View style={[chat.process, { borderStartColor: colors.edge }]}>
+                    {process.map((step, stepIndex) => {
+                      if (step.kind === "tool") {
+                        const status = step.status === "running" && message.status === "final" ? "unknown" : step.status;
+                        return <Text key={stepIndex} style={styles.muted}>{step.name} · {toolStatus[status]}</Text>;
+                      }
+                      return (
+                        <Text key={stepIndex} selectable style={styles.muted}>
+                          {step.kind === "reasoning" && <Text style={styles.label}>思考{"\n"}</Text>}
+                          {step.text}
+                        </Text>
+                      );
+                    })}
+                  </View>
+                )}
                 {!!message.text && (
                   <View style={[
                     chat.bubble,
@@ -497,6 +523,7 @@ const chat = StyleSheet.create({
   progress: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, marginVertical: 12 },
   message: { alignSelf: "flex-start", alignItems: "flex-start", gap: 3 },
   messageGroup: { gap: 6 },
+  process: { borderStartWidth: 1, paddingStart: 10, paddingVertical: 4, gap: 6, alignSelf: "stretch" },
   outgoing: { alignSelf: "flex-end", alignItems: "flex-end" },
   startGroup: { marginTop: 5 },
   bubble: { borderRadius: 16, paddingHorizontal: 11, paddingVertical: 7 },

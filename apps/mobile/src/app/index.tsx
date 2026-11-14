@@ -1,7 +1,7 @@
 import { randomUUID } from "expo-crypto";
 import { StatusBar } from "expo-status-bar";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, BackHandler, Keyboard, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, BackHandler, Keyboard, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import Animated from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { Topic } from "@hermes-mobile/protocol";
@@ -59,6 +59,7 @@ function Workspace({
   const [push, setPush] = useState<"idle" | "enabling" | "enabled">("idle");
   const [error, setError] = useState<string>();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [showProcess, setShowProcess] = useState<Record<string, boolean>>({});
   const createAttempt = useRef<{ request_id: string; profile_id: string; title: string }>(undefined);
   const workspace = useWorkspace(session, topicId);
   const profile = workspace.profiles.find((item) => item.profile_id === profileId) ?? workspace.profiles[0];
@@ -187,20 +188,32 @@ function Workspace({
   }
 
   if (topicId) {
+    const processVisible = showProcess[topicId] ?? false;
     return (
       <Animated.View key={topicId} style={[styles.frame, !reduced && motion.push]}>
         <View style={[styles.header, layout.chatHeader, { borderBottomColor: colors.edge, backgroundColor: colors.surface }]}>
           <Pressable accessibilityRole="button" accessibilityLabel="返回话题列表" hitSlop={6} onPress={closeTopic}
-            style={({ pressed }) => [layout.back, pressed && styles.faded]}>
+            style={({ pressed }) => [layout.back, layout.chatBack, pressed && styles.faded]}>
             <Icon name="back" size={17} color={colors.accent} />
             <Text style={[styles.text, { color: colors.accent }]}>{sections.topics.title}</Text>
           </Pressable>
           <Text accessibilityRole="header" numberOfLines={2} style={[styles.heading, layout.grow, layout.chatTitle]}>{topic?.title ?? "话题"}</Text>
-          <View style={layout.backSpace} />
+          <View style={layout.processToggle}>
+            <Text style={styles.caption} accessible={false}>过程</Text>
+            <Switch
+              accessibilityLabel="显示回复过程"
+              value={processVisible}
+              onValueChange={(visible) => setShowProcess((current) => ({ ...current, [topicId]: visible }))}
+              hitSlop={8}
+              ios_backgroundColor={colors.edge}
+              trackColor={{ false: colors.edge, true: colors.accentFill }}
+            />
+          </View>
         </View>
         <Conversation
           id={topicId}
           topic={topic}
+          showProcess={processVisible}
           workspace={workspace}
           draft={drafts[topicId] ?? ""}
           onDraftChange={(value) => setDrafts((current) => ({ ...current, [topicId]: value }))}
@@ -438,7 +451,8 @@ const layout = StyleSheet.create({
   chatHeader: { borderBottomWidth: StyleSheet.hairlineWidth, minHeight: 48, paddingHorizontal: 12, paddingVertical: 2 },
   backBar: { alignItems: "flex-start", borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12 },
   back: { flexDirection: "row", gap: 2, minHeight: 44, minWidth: 65, alignItems: "center" },
-  backSpace: { width: 65 },
+  chatBack: { minWidth: 80 },
+  processToggle: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 6, minHeight: 44 },
   chatTitle: { textAlign: "center" },
   tabs: { width: "87%", maxWidth: 400, alignSelf: "center", borderWidth: StyleSheet.hairlineWidth, borderRadius: 25, marginTop: 4, marginBottom: 5, padding: 3 },
   tabStrip: { flexDirection: "row" },
