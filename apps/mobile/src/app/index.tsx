@@ -193,7 +193,7 @@ function Workspace({
             <Icon name="back" size={17} color={colors.accent} />
             <Text style={[styles.text, { color: colors.accent }]}>{sections.topics.title}</Text>
           </Pressable>
-          <Text accessibilityRole="header" numberOfLines={2} style={[styles.heading, layout.grow, layout.chatTitle]}>{chatTitle}</Text>
+          <Text accessibilityRole="header" numberOfLines={1} ellipsizeMode="tail" style={[styles.heading, layout.grow, layout.chatTitle]}>{chatTitle}</Text>
           <View style={layout.processToggle}>
             <Text style={styles.caption} accessible={false}>过程</Text>
             <Switch
@@ -267,7 +267,7 @@ function Workspace({
                     style={({ pressed }) => [styles.listItem, index > 0 && layout.divided, { borderColor: colors.edge }, pressed && { backgroundColor: colors.secondary }]}>
                     <View style={[layout.rowIcon, { backgroundColor: colors.tint }]}><Icon name="chat" size={17} color={colors.accent} /></View>
                     <View style={layout.grow}>
-                      <Text numberOfLines={2} style={styles.heading}>{title}</Text>
+                      <Text numberOfLines={1} ellipsizeMode="tail" style={styles.heading}>{title}</Text>
                       {!!status && <Text style={styles.caption}>{status}</Text>}
                     </View>
                     <Icon name="chevron" size={14} color={colors.muted} />

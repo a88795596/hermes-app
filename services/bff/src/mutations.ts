@@ -78,6 +78,10 @@ export async function queueTopicTitle(db: PoolClient, topic: Awaited<ReturnType<
   const { rows: [revision] } = await db.query<{ title_revision: string }>(
     "UPDATE topics SET title_revision = title_revision + 1 WHERE id = $1 RETURNING title_revision", [topic.id],
   );
+  const { rows: [first] } = await db.query<{ text: string }>(`
+    SELECT data->>'text' AS text FROM messages WHERE topic_id = $1 AND data->>'role' = 'user'
+    ORDER BY position LIMIT 1`, [topic.id]);
+  const title = topic.title === topicTitlePreview(first?.text ?? "") ? undefined : topic.title;
   // shortcut: 用现有标题和最近四轮控制提示长度，长会话需要覆盖更早内容时再加入滚动摘要。
   const { rows } = await db.query<{ user: string; assistant: string | null }>(`
     SELECT left(u.data->>'text', 600) AS "user", (
@@ -89,7 +93,7 @@ export async function queueTopicTitle(db: PoolClient, topic: Awaited<ReturnType<
     FROM submissions AS s JOIN messages AS u ON u.id = s.message_id
     WHERE s.topic_id = $1 AND s.data->>'status' = 'final'
     ORDER BY u.position DESC LIMIT 4`, [topic.id]);
-  const input = JSON.stringify({ title: topic.title, turns: rows.reverse() });
+  const input = JSON.stringify({ title, turns: rows.reverse() });
   await enqueue(db, { type: "command", command_id: randomUUID(), topic_id: topic.id, profile_ref: topic.profile_ref,
     session_id: topic.session_id, kind: "summarize_title", body: { input } }, revision);
   return true;

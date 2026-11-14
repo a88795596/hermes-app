@@ -73,6 +73,7 @@ test("自动标题取首条消息，并只采用最新成功完成轮次的摘�
     const firstSummary = await next();
     assert.equal(firstSummary.kind, "summarize_title");
     assert.equal(firstSummary.session_id, "mobile_title_test");
+    assert.equal(JSON.parse(firstSummary.body.input).title, undefined);
     assert.match(firstSummary.body.input, /发现轮询频率过低/);
     assert.doesNotMatch(firstSummary.body.input, /修复移动端的重试逻辑/);
 
@@ -80,6 +81,7 @@ test("自动标题取首条消息，并只采用最新成功完成轮次的摘�
     await event("submission", { submission_id: second, status: "final" });
     const secondSummary = await next();
     assert.equal(secondSummary.kind, "summarize_title");
+    assert.equal(JSON.parse(secondSummary.body.input).title, undefined);
     assert.match(secondSummary.body.input, /发现轮询频率过低/);
     assert.match(secondSummary.body.input, /已补上退避重试/);
     await result(firstSummary.command_id, { title: "排查同步延迟" });
@@ -90,7 +92,9 @@ test("自动标题取首条消息，并只采用最新成功完成轮次的摘�
 
     const third = await submit("继续检查连接状态");
     await event("submission", { submission_id: third, status: "final" });
-    await result((await next()).command_id, { status: "error" });
+    const thirdSummary = await next();
+    assert.equal(JSON.parse(thirdSummary.body.input).title, "修复同步重试");
+    await result(thirdSummary.command_id, { status: "error" });
     assert.equal(await title(), "修复同步重试");
     const fourth = await submit("中断这轮");
     await event("submission", { submission_id: fourth, status: "cancelled" });
