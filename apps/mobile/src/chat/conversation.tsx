@@ -313,7 +313,7 @@ export function Conversation({
         method: "POST", body: { request_id, submission_id: activeSubmission },
       });
       setCommandNotice("已请求停止回复。");
-      await workspace.refresh();
+      await workspace.syncWorkspace();
     } catch (failure) {
       setCommandNotice(undefined);
       setError(failure instanceof Error ? failure.message : "无法确认停止请求是否生效。");
@@ -409,7 +409,7 @@ export function Conversation({
         keyboardShouldPersistTaps="handled"
         refreshControl={
           <RefreshControl
-            refreshing={workspace.syncing}
+            refreshing={workspace.refreshing}
             onRefresh={() => void workspace.refresh()}
             tintColor={colors.accent}
             colors={[colors.accent]}
