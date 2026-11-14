@@ -40,6 +40,7 @@ try {
     if (!process.env.EXPO_PUBLIC_HOT_UPDATER_BASE_URL || !process.env.EXPO_PUBLIC_HOT_UPDATER_API_KEY) {
       throw new Error("请先在 apps/mobile/.env.local 配置热更新地址和客户端 API Key。");
     }
+    const { expo } = JSON.parse(readFileSync(join(mobile, "app.json"), "utf8"));
 
     if (platform === "android") {
       const devices = run("adb", ["devices", "-l"], true).split("\n").slice(1)
@@ -49,6 +50,9 @@ try {
       if (!process.env.JAVA_HOME && process.platform === "darwin") process.env.JAVA_HOME = run("/usr/libexec/java_home", ["-v", "17"], true);
       run("pnpm", ["exec", "expo", "prebuild", "--platform", "android", "--no-install"]);
       run("pnpm", ["exec", "expo", "run:android", "--variant", "release", "--device", device, "--no-bundler"]);
+      // Expo 的开发链接可能打开系统选择器，Release 安装后显式冷启动主 Activity。
+      const launch = run("adb", ["-s", device, "shell", "am", "start", "-W", "-S", "-n", `${expo.android.package}/.MainActivity`], true);
+      if (!/^Status: ok$/m.test(launch)) throw new Error("Android App 启动失败，请检查设备状态。");
     } else {
       const { result } = JSON.parse(run("xcrun", ["devicectl", "list", "devices", "--json-output", "-", "--quiet"], true));
       const devices = result.devices.flatMap(device => {
@@ -78,7 +82,6 @@ try {
       const app = join(output, "Payload", apps[0]);
       run("codesign", ["--verify", "--deep", "--strict", app]);
       run("xcrun", ["devicectl", "device", "install", "app", "--device", device, app]);
-      const { expo } = JSON.parse(readFileSync(join(mobile, "app.json"), "utf8"));
       run("xcrun", ["devicectl", "device", "process", "launch", "--device", device, "--terminate-existing", expo.ios.bundleIdentifier]);
       console.log(`IPA 已保存：${ipa}`);
     }
