@@ -41,3 +41,5 @@ example
 # 生成的原生项目目录
 /ios
 /android
+# hot-updater
+.hot-updater/output

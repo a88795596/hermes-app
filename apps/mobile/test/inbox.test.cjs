@@ -95,10 +95,10 @@ test("旧缓存没有标题或档案时仍可在全部中阅读原文", () => {
   assert.doesNotMatch(renderList({ items: [legacy], profileId: "work" }), /原文不能丢失/);
 });
 
-test("详情展示独立标题、完整 Markdown 正文、档案和接收时间，并保留返回入口", () => {
+test("详情直接展示标题、完整 Markdown 正文、档案和接收时间，不再显示顶部导航栏", () => {
   const text = ["## 正文小节", "", "这是一段较长的消息正文。".repeat(80), "", "**最后一段内容**", "", "[查看文档](https://example.com/docs)"].join("\n");
-  const html = renderToStaticMarkup(createElement(InboxDetail, { item: { ...items[2], text }, profiles, onBack() {} }));
-  assert.match(html, /aria-label="返回收件箱"/);
+  const html = renderToStaticMarkup(createElement(InboxDetail, { item: { ...items[2], text }, profiles }));
+  assert.doesNotMatch(html, /返回收件箱|消息详情/);
   assert.match(html, />最新报告</);
   assert.match(html, /<h2[^>]*>[\s\S]*正文小节[\s\S]*<\/h2>/);
   assert.equal([...html.matchAll(/这是一段较长的消息正文。/g)].length, 80);
