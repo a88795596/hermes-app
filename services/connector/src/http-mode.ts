@@ -1,7 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import type { Command, ConnectorEvent, Control, ModelSelection, ReasoningEffort, TopicQuery, TopicQueryData } from '@hermes-mobile/protocol';
 import { MAX_CLARIFY_CHOICE_BYTES } from '@hermes-mobile/protocol';
-import { attachmentBytes, attachmentFilename, type DownloadAttachment } from './attachments.js';
+import { attachmentBytes, attachmentFilename, type DownloadAttachment, type ReceiveAttachments } from './attachments.js';
 import { integer, object, string } from './gateway.js';
 import type { JsonObject, WebappAccess } from './gateway.js';
 import { addProcessText, removeStreamedCommentary, updateProcessTool } from './message-process.js';
@@ -68,10 +68,11 @@ type Options = {
   send: (frame: JsonObject) => void;
   spool: Spool;
   downloadAttachment: DownloadAttachment;
+  receiveAttachments?: ReceiveAttachments;
   webapp?: WebappAccess;
 };
 
-export function createHttpConnector({ url, token, send, spool, downloadAttachment, webapp }: Options) {
+export function createHttpConnector({ url, token, send, spool, downloadAttachment, receiveAttachments, webapp }: Options) {
   const endpoint = URL.parse(url);
   if (!endpoint || !['http:', 'https:'].includes(endpoint.protocol) ||
       !['127.0.0.1', '[::1]'].includes(endpoint.hostname) || endpoint.username || endpoint.password ||
@@ -180,17 +181,22 @@ export function createHttpConnector({ url, token, send, spool, downloadAttachmen
   function message(turn: Turn, status: 'streaming' | 'final', text: string): Omit<Extract<ConnectorEvent, { type: 'message' }>, 'topic_id' | 'event_id'> {
     return { type: 'message', message_id: httpId(turn.topicId, turn.admissionId, 'message'),
       ...(turn.submissionId ? { submission_id: turn.submissionId } : {}), status, text: text.trim() ? text : '',
+      ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
       ...(turn.process?.length ? { process: turn.process } : {}) };
   }
 
-  function finishRun(turn: Turn, state: NonNullable<ReturnType<typeof terminalStatus>>, output: unknown) {
+  async function finishRun(binding: Binding, turn: Turn, state: NonNullable<ReturnType<typeof terminalStatus>>, output: unknown) {
     const saved = JSON.parse(turn.text) as RunState;
-    const text = state === 'final' && typeof output === 'string' ? boundedText(output, 256 * 1024) : saved.text;
-    const updated = { ...turn, status: state, text: JSON.stringify({ text, prompts: [] }) };
+    const source = state === 'final' && typeof output === 'string' ? boundedText(output, 256 * 1024) : saved.text;
+    const received = state === 'final' && receiveAttachments
+      ? await receiveAttachments(binding.profileRef, turn.topicId, turn.admissionId, source) : { text: source };
+    if (shutdown.signal.aborted) return;
+    const { text, attachments } = received;
+    const updated = { ...turn, status: state, attachments, text: JSON.stringify({ text, prompts: [] }) };
     const frames: JsonObject[] = saved.prompts.map(({ control }) => ({
       type: 'control', ...control, submission_id: turn.submissionId, status: state === 'unknown' ? 'unknown' : 'closed',
     }));
-    if (text || saved.text || updated.process?.length) frames.push(message(updated, 'final', text));
+    if (text || saved.text || updated.process?.length || attachments?.length) frames.push(message(updated, 'final', text));
     const error = state === 'unknown' ? unknown : state === 'failed' ? 'Hermes 报告执行失败' : undefined;
     if (state !== turn.status || error) {
       frames.push({ type: 'submission', submission_id: turn.submissionId, status: state, ...(error ? { error } : {}) });
@@ -306,7 +312,7 @@ export function createHttpConnector({ url, token, send, spool, downloadAttachmen
             if (drain) await Promise.race([drain, delay(1500, undefined, { signal, ref: false })]);
             if (signal.aborted) return;
             const latest = spool.turn(binding.topicId, id);
-            if (latest?.submissionId) finishRun(latest, finished, data?.output);
+            if (latest?.submissionId) await finishRun(binding, latest, finished, data?.output);
             if (finished === 'final') await syncTitle(binding);
             return;
           }

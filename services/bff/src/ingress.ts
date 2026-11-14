@@ -5,6 +5,7 @@ import type { PoolClient } from "pg";
 import { touchTopic } from "./mutations.js";
 import { profileId, topicRow } from "./projections.js";
 import { queueInboxPush } from "./push.js";
+import { validateReceivedAttachments } from "./received-attachments.js";
 import { conflict, invalid, missing } from "./validation.js";
 
 const terminal = new Set<Message["status"]>(["final", "failed", "cancelled"]);
@@ -125,8 +126,11 @@ export async function applyEvent(db: PoolClient, frame: ConnectorEvent, refs: Se
     if (existing?.data.status === "final" && frame.status === "streaming") return;
     const submissionId = frame.submission_id ?? existing?.data.submission_id;
     const process = frame.process ?? existing?.data.process;
+    const attachments = frame.attachments ?? existing?.data.attachments;
+    await validateReceivedAttachments(db, attachments, topic.profile_ref);
     const message: Message = { message_id: frame.message_id, role: "assistant", text: frame.text, status: frame.status,
       ...(process?.length ? { process } : {}),
+      ...(attachments?.length ? { attachments } : {}),
       ...(submissionId ? { submission_id: submissionId } : {}) };
     await db.query("INSERT INTO messages (id, topic_id, data) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET data = excluded.data",
       [message.message_id, topic.id, message]);
@@ -156,11 +160,13 @@ export async function applyDelivery(db: PoolClient, frame: DeliveryFrame, refs: 
   return applied;
 }
 
-export async function applyInboxDelivery(db: PoolClient, { delivery_id, profile_ref, title, text }: InboxDelivery, refs: Set<string>) {
+export async function applyInboxDelivery(db: PoolClient, { delivery_id, profile_ref, title, text, attachments }: InboxDelivery, refs: Set<string>) {
   if (!refs.has(profile_ref)) missing("配置档案");
-  if (!await recordEvent(db, "delivery", delivery_id, { profile_ref, text, ...(title === undefined ? {} : { title }) })) return false;
-  const item: InboxItem = { inbox_id: delivery_id, profile_id: profileId(profile_ref), title: title ?? inboxTitle(text),
-    text, created_at: new Date().toISOString() };
+  await validateReceivedAttachments(db, attachments, profile_ref);
+  if (!await recordEvent(db, "delivery", delivery_id, { profile_ref, text, ...(title === undefined ? {} : { title }),
+    ...(attachments?.length ? { attachments } : {}) })) return false;
+  const item: InboxItem = { inbox_id: delivery_id, profile_id: profileId(profile_ref), title: title ?? inboxTitle(text.trim() || attachments?.[0]?.name || ""),
+    text, ...(attachments?.length ? { attachments } : {}), created_at: new Date().toISOString() };
   await db.query("INSERT INTO inbox (id, profile_ref, data) VALUES ($1, $2, $3)", [item.inbox_id, profile_ref, item]);
   await queueInboxPush(db, item.inbox_id);
   return true;

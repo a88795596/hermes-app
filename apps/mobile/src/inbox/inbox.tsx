@@ -3,6 +3,8 @@ import { useCallback, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { inboxTitle, type InboxItem, type Profile } from "@hermes-mobile/protocol";
 import { AnswerMarkdown } from "../chat/answer-markdown";
+import { MessageAttachments } from "../chat/message-attachments";
+import type { Session } from "../auth/session";
 import { formatTopicTime, groupTopics } from "../chat/topic-groups";
 import { formatDateTime, profileLabel } from "../ui/text";
 import { Action, EmptyState, Icon, Notice, useTheme } from "../ui/theme";
@@ -17,8 +19,8 @@ function InboxCard({ item, profile, now, onOpen }: {
 }) {
   const { colors, styles } = useTheme();
   const [focused, setFocused] = useState(false);
-  const title = item.title ?? inboxTitle(item.text);
-  const preview = item.text.replace(/\s+/gu, " ").trim();
+  const title = item.title ?? inboxTitle(item.text || item.attachments?.[0]?.name || "");
+  const preview = item.text.replace(/\s+/gu, " ").trim() || item.attachments?.map(({ name }) => name).join("、") || "";
   return (
     <Pressable accessibilityRole="button" accessibilityLabel={`${title}，${profile}，${formatDateTime(item.created_at)}，${Array.from(preview).slice(0, 160).join("")}`}
       accessibilityHint="查看消息全文" onPress={() => onOpen(item)}
@@ -68,7 +70,7 @@ export function InboxList({ items, profiles, profileId, ready, onProfile, onOpen
   </>;
 }
 
-export function InboxDetail({ item, profiles }: { item: InboxItem; profiles: Profile[] }) {
+export function InboxDetail({ item, profiles, session }: { item: InboxItem; profiles: Profile[]; session: Session }) {
   const { colors, styles } = useTheme();
   const [error, setError] = useState<string>();
   const openLink = useCallback((url: string) => {
@@ -85,12 +87,13 @@ export function InboxDetail({ item, profiles }: { item: InboxItem; profiles: Pro
   return (
     <View style={[styles.frame, { backgroundColor: colors.surface }]}>
       <ScrollView contentContainerStyle={[styles.content, layout.detail]}>
-        <Text selectable accessibilityRole="header" style={[styles.title, layout.detailTitle]}>{item.title ?? inboxTitle(item.text)}</Text>
+        <Text selectable accessibilityRole="header" style={[styles.title, layout.detailTitle]}>{item.title ?? inboxTitle(item.text || item.attachments?.[0]?.name || "")}</Text>
         <View style={[layout.detailMetadata, { borderBottomColor: colors.edge }]}>
           <Text selectable style={[styles.label, { color: colors.accent }]}>{itemProfile(item, profiles)}</Text>
           <Text selectable style={styles.caption}>{formatDateTime(item.created_at)}</Text>
         </View>
         {error && <Notice>{error}</Notice>}
+        {!!item.attachments?.length && <MessageAttachments items={item.attachments} session={session} tint={colors.foreground} onOpenLink={openLink} />}
         <AnswerMarkdown text={item.text} onOpenLink={openLink} />
       </ScrollView>
     </View>

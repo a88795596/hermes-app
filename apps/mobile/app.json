@@ -40,6 +40,8 @@
       ["@hot-updater/expo", { "channel": "preview" }],
       ["expo-secure-store", { "faceIDPermission": "允许 Hermes 移动端使用面容 ID。" }],
       ["expo-image-picker", { "photosPermission": "允许 Hermes 移动端选择要发送的照片。", "cameraPermission": false, "microphonePermission": false }],
+      ["expo-audio", { "microphonePermission": false, "recordAudioAndroid": false, "enableBackgroundPlayback": false }],
+      "expo-video",
       "expo-notifications",
       [
         "expo-splash-screen",

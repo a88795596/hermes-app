@@ -36,8 +36,10 @@ export type MessageStatus = "accepted" | "queued" | "streaming" | "final" | "fai
 export const MAX_ATTACHMENTS = 10;
 export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 export const MAX_ATTACHMENT_TOTAL_BYTES = 6 * 1024 * 1024;
+export const MAX_RECEIVED_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 
 export interface Attachment {
+  attachment_id?: string;
   name: string;
   mime: string;
   size: number;
@@ -161,6 +163,7 @@ export interface InboxItem {
   profile_id?: string;
   title?: string;
   text: string;
+  attachments?: Attachment[];
   created_at: string;
 }
 
@@ -177,6 +180,7 @@ export interface InboxDelivery {
   profile_ref: string;
   title?: string;
   text: string;
+  attachments?: Attachment[];
 }
 
 export interface MobileNotice {
@@ -228,7 +232,7 @@ export interface DeliveryFrame extends InboxDelivery {
 
 export type ConnectorEvent =
   | (EventEnvelope & { type: "topic_title"; session_id: string; title: string })
-  | (EventEnvelope & Pick<Message, "message_id" | "submission_id" | "text" | "process"> & { type: "message"; status: "streaming" | "final" })
+  | (EventEnvelope & Pick<Message, "message_id" | "submission_id" | "text" | "process" | "attachments"> & { type: "message"; status: "streaming" | "final" })
   | (EventEnvelope & { type: "submission"; submission_id: string; status: Exclude<MessageStatus, "accepted">; error?: string })
   | (EventEnvelope & Omit<Control, "answer" | "error"> & { type: "control" });
 

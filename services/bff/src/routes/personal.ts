@@ -10,6 +10,7 @@ import { applyInboxDelivery } from "../ingress.js";
 import { createTopic, findProfile, interrupt, requestModel, requestReasoning, respond, setTopicArchived, submit } from "../mutations.js";
 import { detail, modelRequest, profileId, profiles, reasoningRequest, topicRow, topics } from "../projections.js";
 import { registerPushRoutes } from "../push.js";
+import { receivedAttachmentReferences, registerReceivedAttachments } from "../received-attachments.js";
 import type { Store } from "../store.js";
 import { ApiError, invalid, record, string, uuid } from "../validation.js";
 
@@ -60,6 +61,7 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
   };
   const bridge = registerBridge(api, store, refs, config.connectorToken, changed);
   registerPushRoutes(api, store, authenticate);
+  registerReceivedAttachments(api, store, refs, config, authenticate);
 
   api.setErrorHandler((error, request, reply) => {
     if (error instanceof ApiError) {
@@ -150,17 +152,19 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
     }
     api.post("/internal/inbox/v1/deliveries", {
       // JSON 转义后单个正文字符最多占 6 字节。
-      bodyLimit: 6 * (MAX_INBOX_TEXT_BYTES + MAX_INBOX_TITLE_BYTES) + 1024,
+      bodyLimit: 6 * (MAX_INBOX_TEXT_BYTES + MAX_INBOX_TITLE_BYTES) + 16 * 1024,
       onRequest: async (request) => {
         if (!matchesToken(readBearer(request), deliveryToken)) throw new ApiError(401, "UNAUTHORIZED", "收件箱投递凭证无效。");
       },
     }, async (request, reply) => {
-      const body = record(request.body, ["delivery_id", "profile_ref", "title", "text"]);
+      const body = record(request.body, ["delivery_id", "profile_ref", "title", "text", "attachments"]);
+      const attachments = body.attachments === undefined ? undefined : receivedAttachmentReferences(body.attachments);
       const delivery: InboxDelivery = {
         delivery_id: uuid(body.delivery_id, "投递 ID"),
         profile_ref: string(body.profile_ref, "配置档案名称", 64),
         ...(body.title === undefined ? {} : { title: string(body.title, "消息标题", MAX_INBOX_TITLE_BYTES) }),
-        text: string(body.text, "消息正文", MAX_INBOX_TEXT_BYTES),
+        text: string(body.text, "消息正文", MAX_INBOX_TEXT_BYTES, !!attachments?.length),
+        ...(attachments?.length ? { attachments } : {}),
       };
       const applied = await store.transaction((db) => applyInboxDelivery(db, delivery, refs));
       if (applied) changed();

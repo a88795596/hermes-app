@@ -85,6 +85,13 @@ export function openStore(connectionString: string) {
           data jsonb NOT NULL,
           created_at timestamptz NOT NULL DEFAULT now()
         );
+        CREATE TABLE IF NOT EXISTS received_attachments (
+          id uuid PRIMARY KEY,
+          profile_ref text NOT NULL,
+          metadata jsonb NOT NULL,
+          content bytea NOT NULL,
+          sha256 text NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS connector_ingest (
           kind text NOT NULL,
           id uuid NOT NULL,

@@ -237,6 +237,7 @@ function Workspace() {
           showProcess={processVisible}
           onToggleProcess={() => setShowProcess((current) => ({ ...current, [id]: !current[id] }))}
           workspace={workspace}
+          session={session}
           draft={drafts[id] ?? ""}
           onDraftChange={(value) => setDrafts((current) => ({ ...current, [id]: value }))}
           attachments={draftAttachments[id] ?? []}
@@ -253,7 +254,7 @@ function Workspace() {
   if (inboxItem) {
     return (
       <View style={styles.frame}>
-        <InboxDetail item={inboxItem} profiles={workspace.profiles} />
+        <InboxDetail item={inboxItem} profiles={workspace.profiles} session={session} />
       </View>
     );
   }
