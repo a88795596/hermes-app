@@ -22,9 +22,19 @@
 - [个人版已实现的通信协议](docs/superpowers/plans/2026-11-13-personal-mvp-wire.md)
 - [工程设计规格书 v2](docs/reference/hermes-expo-engineering-spec-v2.md)
 
-## App 热更新
+## App 更新命令
 
-项目已接入 Hot Updater，独立的 `services/updates` 负责分发 JavaScript 和资源更新。首次启用需安装一次新的原生 Release 包，之后兼容更新在后台下载、下次冷启动生效。服务通过可选 Compose profile `updates` 启用，当前尚未部署或完成首次真机 OTA 验收。配置、发布和回退步骤见 [热更新操作文档](docs/hot-updates.md)。
+在仓库根目录使用以下三个入口。pnpm 会自动使用项目指定的 Node 24.22.1，首次运行需要下载运行时。
+
+| 命令 | 操作 |
+| --- | --- |
+| `pnpm app:android` | 本机编译 Android Release，安装并启动已连接的真机 |
+| `pnpm app:ios` | 本机编译 iOS Ad Hoc Release，安装并启动已连接的 iPhone |
+| `pnpm ota:push --message "更新说明"` | 构建并发布 iOS、Android 两个平台的热更新到 `preview` |
+
+原生安装命令仅有一台可用真机时自动选择；多台设备用 `--device <标识>` 指定。iOS 使用 `eas build --local` 调用本机 Xcode，复用 Finstep 签名凭据，不发起云端编译；IPA 留在被 Git 忽略的 `.data/builds/ios-*` 中。工具链、设备登记和登录要求见 [移动端说明](apps/mobile/README.md#本地编译并安装到手机)。
+
+日常 JavaScript 和资源改动使用 `ota:push`；两个平台都准备成功后才一起发布，手机后台下载并在下次冷启动生效。这个命令不执行 Git commit 或 Git push，也不重新生成原生指纹。首次启用热更新或变更原生依赖、权限、图标、渠道时，使用对应的原生安装命令。配置、发布和回退步骤见 [热更新操作文档](docs/hot-updates.md)。
 
 ## Docker Compose 部署
 

@@ -23,7 +23,7 @@ if (!__DEV__ && baseURL && apiKey) {
     // 下载会改变 SDK 的包信息，因此在启动时固定当前正在运行的版本。
     const bundleId = hotUpdater.getManifest().bundleId;
     currentUpdate = {
-      id: bundleId === hotUpdater.getMinBundleId() ? "内置版本" : bundleId,
+      id: bundleId === hotUpdater.getMinBundleId() ? "内置版本" : hotUpdater.getBundleId(),
       builtAt: /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(bundleId)
         ? Number.parseInt(bundleId.replaceAll("-", "").slice(0, 12), 16)
         : undefined,

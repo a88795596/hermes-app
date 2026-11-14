@@ -12,6 +12,30 @@ pnpm dev:mobile
 
 在「设置」的「管理」中可以配置所选 Hermes 配置档案的定时任务、模型、日志、技能和 MCP 服务器。在「设置」的「连接」中可以查看连接状态和管理此设备。 [启用移动端管理功能](../../README.md#enable-manage-on-mobile)
 
+## 本地编译并安装到手机
+
+在仓库根目录运行：
+
+```sh
+pnpm app:android
+pnpm app:ios
+```
+
+两个命令都在本机编译 Release，包含 JavaScript，无需 Metro；编译成功后安装并启动真机。只有一台可用真机时自动选择，多台设备时明确指定：
+
+```sh
+pnpm app:android --device <ADB序列号>
+pnpm app:ios --device <iPhone的UDID>
+```
+
+Android 需要 Android SDK、ADB 和 JDK 17；Mac 未配置 `JAVA_HOME` 时自动选择已安装的 JDK 17。手机需启用 USB 调试并授权本机。每次编译前通过 Expo prebuild 同步当前工作区的原生配置，不卸载已有 App。
+
+iOS 需要 Mac、Xcode、支持当前 Expo 的 CocoaPods（本机已验证 1.16.2）和 fastlane。命令固定使用 EAS CLI 27.10.0 的 `--local` 模式，编译由本机 Xcode 完成；EAS 仅用于项目与现有签名凭据。首次使用先通过 `pnpm --dir apps/mobile dlx eas-cli@27.10.0 login` 登录；设备需登记在 Finstep Ad Hoc 描述文件中，并解锁、信任本机。构建不会自动修改签名凭据；凭据过期或缺少设备时先按下节处理。IPA 保存在 `.data/builds/ios-*`，签名检查通过后才安装。
+
+两端都读取本地 `apps/mobile/.env.local` 的更新地址和客户端 Key；原生编译不需要发布管理令牌。任何编译、签名、安装或启动失败都会立即停止，错误修复后重新执行同一个命令。可用 `--help` 查看参数。原生目录与产物均在 Git 忽略范围内，不要手工把密钥加进仓库。
+
+原生构建会生成指纹基线，iOS 会在进入 EAS 临时目录前保存当前工作区的指纹。原生依赖或配置改变后，检查并提交 `apps/mobile/fingerprint.json` 的变化，再安装两端对应的新原生包。日常 `ota:push` 保留该基线，不会自动刷新指纹。
+
 ## iOS 内部分发
 
 应用使用 Finstep 的 Apple Developer Program 组织账号（Team ID `4SAK5KMM76`），Bundle ID 为 `hermes.cashcat.cn`，Expo 组织为 `finstep-intelligent-technology-co-ltd`。
@@ -20,12 +44,12 @@ pnpm dev:mobile
 
 ```sh
 pnpm --dir apps/mobile dlx eas-cli@27.10.0 device:create
-pnpm --dir apps/mobile dlx eas-cli@27.10.0 build --platform ios --profile preview
+pnpm --dir apps/mobile dlx eas-cli@27.10.0 credentials --platform ios
 ```
 
-首次构建按提示登录 Apple 账号并选择 Finstep 团队，使用 EAS 管理分发证书、Ad Hoc 描述文件和 APNs 凭据。构建成功后，在已登记的 iPhone 上打开 EAS 提供的安装链接。增加设备后需要重新构建或使用 `eas build:resign` 重签。
+首次按提示登录 Apple 账号并选择 Finstep 团队，使用 EAS 管理分发证书、Ad Hoc 描述文件和 APNs 凭据。确认描述文件包含目标 iPhone 后，运行 `pnpm app:ios` 本地编译并安装。增加设备后先更新描述文件，再重新本地编译。
 
-也可以在安装了 Xcode、CocoaPods 和 fastlane 的 Mac 上使用相同配置本地编译，复用 EAS 管理的签名凭据。在仓库根目录运行：
+日常本地编译与手机安装统一使用 `pnpm app:ios`。仅需单独生成 IPA 时，也可以使用以下底层命令：
 
 ```sh
 mkdir -p .data/builds
@@ -38,4 +62,4 @@ pnpm --dir apps/mobile dlx eas-cli@27.10.0 build --local --platform ios --profil
 
 ## 热更新
 
-Release 版本启动后检查并后台下载更新，下次完全退出并重新打开 App 时生效。首次启用仍须构建安装一次原生 App；开发调试继续使用 Metro。配置服务、客户端凭据、原生指纹和发布命令见 [热更新操作说明](../../docs/hot-updates.md)。
+日常在仓库根目录运行 `pnpm ota:push --message "更新说明"`，一次发布两个平台到 `preview`，不操作 Git。Release 版本启动后检查并后台下载更新，下次完全退出并重新打开 App 时生效。首次启用仍须构建安装一次原生 App；开发调试继续使用 Metro。配置服务、客户端凭据、原生指纹和发布命令见 [热更新操作说明](../../docs/hot-updates.md)。

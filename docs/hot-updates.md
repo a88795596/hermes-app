@@ -6,8 +6,8 @@
 
 设置页显示当前运行版本的两项信息，离线也可查看：
 
-- **热更新版本**：更新包的完整 Bundle ID，可长按选择复制；未安装 OTA 时显示“内置版本”。后台下载的新包在下次冷启动生效后才会显示。
-- **构建时间**：从当前包的 UUIDv7 ID 读取构建开始时间，按手机本地时区显示；内置包使用原生构建 ID 的时间。开发、网页、未启用热更新或无法识别的旧包不推测时间，显示 `—`。
+- **热更新版本**：发布命令和 Console 使用的完整公开 Bundle ID，可长按选择复制；未安装 OTA 时显示“内置版本”。后台下载的新包在下次冷启动生效后才会显示。
+- **构建时间**：从当前构建产物的 UUIDv7 ID 读取构建开始时间，按手机本地时区显示；内置包使用原生构建 ID 的时间。开发、网页、未启用热更新或无法识别的旧包不推测时间，显示 `—`。
 
 ## 接入已有服务的配置包
 
@@ -79,47 +79,39 @@ EAS 云端构建不会自动获得本机被忽略的 `.env.local`。在所用 EA
 
 首次接入需要重新编译并安装原生 App，因为旧安装包不包含 Hot Updater 原生模块。项目使用 `fingerprint` 匹配原生兼容性，原生渠道和发布脚本均默认为 `preview`。
 
-先生成指纹基线并提交 `apps/mobile/fingerprint.json`：
+日常使用本机编译并安装命令，设备与工具链要求见 [本地编译说明](../apps/mobile/README.md#本地编译并安装到手机)：
 
 ```sh
-pnpm ota:fingerprint
+pnpm app:ios
+pnpm app:android
 ```
 
-然后构建所需平台的内部 Release 包：
-
-```sh
-pnpm --dir apps/mobile dlx eas-cli@27.10.0 build --platform ios --profile preview
-pnpm --dir apps/mobile dlx eas-cli@27.10.0 build --platform android --profile preview
-```
+命令会生成原生指纹基线。原生依赖或配置有变化时，检查并提交 `apps/mobile/fingerprint.json`，为对应两端安装新原生包后再发布 OTA。
 
 iOS 设备登记与签名要求见 [移动端内部分发](../apps/mobile/README.md#ios-内部分发)。安装后保留同一个 App 完成下面的 OTA 测试。
-
-有本机原生工具链时，也可以用 Expo 创建 Release 测试构建：
-
-```sh
-pnpm --filter @hermes-mobile/mobile exec expo run:ios --configuration Release
-pnpm --filter @hermes-mobile/mobile exec expo run:android --variant release
-```
 
 本地 iOS 编译需要 Xcode 和 CocoaPods；Android 编译需要 JDK 和 Android SDK。Expo Go、Debug 构建和 Metro 热刷新不能证明 OTA 工作。Expo prebuild 会应用原生插件并生成指纹；绕过 prebuild 直接构建时仍须确保指纹文件存在。 [官方 App 接入](https://hot-updater.dev/docs/get-started/app-setup)
 
 ## 4. 发布 JavaScript 或资源更新
 
-修改一处易辨认的页面文字或业务图片，保留原生依赖、配置和指纹基线。完成项目检查后，发布到对应平台：
+修改一处易辨认的页面文字或业务图片，保留原生依赖、配置和指纹基线。完成项目检查后，一次发布两个平台：
 
 ```sh
 pnpm typecheck
 pnpm test
-pnpm ota:deploy -p ios --message "更新聊天页面"
+pnpm ota:push --message "更新聊天页面"
 ```
 
-确认 iOS 发布成功后，再发布 Android：
+命令固定使用默认 `preview` 渠道。Hot Updater 先构建、上传两端，再使用共享数据库与存储配置，在一次事务中发布；任意平台准备失败都不会发布这次更新。失败前上传的文件可能仍留在存储中。输出分别给出 iOS 和 Android 的公开 Bundle ID，与 App 设置页保持一致。命令不执行 Git commit 或 Git push，不重新生成指纹。
+
+只需单独重发一个平台时保留底层入口：
 
 ```sh
+pnpm ota:deploy -p ios --message "更新聊天页面"
 pnpm ota:deploy -p android --message "更新聊天页面"
 ```
 
-命令默认发布至 `preview`，只匹配该渠道下具有相同原生指纹的安装包。记录每个平台输出的 Bundle ID；两个平台分别发布，第二个平台失败不会撤回第一个。OTA 打包使用 Expo 和 Hermes 编译器，不需要重新运行 Xcode、CocoaPods 或 Gradle。
+更新只匹配该渠道下具有相同原生指纹的安装包。单平台命令彼此独立，先前成功的发布不会因另一个平台失败而撤回。OTA 打包使用 Expo 和 Hermes 编译器，不需要重新运行 Xcode、CocoaPods 或 Gradle。
 
 **不要在每次 OTA 前执行 `ota:fingerprint`。** 指纹不一致意味着需要审查原生变化、生成新基线并交付新原生包，不能通过刷新基线让旧安装包支持新原生能力。 [发布命令](https://hot-updater.dev/docs/guides/deploy)
 

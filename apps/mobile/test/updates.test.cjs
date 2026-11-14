@@ -1,5 +1,9 @@
 const assert = require("node:assert/strict");
-const { readFileSync } = require("node:fs");
+const { readFileSync, mkdtempSync, rmSync } = require("node:fs");
+const { spawnSync } = require("node:child_process");
+const { tmpdir } = require("node:os");
+const { join } = require("node:path");
+const { pathToFileURL } = require("node:url");
 const test = require("node:test");
 const ts = require("typescript");
 
@@ -19,6 +23,7 @@ function loadUpdates({ env = configured, dev = false, init = () => ({}) } = {}) 
     return { HotUpdater: { init: (options) => ({
       getManifest: () => ({ bundleId: builtinId, assets: {} }),
       getMinBundleId: () => builtinId,
+      getBundleId: () => builtinId,
       ...init(options),
     }) } };
   }, { env }, dev, { warn: (...args) => warnings.push(args) });
@@ -34,7 +39,7 @@ test("开发和未启用热更新时不加载原生模块", async () => {
   }
 });
 
-test("版本信息固定为启动时的更新包 ID 和构建时间，下载新包不会提前改变显示", async () => {
+test("版本显示发布命令的公开包 ID，时间取构建产物；下载新包不会提前改变显示", async () => {
   let selectedBundle = bundleId;
   const runtime = loadUpdates({ init: () => ({
     getManifest: () => ({ bundleId: selectedBundle, assets: {} }),
@@ -43,7 +48,7 @@ test("版本信息固定为启动时的更新包 ID 和构建时间，下载新�
       return { async updateBundle() { selectedBundle = "017f22e2-99b0-7cc3-98c4-dc0c0c07398f"; return true; } };
     },
   }) });
-  const expected = { id: bundleId, builtAt: 1645557742000 };
+  const expected = { id: "017f22e2-89b0-7cc3-98c4-dc0c0c07398f", builtAt: 1645557742000 };
   assert.deepEqual(runtime.currentUpdate, expected);
   await runtime.prepareUpdate();
   assert.deepEqual(runtime.currentUpdate, expected);
@@ -59,9 +64,28 @@ test("内置包使用原生构建时间，开发与未启用状态不伪造时�
 
 test("不认识的更新包 ID 保留原值，构建时间显示为未知", () => {
   for (const id of ["legacy-bundle", "017f22e2-79b0-4cc3-98c4-dc0c0c07398f", "017f22e2-79b0-7cc3-98c4-dc0c0c07398f-invalid"]) {
-    const runtime = loadUpdates({ init: () => ({ getManifest: () => ({ bundleId: id, assets: {} }) }) });
+    const runtime = loadUpdates({ init: () => ({ getManifest: () => ({ bundleId: id, assets: {} }), getBundleId: () => id }) });
     assert.deepEqual(runtime.currentUpdate, { id, builtAt: undefined });
   }
+});
+
+test("双平台发布共享同一个数据库与存储配置，保留原生构建无需管理令牌的能力", (t) => {
+  const cwd = mkdtempSync(join(tmpdir(), "hermes-ota-config-"));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  const configUrl = pathToFileURL(require.resolve("../hot-updater.config.ts")).href;
+  const result = spawnSync(process.execPath, ["--input-type=module", "-e", `
+    import assert from "node:assert/strict";
+    const { default: configure } = await import(${JSON.stringify(configUrl)});
+    const ios = configure({ platform: "ios", channel: "preview" });
+    const android = configure({ platform: "android", channel: "preview" });
+    assert.equal(ios.database, android.database);
+    assert.equal(ios.storage, android.storage);
+    assert.equal(configure(null).updateStrategy, "fingerprint");
+  `], { cwd, encoding: "utf8", env: { ...process.env,
+    EXPO_PUBLIC_HOT_UPDATER_BASE_URL: "https://updates.example.com", EXPO_PUBLIC_HOT_UPDATER_API_KEY: "fixture-client-key",
+    HOT_UPDATER_BASE_URL: "https://updates.example.com", HOT_UPDATER_ADMIN_TOKEN: "",
+  } });
+  assert.equal(result.status, 0, result.stderr);
 });
 
 test("启动按原生指纹检查，下载成功后留待下次启动，不重载聊天", async () => {
