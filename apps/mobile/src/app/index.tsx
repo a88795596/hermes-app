@@ -248,7 +248,7 @@ function Workspace({
       <ScrollView
         contentContainerStyle={[styles.content, layout.page]}
         keyboardShouldPersistTaps="handled"
-        refreshControl={<RefreshControl refreshing={workspace.syncing} onRefresh={() => void workspace.refresh()} tintColor={colors.accent} colors={[colors.accent]} />}
+        refreshControl={<RefreshControl refreshing={workspace.refreshing} onRefresh={() => void workspace.refresh()} tintColor={colors.accent} colors={[colors.accent]} />}
       >
         <View style={layout.pageHeader}>
           <Text accessibilityRole="header" style={[styles.title, layout.grow]}>{pageTitle}</Text>
@@ -329,7 +329,7 @@ function Workspace({
               </View>
             </View>
             <View style={styles.row}>
-              <Action icon="refresh" title="刷新" disabled={workspace.syncing} onPress={() => void workspace.refresh()} />
+              <Action icon="refresh" title="刷新" disabled={workspace.refreshing} onPress={() => void workspace.refresh()} />
               {pushAvailable && (
                 <Action icon="bell" title={push === "enabled" ? "通知已启用" : push === "enabling" ? "启用中…" : "启用通知"}
                   disabled={push !== "idle" || workspace.network !== "online"} onPress={() => void enablePush()} />

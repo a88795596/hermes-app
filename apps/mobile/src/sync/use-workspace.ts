@@ -28,6 +28,8 @@ const emptyDirectory: Directory = { profiles: [], topics: [], inbox: [] };
 const topicKey = (id: string) => `topic:${id}`;
 const pendingKey = (id: string) => `pending:${id}`;
 const revokeError = (error: unknown) => error instanceof ApiError && error.status === 401;
+const isPermanentApiFailure = (error: unknown): error is ApiError =>
+  error instanceof ApiError && !error.retryable && error.status !== 429;
 
 export function useWorkspace(session: Session, topicId: string | null, localTopic: boolean) {
   const [cache, setCache] = useState<Cache>();
@@ -39,7 +41,7 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
   const [live, setLive] = useState(false);
   const [error, setError] = useState<string>();
   const [storageError, setStorageError] = useState<string>();
-  const [syncing, setSyncing] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [sessionEnded, setSessionEnded] = useState(false);
   const hasRemoteTopic = !localTopic || detail?.topic.topic_id === topicId
     || directory.topics.some((topic) => topic.topic_id === topicId);
@@ -50,6 +52,9 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
   const directoryLoad = useRef<Promise<void>>(undefined);
   const detailLoads = useRef(new Map<string, Promise<TopicDetail | undefined>>());
   const outboxLoad = useRef<Promise<void>>(undefined);
+  const manualRefresh = useRef<Promise<void>>(undefined);
+  const outboxNeedsRetry = useRef(false);
+  const syncNeedsRetry = useRef(false);
   const revoked = useRef(false);
   const signingOut = useRef(false);
   const enqueueWrites = useRef(0);
@@ -138,6 +143,7 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
         setDirectory(next);
       } catch (failure) {
         if (!active.current || revoked.current) return;
+        if (!isPermanentApiFailure(failure)) syncNeedsRetry.current = true;
         if (!(failure instanceof ApiError)) setNetwork("offline");
         setError(failure instanceof Error ? failure.message : "无法刷新工作区。");
       } finally {
@@ -206,6 +212,7 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
           await cache.remove(topicKey(id)).catch(() => {});
         }
         if (visibleTopic.current === id) {
+          if (!isPermanentApiFailure(failure)) syncNeedsRetry.current = true;
           setError(failure instanceof Error ? failure.message : "无法刷新话题。");
         }
       } finally {
@@ -267,7 +274,7 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
               await cache.set(pendingKey(item.submission_id), { ...item, error: next.topic.error ?? "Hermes 无法创建此会话。" });
               continue;
             }
-            if (!(failure instanceof ApiError) || failure.retryable || failure.status === 429) break;
+            if (!isPermanentApiFailure(failure)) break;
             await cache.set(pendingKey(item.submission_id), { ...item, error: failure.message });
             continue;
           }
@@ -284,9 +291,17 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
         }
       } finally {
         try {
-          if (active.current && !revoked.current) setPending(await cache.list<Pending>("pending:"));
+          if (active.current && !revoked.current) {
+            outboxNeedsRetry.current = false;
+            const saved = await cache.list<Pending>("pending:");
+            outboxNeedsRetry.current ||= saved.some((item) => !item.error);
+            setPending(saved);
+          }
         } catch (failure) {
-          if (active.current) setStorageError(failure instanceof Error ? failure.message : "无法访问本地待发送的消息。");
+          if (active.current) {
+            outboxNeedsRetry.current = true;
+            setStorageError(failure instanceof Error ? failure.message : "无法访问本地待发送的消息。");
+          }
         }
         outboxLoad.current = undefined;
       }
@@ -295,17 +310,24 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
     return task;
   }, [cache, call, createTopic, foreground, loadTopic]);
 
-  const refresh = useCallback(async () => {
-    setSyncing(true);
+  const syncWorkspace = useCallback(async () => {
+    syncNeedsRetry.current = false;
     setError(undefined);
-    try {
-      const id = remoteTopic.current;
-      await Promise.all([loadDirectory(), id ? loadTopic(id) : undefined]);
-      await flush();
-    } finally {
-      if (active.current) setSyncing(false);
-    }
+    const id = remoteTopic.current;
+    await Promise.all([loadDirectory(), id ? loadTopic(id) : undefined]);
+    await flush();
   }, [flush, loadDirectory, loadTopic]);
+
+  function refresh() {
+    if (manualRefresh.current) return manualRefresh.current;
+    setRefreshing(true);
+    const task = syncWorkspace().finally(() => {
+      manualRefresh.current = undefined;
+      if (active.current) setRefreshing(false);
+    });
+    manualRefresh.current = task;
+    return task;
+  }
 
   useEffect(() => {
     if (!cache || !foreground || sessionEnded) return;
@@ -363,7 +385,7 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
           if (closed) return;
           retry = 1000;
           setLive(true);
-          void refresh();
+          void syncWorkspace();
         };
         socket.onmessage = (event) => {
           if (closed || typeof event.data !== "string") return;
@@ -371,7 +393,7 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
             const value = JSON.parse(event.data) as MobileNotice | null;
             if (value?.type === "changed") schedule(typeof value.topic_id === "string" ? value.topic_id : undefined);
           } catch {
-            // 定时 HTTP 刷新可弥补丢失或无法识别的通知。
+            syncNeedsRetry.current = true;
           }
         };
         socket.onerror = () => socket?.close();
@@ -381,9 +403,12 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
       }
     }
 
-    void refresh();
+    void syncWorkspace();
     void connect();
-    const poll = setInterval(() => void refresh(), 15_000);
+    const poll = setInterval(() => {
+      if (socket?.readyState !== WebSocket.OPEN || syncNeedsRetry.current) void syncWorkspace();
+      else if (outboxNeedsRetry.current) void flush();
+    }, 15_000);
     return () => {
       closed = true;
       setLive(false);
@@ -393,7 +418,7 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
       clearTimeout(notice);
       socket?.close();
     };
-  }, [cache, call, flush, foreground, loadDirectory, loadTopic, refresh, session.origin, sessionEnded]);
+  }, [cache, call, flush, foreground, loadDirectory, loadTopic, session.origin, sessionEnded, syncWorkspace]);
 
   async function enqueue(item: Pending) {
     if (!cache || revoked.current || signingOut.current) throw new Error("无法访问本地历史记录。");
@@ -401,6 +426,7 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
     try {
       await cache.set(pendingKey(item.submission_id), item);
       setPending((current) => [...current.filter((row) => row.submission_id !== item.submission_id), item]);
+      if (outboxLoad.current) outboxNeedsRetry.current = true;
       void flush();
     } finally {
       enqueueWrites.current -= 1;
@@ -487,9 +513,10 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
     live,
     error,
     storageError,
-    syncing,
+    refreshing,
     ready: Boolean(cache),
     refresh,
+    syncWorkspace,
     call,
     setTopicArchived,
     prepareTopic,
