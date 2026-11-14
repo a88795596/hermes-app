@@ -2,11 +2,13 @@ import { randomUUID } from "expo-crypto";
 import { useEffect, useRef, useState, type ComponentRef } from "react";
 import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import Animated from "react-native-reanimated";
-import type { Control, Message, MessageProcessStep, SessionStatus, Skill, Topic } from "@hermes-mobile/protocol";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { MAX_ATTACHMENTS, type Attachment, type AttachmentUpload, type Control, type Message, type MessageProcessStep, type SessionStatus, type Skill, type Topic } from "@hermes-mobile/protocol";
 import type { useWorkspace } from "../sync/use-workspace";
 import { motion, useReduceMotion } from "../ui/motion";
 import { Action, Card, EmptyState, Field, Icon, Notice, useTheme } from "../ui/theme";
-import { ComposerMenu, ReasoningMenu, reasoningLabels, type ComposerCommand } from "./composer-menu";
+import { pickAttachments } from "./attachments";
+import { AttachmentMenu, ComposerMenu, ReasoningMenu, reasoningLabels, type ComposerCommand } from "./composer-menu";
 import { ModelPicker } from "./model-picker";
 
 const messageStatus: Record<Message["status"], string> = {
@@ -154,21 +156,34 @@ function ControlCard({
   );
 }
 
+function MessageAttachments({ items, tint }: { items: Attachment[]; tint: string }) {
+  const { styles } = useTheme();
+  return items.map((item, index) => (
+    <View key={index} style={chat.attachmentLine}>
+      <Icon name={item.mime.startsWith("image/") ? "photo" : "attachment"} size={15} color={tint} />
+      <Text numberOfLines={2} style={[styles.text, chat.attachmentName, { color: tint }]}>{item.name}</Text>
+    </View>
+  ));
+}
+
 export function Conversation({
-  id, topic, newProfileId, workspace, draft, onDraftChange, onNewTopic, showProcess,
+  id, topic, newProfileId, workspace, draft, onDraftChange, attachments, onAttachmentsChange, onNewTopic, showProcess,
 }: {
   id: string;
   topic?: Topic;
   newProfileId?: string;
   workspace: ReturnType<typeof useWorkspace>;
   draft: string;
+  attachments: AttachmentUpload[];
   showProcess: boolean;
   onDraftChange: (value: string) => void;
+  onAttachmentsChange: (value: AttachmentUpload[]) => void;
   onNewTopic: () => void;
 }) {
   const { colors, styles } = useTheme();
   const reduced = useReduceMotion();
   const { width } = useWindowDimensions();
+  const { top: safeAreaTop } = useSafeAreaInsets();
   const messageWidth = Math.min(560, (width - transcriptGutter * 2) * 0.86);
   const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
   const pinned = useRef(true);
@@ -176,7 +191,9 @@ export function Conversation({
   const [stopping, setStopping] = useState(false);
   const [draftFocused, setDraftFocused] = useState(false);
   const [sendFocused, setSendFocused] = useState(false);
-  const [menu, setMenu] = useState<"commands" | "skills" | "reasoning">();
+  const [menu, setMenu] = useState<"commands" | "skills" | "reasoning" | "attachments">();
+  const [picking, setPicking] = useState(false);
+  const choosingAttachment = useRef(false);
   const [error, setError] = useState<string>();
   const [modelPicker, setModelPicker] = useState(false);
   const [commandNotice, setCommandNotice] = useState<string>();
@@ -202,9 +219,9 @@ export function Conversation({
     .filter((item) => item.topic_id === id && !messages.some((message) => message.submission_id === item.submission_id))
     .sort((a, b) => a.created_at - b.created_at);
   const canWrite = topic?.status === "ready" || (!!newProfileId && topic?.status !== "error");
-  const canSend = canWrite && workspace.ready && !sending;
+  const canSend = canWrite && workspace.ready && !sending && !picking;
   const canControl = workspace.network === "online" && workspace.connector_online === true;
-  const isModelCommand = draft.trim().toLowerCase() === "/model";
+  const isModelCommand = !attachments.length && draft.trim().toLowerCase() === "/model";
   const activeSubmission = messages.find((message) => message.role === "user" && message.status === "streaming")?.submission_id;
   const running = Boolean(activeSubmission);
   const topicBusy = sending || pending.some((item) => !item.error) || messages.some((message) => message.role === "user" &&
@@ -213,7 +230,10 @@ export function Conversation({
   const reasoningStatus = topic?.reasoning_status;
   const reasoningLegacy = canControl && workspace.reasoning_supported !== true;
   const reasoningBlocked = reasoningLegacy && (reasoningStatus !== undefined || reasoning !== null);
-  const sendDisabled = !canSend || !draft.trim() || (isModelCommand ? !canControl : reasoningBlocked);
+  const attachmentsBlocked = canControl && workspace.attachments_supported !== true;
+  const sendDisabled = !canSend || (!draft.trim() && !attachments.length) || (!!attachments.length && attachmentsBlocked)
+    || (isModelCommand ? !canControl : reasoningBlocked);
+  const attachmentDisabled = !canWrite || picking || sending || attachments.length >= MAX_ATTACHMENTS;
   const reasoningUnavailable = !canControl ? "重新连接 Hermes 后即可切换思考强度。"
     : reasoningLegacy ? "更新服务端和连接器后即可切换思考强度。"
     : topicBusy ? "请等待当前消息处理完成，再切换思考强度。" : undefined;
@@ -228,6 +248,25 @@ export function Conversation({
   useEffect(() => {
     interruptId.current = undefined;
   }, [activeSubmission]);
+
+  async function addAttachments(kind: "image" | "file") {
+    if (choosingAttachment.current) return;
+    choosingAttachment.current = true;
+    setError(undefined);
+    setPicking(true);
+    try {
+      // Keep the sheet mounted while iOS presents its system picker.
+      const selected = await pickAttachments(kind, attachments);
+      setMenu(undefined);
+      if (selected.length) onAttachmentsChange([...attachments, ...selected]);
+    } catch (failure) {
+      setMenu(undefined);
+      setError(failure instanceof Error ? failure.message : "无法读取所选附件。");
+    } finally {
+      choosingAttachment.current = false;
+      setPicking(false);
+    }
+  }
 
   async function send() {
     const text = draft.trim();
@@ -244,8 +283,10 @@ export function Conversation({
     setError(undefined);
     try {
       await workspace.enqueue({ submission_id: randomUUID(), topic_id: id, text, created_at: Date.now(),
+        ...(attachments.length && { attachments }),
         ...(newProfileId && { profile_id: newProfileId }) });
       onDraftChange("");
+      if (attachments.length) onAttachmentsChange([]);
       setCommandNotice(undefined);
       pinned.current = true;
       scroll.current?.scrollToEnd({ animated: true });
@@ -341,8 +382,11 @@ export function Conversation({
   }
 
   return (
-    <KeyboardAvoidingView style={styles.frame} behavior={Platform.OS === "web" ? undefined : "padding"}>
-      {menu === "reasoning" ? (
+    <KeyboardAvoidingView style={styles.frame} behavior={Platform.OS === "web" ? undefined : "padding"}
+      keyboardVerticalOffset={safeAreaTop}>
+      {menu === "attachments" ? (
+        <AttachmentMenu busy={picking} onClose={() => setMenu(undefined)} onPick={(kind) => void addAttachments(kind)} />
+      ) : menu === "reasoning" ? (
         <ReasoningMenu effort={reasoningStatus || reasoningBlocked ? undefined : reasoning}
           status={reasoningStatus} unavailable={reasoningUnavailable}
           onClose={() => setMenu(undefined)}
@@ -417,19 +461,20 @@ export function Conversation({
                     })}
                   </View>
                 )}
-                {!!message.text && (
+                {(!!message.text || !!message.attachments?.length) && (
                   <View style={[
                     chat.bubble,
                     outgoing ? chat.outgoingBubble : chat.incomingBubble,
                     { backgroundColor: outgoing ? colors.accentFill : colors.secondary },
                   ]}>
-                    <Text
+                    {!!message.attachments?.length && <MessageAttachments items={message.attachments} tint={colors.onAccent} />}
+                    {!!message.text && <Text
                       selectable
                       accessibilityLabel={`${outgoing ? "你" : "Hermes"}：${message.text}`}
                       style={[styles.text, chat.messageText, outgoing && { color: colors.onAccent }]}
                     >
                       {message.text}
-                    </Text>
+                    </Text>}
                   </View>
                 )}
                 {messageStatus[message.status] ? (
@@ -448,9 +493,10 @@ export function Conversation({
         {pending.map((item) => (
           <Animated.View key={item.submission_id} style={[chat.message, chat.outgoing, { maxWidth: messageWidth }, !reduced && motion.reveal]}>
             <View style={[chat.bubble, chat.outgoingBubble, { backgroundColor: colors.tint }]}>
-              <Text selectable accessibilityLabel={`你：${item.text}`} style={[styles.text, chat.messageText]}>
+              {!!item.attachments?.length && <MessageAttachments items={item.attachments} tint={colors.foreground} />}
+              {!!item.text && <Text selectable accessibilityLabel={`你：${item.text}`} style={[styles.text, chat.messageText]}>
                 {item.text}
-              </Text>
+              </Text>}
             </View>
             {item.error ? (
               <>
@@ -463,7 +509,9 @@ export function Conversation({
                   })}
                 />
               </>
-            ) : <Text style={[styles.caption, chat.outgoingStatus]}>等待发送</Text>}
+            ) : <Text style={[styles.caption, chat.outgoingStatus]}>
+              {item.attachments?.length && attachmentsBlocked ? "更新连接器后发送" : "等待发送"}
+            </Text>}
           </Animated.View>
         ))}
         {trailingControls.map((control) => (
@@ -477,6 +525,7 @@ export function Conversation({
         {commandNotice && <Text accessibilityLiveRegion="polite" style={styles.muted}>{commandNotice}</Text>}
         {isModelCommand && !canControl && <Text style={styles.muted}>连接 Hermes 后即可选择模型。</Text>}
         {reasoningBlocked && <Text accessibilityLiveRegion="polite" style={styles.muted}>更新 Hermes 连接器后可继续发送。</Text>}
+        {!!attachments.length && attachmentsBlocked && <Notice>更新服务端和连接器后可发送附件。</Notice>}
         <View style={[styles.row, chat.toolbar]}>
           <Action compact title="命令" disabled={!canWrite} onPress={() => { Keyboard.dismiss(); setMenu("commands"); }} />
           <Action compact title={openingSkills ? "正在加载技能…" : "技能"}
@@ -490,10 +539,33 @@ export function Conversation({
               accessibilityLabel={stopping ? "正在请求停止回复" : undefined} disabled={!canControl || stopping} onPress={() => void stop()} />
           )}
         </View>
+        {!!attachments.length && (
+          <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={chat.attachmentTray}>
+            {attachments.map((item, index) => (
+              <View key={index} style={[chat.attachmentChip, { backgroundColor: colors.tint, borderColor: colors.edge }]}>
+                <Icon name={item.mime.startsWith("image/") ? "photo" : "attachment"} size={16} color={colors.accent} />
+                <Text numberOfLines={1} style={[styles.text, chat.attachmentName, chat.chipName]}>{item.name}</Text>
+                <Pressable accessibilityRole="button" accessibilityLabel={`移除附件 ${item.name}`} disabled={sending || picking}
+                  onPress={() => {
+                    onAttachmentsChange(attachments.filter((_item, itemIndex) => itemIndex !== index));
+                    setError(undefined);
+                  }} style={({ pressed }) => [chat.iconButton, pressed && styles.faded]}>
+                  <Icon name="close" size={14} color={colors.muted} />
+                </Pressable>
+              </View>
+            ))}
+          </ScrollView>
+        )}
         <View style={[chat.composerRow, { backgroundColor: colors.field, borderColor: draftFocused ? colors.accent : colors.edge }]}>
+          <Pressable accessibilityRole="button" accessibilityLabel="添加附件"
+            accessibilityState={{ disabled: attachmentDisabled, busy: picking, expanded: menu === "attachments" }}
+            disabled={attachmentDisabled} onPress={() => { Keyboard.dismiss(); setMenu("attachments"); }}
+            style={({ pressed }) => [chat.iconButton, (pressed || attachmentDisabled) && styles.faded]}>
+            {picking ? <ActivityIndicator size="small" color={colors.accent} /> : <Icon name="attachment" size={20} color={colors.accent} />}
+          </Pressable>
           <Field
             accessibilityLabel="消息"
-            placeholder="发消息给 Hermes"
+            placeholder={attachments.length ? "添加描述…" : "发消息给 Hermes"}
             style={chat.draft}
             multiline
             editable={canWrite && !sending}
@@ -555,13 +627,19 @@ const chat = StyleSheet.create({
   process: { borderStartWidth: 1, paddingStart: 10, paddingVertical: 4, gap: 6, alignSelf: "stretch" },
   outgoing: { alignSelf: "flex-end", alignItems: "flex-end" },
   startGroup: { marginTop: 5 },
-  bubble: { borderRadius: 16, paddingHorizontal: 11, paddingVertical: 7 },
+  bubble: { borderRadius: 16, paddingHorizontal: 11, paddingVertical: 7, gap: 4 },
   incomingBubble: { borderBottomStartRadius: 5 },
   outgoingBubble: { borderBottomEndRadius: 5 },
   messageText: { fontSize: 14, lineHeight: 20 },
   outgoingStatus: { textAlign: "right", marginEnd: 3 },
   composer: { paddingHorizontal: 10, paddingBottom: 6, borderTopWidth: StyleSheet.hairlineWidth, gap: 2 },
   toolbar: { gap: 8 },
+  attachmentLine: { flexDirection: "row", alignItems: "center", gap: 6 },
+  attachmentName: { flexShrink: 1, fontSize: 13 },
+  attachmentTray: { gap: 6, paddingVertical: 3 },
+  attachmentChip: { flexDirection: "row", gap: 6, alignItems: "center", paddingStart: 10, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth },
+  chipName: { maxWidth: 140 },
+  iconButton: { minWidth: 44, height: 44, alignItems: "center", justifyContent: "center" },
   composerRow: {
     flexDirection: "row",
     alignItems: "flex-end",

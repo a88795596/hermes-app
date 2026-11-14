@@ -44,6 +44,12 @@ export function openStore(connectionString: string) {
           message_id uuid NOT NULL REFERENCES messages(id),
           data jsonb NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS submission_attachments (
+          submission_id uuid NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
+          position smallint NOT NULL,
+          content bytea NOT NULL,
+          PRIMARY KEY (submission_id, position)
+        );
         CREATE TABLE IF NOT EXISTS controls (
           id uuid PRIMARY KEY,
           topic_id uuid NOT NULL REFERENCES topics(id),

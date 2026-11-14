@@ -62,6 +62,7 @@ export async function applyResult(db: PoolClient, frame: CommandResult, refs: Se
     if (frame.status === "ok" && !frame.admission_id) invalid("提交结果缺少受理 ID。");
     const status = frame.status === "ok" ? "queued" : frame.status === "error" ? "failed" : "unknown";
     await applySubmission(db, topic.id, payload.body.submission_id, status, frame.error, frame.admission_id);
+    if (payload.body.attachments) await db.query("DELETE FROM submission_attachments WHERE submission_id = $1", [frame.command_id]);
   } else if (payload.kind === "select_reasoning") {
     await db.query("UPDATE topics SET reasoning_effort = $2, reasoning_status = $3, updated_at = clock_timestamp() WHERE id = $1", [topic.id,
       frame.status === "ok" ? payload.body.effort : topic.reasoning_effort,

@@ -54,6 +54,22 @@ function ComposerSheet({ title, subtitle, busy, onClose, children }: {
   );
 }
 
+export function AttachmentMenu({ busy, onClose, onPick }: {
+  busy: boolean;
+  onClose: () => void;
+  onPick: (kind: "image" | "file") => void;
+}) {
+  const { styles } = useTheme();
+  return (
+    <ComposerSheet title="添加附件" busy={busy} onClose={onClose}>
+      <View style={styles.row}>
+        <Action title="图片" icon="photo" disabled={busy} onPress={() => onPick("image")} />
+        <Action title="文件" icon="attachment" disabled={busy} onPress={() => onPick("file")} />
+      </View>
+    </ComposerSheet>
+  );
+}
+
 export function ReasoningMenu({ effort, status, unavailable, onClose, onRequest }: {
   effort: ReasoningEffort | null | undefined;
   status?: "pending" | "unknown";

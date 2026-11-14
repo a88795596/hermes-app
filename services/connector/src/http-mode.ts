@@ -1,6 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import type { Command, ConnectorEvent, Control, ModelSelection, ReasoningEffort, TopicQuery, TopicQueryData } from '@hermes-mobile/protocol';
 import { MAX_CLARIFY_CHOICE_BYTES } from '@hermes-mobile/protocol';
+import { attachmentBase64, attachmentFilename, type DownloadAttachment } from './attachments.js';
 import { integer, object, string } from './gateway.js';
 import type { JsonObject } from './gateway.js';
 import { addProcessText, removeStreamedCommentary, updateProcessTool } from './message-process.js';
@@ -61,9 +62,9 @@ function pendingPrompts(id: string, run: JsonObject): Prompt[] {
   });
 }
 
-type Options = { url: string; token: string; send: (frame: JsonObject) => void; spool: Spool };
+type Options = { url: string; token: string; send: (frame: JsonObject) => void; spool: Spool; downloadAttachment: DownloadAttachment };
 
-export function createHttpConnector({ url, token, send, spool }: Options) {
+export function createHttpConnector({ url, token, send, spool, downloadAttachment }: Options) {
   const endpoint = URL.parse(url);
   if (!endpoint || !['http:', 'https:'].includes(endpoint.protocol) ||
       !['127.0.0.1', '[::1]'].includes(endpoint.hostname) || endpoint.username || endpoint.password ||
@@ -91,6 +92,27 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
       body: JSON.stringify(body),
     }, timeoutMs);
     return { response, data: object(await response.json().catch(() => undefined)) };
+  }
+
+  async function prepareInput(command: Extract<Command, { kind: 'submit' }>) {
+    const { text, attachments } = command.body;
+    const documents: string[] = [];
+    const images: JsonObject[] = [];
+    for (const [index, attachment] of (attachments ?? []).entries()) {
+      const content_base64 = await attachmentBase64(downloadAttachment, command.command_id, index + 1, attachment);
+      if (attachment.mime.startsWith('image/')) {
+        images.push({ type: 'image_url', image_url: { url: `data:${attachment.mime};base64,${content_base64}` } });
+      } else {
+        const { response, data } = await json(command.profile_ref, '/api/hermes-mobile/attachment', {
+          name: attachmentFilename(attachment.name), content_base64,
+        });
+        const path = data?.path;
+        if (!response.ok || typeof path !== 'string' || !path || /[\p{Cc}]/u.test(path)) throw new Error('无法暂存文件');
+        documents.push(`用户附上了文件 ${JSON.stringify(attachment.name)}，保存在 ${JSON.stringify(path)}。请使用文件工具读取或提取其内容。`);
+      }
+    }
+    const prompt = [text, ...documents].filter((part) => part.trim()).join('\n\n') || '请查看上传的图片。';
+    return images.length ? [{ role: 'user', content: [{ type: 'text', text: prompt }, ...images] }] : prompt;
   }
 
   async function query({ kind, topic_id, profile_ref, session_id }: TopicQuery): Promise<TopicQueryData> {
@@ -308,6 +330,20 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
       return;
     }
     if (commands.has(command_id)) return;
+    let input: Awaited<ReturnType<typeof prepareInput>> | undefined;
+    if (command.kind === 'submit' && bound && command.body.attachments && !saved) {
+      try {
+        input = await prepareInput(command);
+      } catch {
+        if (current() && !shutdown.signal.aborted && spool.begin(command_id, digest)) {
+          const receipt = result(command_id, 'error', { error: 'Hermes 无法读取附件，请重新发送。' });
+          spool.finish(command_id, { ...receipt });
+          send({ ...receipt });
+        }
+        return;
+      }
+      if (!current() || shutdown.signal.aborted) return;
+    }
     if (!spool.begin(command_id, digest)) {
       const uncertain = result(command_id, 'unknown', { error: unknown });
       spool.finish(command_id, { ...uncertain });
@@ -374,7 +410,7 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
       } else if (command.kind === 'submit') {
         const effort = spool.reasoningEffort(topic_id);
         const { response, data } = await json(profile_ref, '/v1/runs', {
-          session_id: bound.sessionId, input: command.body.text, ...spool.modelSelection(topic_id),
+          session_id: bound.sessionId, input: input ?? command.body.text, ...spool.modelSelection(topic_id),
           ...(effort && { model_options: { reasoning_effort: effort } }),
         }, command_id);
         const id = string(data?.run_id);

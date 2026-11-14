@@ -61,7 +61,7 @@ pnpm typecheck
 
    HTTP 适配器使用 Hermes API 管理的会话。如果安装了较新版本的 Hermes，可将 `HERMES_API_URL` 留空，以网关所用的账户在同一台主机上运行连接器，并将 `HERMES_BIN` 指向支持 `gateway attach --json` 的命令行程序。连接器与 BFF 的数据库应配套使用，绑定同一个 Hermes 后端和传输方式。试用其他后端时请使用独立的数据库。
 
-   HTTP Runs 模式使用配套的 `hermes-mobile-runtime` 镜像生成自动标题、转发思考和阶段说明。它也修复了部分 Hermes 版本的「技能」菜单报错。构建后使用该镜像更新 Hermes 容器，并复用原有配置和数据卷。Canonical Gateway 模式使用 Hermes 自带的 `llm.oneshot` 生成标题。 [Hermes 单次模型调用](https://github.com/NousResearch/hermes-agent/blob/main/gateway/session_llm_oneshot.py)
+   HTTP Runs 模式使用配套的 `hermes-mobile-runtime` 镜像生成自动标题、暂存聊天文件、转发思考和阶段说明。它也修复了部分 Hermes 版本的「技能」菜单报错。构建后使用该镜像更新 Hermes 容器，并复用原有配置和数据卷。Canonical Gateway 模式使用 Hermes 自带的 `llm.oneshot` 生成标题。 [Hermes 单次模型调用](https://github.com/NousResearch/hermes-agent/blob/main/gateway/session_llm_oneshot.py)
 
    ```sh
    docker build -f services/connector/Dockerfile.hermes -t hermes-mobile-runtime services/connector
@@ -86,6 +86,10 @@ pnpm typecheck
 
 点击「新建会话」直接打开聊天。首条发送的消息会成为临时标题。每轮成功完成后，Hermes 根据最近四轮已完成的对话生成标题，并参考已生成的标题。聊天顶部和话题列表会同步更新。
 
+点输入框左侧的回形针，选择「图片」或「文件」。选中的附件会显示在输入框上方，可移除或继续添加。写好描述后点发送，附件和描述会一起交给 Hermes，也可以单独发送附件。每条消息最多 10 个附件，单个最多 5 MB，合计最多 6 MB。
+
+附件功能需要更新移动端、BFF 和连接器。HTTP Runs 的普通文件需要重新构建上面的 Hermes 镜像。Canonical Gateway 需要支持 `image.attach_bytes` 和 `file.attach`。使用反向代理时，请为消息提交请求允许至少 9 MiB 请求体，并将 `/internal/connector/v1/submissions/` 的 HTTPS 请求转发给 BFF。图片读取由 Hermes 和当前模型的视觉能力决定。
+
 点击会话标题右侧的「过程」开关，可以查看每条回复的思考、阶段说明和工具执行状态。开关在本次使用期间按话题记忆，默认关闭。能查看哪些过程取决于 Hermes 和模型实际提供的数据。
 
 在话题中发送 `/model`，先选择服务商，再选择模型。菜单会显示当前 Hermes 配置档案下可用的服务商，并标记当前选项。等本轮回复完成后即可切换模型，新选择对当前话题的后续对话生效。
@@ -102,7 +106,7 @@ docker exec -u hermes hermes-dev hermes tools enable --platform api_server clari
 
 如果使用具名配置档案，命令中的 Hermes 调用部分为 `hermes --profile <name> tools enable --platform api_server clarify`。如果使用 Canonical Gateway，话题所绑定的本地会话工具集须包含 `clarify`。
 
-个人版已实现单账户、文本聊天，以及 WSS 变更通知配合 HTTP 补拉。媒体附件、从系统分享导入、快照游标、生产级部署和设备验证另行交付。 [已实现的通信协议](docs/superpowers/plans/2026-11-13-personal-mvp-wire.md)
+个人版已实现单账户、带图片和文件的聊天，以及 WSS 变更通知配合 HTTP 补拉。 [已实现的通信协议](docs/superpowers/plans/2026-11-13-personal-mvp-wire.md)
 
 <a name="enable-manage-on-mobile"></a>
 
