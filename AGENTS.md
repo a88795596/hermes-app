@@ -16,6 +16,14 @@ Use Node.js 24 and pnpm 10.14. Run commands from the repository root.
 - `pnpm --filter @hermes-mobile/mobile android` builds and runs the Android development client. Use `ios` for iOS.
 - `pnpm --filter @hermes-mobile/connector build` bundles the Connector into `dist/main.cjs`.
 
+日常 App 交付统一从仓库根目录使用：
+
+- `pnpm app:android`：本机编译 Android Release，安装并启动真机。
+- `pnpm app:ios`：本机 Xcode 编译 iOS Ad Hoc Release，安装并启动真机。使用 EAS `--local`，不发起云端构建。
+- `pnpm ota:push --message "更新说明"`：同时发布 iOS 和 Android 热更新到 `preview`；不执行 Git 提交或推送，不自动重建原生指纹。
+
+多台真机使用 `--device <标识>` 指定。JavaScript 和资源更新优先使用热更新；首次接入或原生依赖、权限、图标、渠道改变时才重新编译原生包。密钥只保存在被 Git 忽略的本地环境文件中。
+
 ## Coding Style
 
 Use two-space indentation in TypeScript and four spaces in Python. Match neighboring quote style and use descriptive names such as `useWorkspace` and `model-picker.tsx`. Keep the shared protocol framework-neutral. Validate data at transport boundaries and keep Hermes credentials on the Connector host. Update both peers and the shared types when changing a wire contract.
