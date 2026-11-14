@@ -1,34 +1,42 @@
 import { randomUUID } from "expo-crypto";
 import { StatusBar } from "expo-status-bar";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, BackHandler, Keyboard, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+import Animated from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { Topic } from "@hermes-mobile/protocol";
 import { Pairing } from "../auth/pairing";
 import { loadSession, saveSession, type Session } from "../auth/session";
 import { Conversation } from "../chat/conversation";
 import { ManagementMenu, ManagementScreen, type ManagementPage } from "../manage";
+import { Group, Row } from "../manage/shared";
 import { enablePushNotifications, pushAvailable } from "../notifications";
 import { pairDevice } from "../sync/api";
 import { useWorkspace } from "../sync/use-workspace";
+import { motion, useReduceMotion } from "../ui/motion";
 import { formatDateTime, profileLabel } from "../ui/text";
 import { Action, Card, EmptyState, Field, Icon, Notice, useTheme, type IconName } from "../ui/theme";
 
 const sections = {
   topics: { title: "话题", icon: "topics" },
   inbox: { title: "收件箱", icon: "inbox" },
-  manage: { title: "管理", icon: "manage" },
-  connection: { title: "连接", icon: "settings" },
+  settings: { title: "设置", icon: "settings" },
 } as const;
 type Section = keyof typeof sections;
+type Page = Section | "manage" | "connection" | ManagementPage;
+type PageMotion = "fade" | "push" | "pop";
+type Navigation = { page: Page; transition: PageMotion; fromTopics?: boolean };
+const tabs = Object.keys(sections) as Section[];
+const backLabels = { topics: "话题", settings: "设置", manage: "管理" } as const;
 
 function ConnectionRow({ icon, label, value, online }: { icon: IconName; label: string; value: string; online: boolean }) {
   const { colors, styles } = useTheme();
+  const reduced = useReduceMotion();
   return (
     <View style={styles.listItem}>
       <Icon name={icon} size={17} color={colors.muted} />
       <Text style={[styles.text, layout.grow]}>{label}</Text>
-      <Text style={[styles.muted, layout.value, online && { color: colors.success }]}>{value}</Text>
+      <Animated.Text style={[styles.muted, layout.value, online && { color: colors.success }, !reduced && motion.status]}>{value}</Animated.Text>
     </View>
   );
 }
@@ -40,8 +48,8 @@ function Workspace({
   onSignOut: () => Promise<void>;
 }) {
   const { colors, styles } = useTheme();
-  const [section, setSection] = useState<Section>("topics");
-  const [managementPage, setManagementPage] = useState<ManagementPage>();
+  const reduced = useReduceMotion();
+  const [{ page, transition, fromTopics }, setNavigation] = useState<Navigation>({ page: "topics", transition: "fade" });
   const [topicId, setTopicId] = useState<string | null>(null);
   const [profileId, setProfileId] = useState<string>();
   const [title, setTitle] = useState("");
@@ -56,35 +64,54 @@ function Workspace({
   const profile = workspace.profiles.find((item) => item.profile_id === profileId) ?? workspace.profiles[0];
   const topic = workspace.detail?.topic ?? workspace.topics.find((item) => item.topic_id === topicId);
   const visibleTopics = workspace.topics.filter((item) => !profile || item.profile_id === profile.profile_id);
+  const section = page === "topics" || page === "inbox" ? page : "settings";
+  const settingsPage = page === "topics" || page === "inbox" || page === "settings" ? undefined : page;
+  const managementPage = settingsPage === "manage" || settingsPage === "connection" ? undefined : settingsPage;
+  const settingsParent = managementPage && profile ? "manage" : fromTopics ? "topics" : "settings";
+  const backLabel = backLabels[settingsParent];
+  const pageTitle = settingsPage === "connection" ? "连接" : settingsPage ? "管理" : sections[section].title;
   const connected = workspace.network === "online" && workspace.connector_online === true;
   const connection = workspace.network === "offline" ? "离线"
     : workspace.network === "connecting" ? "连接中…"
     : connected ? "Hermes 已连接" : "连接器离线";
 
+  const showPage = useCallback((next: Page, transition: PageMotion = "fade") => {
+    Keyboard.dismiss();
+    setNavigation((current) => current.page === next ? current : {
+      page: next, transition, fromTopics: next === "connection" && current.page === "topics",
+    });
+    setError(undefined);
+  }, []);
+
+  const closeTopic = useCallback(() => {
+    Keyboard.dismiss();
+    setNavigation((current) => ({ ...current, transition: "pop" }));
+    setTopicId(null);
+  }, []);
+
   useEffect(() => {
     if (Platform.OS !== "android") return;
     const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
-      if (managementPage) {
-        Keyboard.dismiss();
-        setManagementPage(undefined);
-        return true;
-      }
       if (topicId) {
-        setTopicId(null);
+        closeTopic();
         return true;
       }
-      if (section === "topics" && composing && !creating) {
+      if (settingsPage) {
+        showPage(settingsParent, "pop");
+        return true;
+      }
+      if (page === "topics" && composing && !creating) {
         setComposing(false);
         return true;
       }
-      if (section !== "topics") {
-        setSection("topics");
+      if (page !== "topics") {
+        showPage("topics");
         return true;
       }
       return false;
     });
     return () => subscription.remove();
-  }, [composing, creating, managementPage, section, topicId]);
+  }, [closeTopic, composing, creating, page, settingsPage, settingsParent, showPage, topicId]);
 
   async function create() {
     const name = title.trim();
@@ -159,23 +186,11 @@ function Workspace({
     );
   }
 
-  function showSection(name: Section) {
-    Keyboard.dismiss();
-    setManagementPage(undefined);
-    setSection(name);
-    setError(undefined);
-  }
-
-  if (managementPage && profile) {
-    return <ManagementScreen key={`${profile.profile_id}:${managementPage}`} page={managementPage} profile={profile}
-      request={workspace.call} onBack={() => setManagementPage(undefined)} />;
-  }
-
   if (topicId) {
     return (
-      <>
+      <Animated.View key={topicId} style={[styles.frame, !reduced && motion.push]}>
         <View style={[styles.header, layout.chatHeader, { borderBottomColor: colors.edge, backgroundColor: colors.surface }]}>
-          <Pressable accessibilityRole="button" accessibilityLabel="返回话题列表" hitSlop={6} onPress={() => setTopicId(null)}
+          <Pressable accessibilityRole="button" accessibilityLabel="返回话题列表" hitSlop={6} onPress={closeTopic}
             style={({ pressed }) => [layout.back, pressed && styles.faded]}>
             <Icon name="back" size={17} color={colors.accent} />
             <Text style={[styles.text, { color: colors.accent }]}>{sections.topics.title}</Text>
@@ -184,35 +199,34 @@ function Workspace({
           <View style={layout.backSpace} />
         </View>
         <Conversation
-          key={topicId}
           id={topicId}
           topic={topic}
           workspace={workspace}
           draft={drafts[topicId] ?? ""}
           onDraftChange={(value) => setDrafts((current) => ({ ...current, [topicId]: value }))}
           onNewTopic={() => {
-            showSection("topics");
+            showPage("topics");
             setProfileId(topic?.profile_id);
             setTitle("");
             setComposing(true);
             setTopicId(null);
           }}
         />
-      </>
+      </Animated.View>
     );
   }
 
-  return (
-    <>
+  const content = managementPage && profile ? (
+    <ManagementScreen key={`${profile.profile_id}:${managementPage}`} page={managementPage} profile={profile} request={workspace.call} />
+  ) : (
       <ScrollView
-        key={section}
         contentContainerStyle={[styles.content, layout.page]}
         keyboardShouldPersistTaps="handled"
         refreshControl={<RefreshControl refreshing={workspace.syncing} onRefresh={() => void workspace.refresh()} tintColor={colors.accent} colors={[colors.accent]} />}
       >
         <View style={layout.pageHeader}>
-          <Text accessibilityRole="header" style={[styles.title, layout.grow]}>{sections[section].title}</Text>
-          {section === "topics" && profile && (
+          <Text accessibilityRole="header" style={[styles.title, layout.grow]}>{pageTitle}</Text>
+          {page === "topics" && profile && (
             <Pressable accessibilityRole="button" accessibilityLabel={composing ? "关闭新建话题" : "新建话题"}
               accessibilityState={{ expanded: composing, disabled: creating }} disabled={creating}
               onPress={() => { if (composing) Keyboard.dismiss(); setComposing(!composing); setError(undefined); }}
@@ -221,8 +235,8 @@ function Workspace({
             </Pressable>
           )}
         </View>
-        {section === "topics" && (
-          <Pressable accessibilityRole="button" accessibilityLabel={connection + "。打开连接设置"} onPress={() => showSection("connection")}
+        {page === "topics" && (
+          <Pressable accessibilityRole="button" accessibilityLabel={connection + "。打开连接设置"} onPress={() => showPage("connection", "push")}
             style={({ pressed }) => [layout.connectionSummary, pressed && styles.faded]}>
             <View style={[layout.dot, { backgroundColor: connected ? colors.success : colors.muted }]} />
             <Text style={styles.muted}>{connection}</Text>
@@ -231,7 +245,7 @@ function Workspace({
         {error && <Notice>{error}</Notice>}
         {workspace.error && <Notice>{workspace.error}</Notice>}
         {workspace.storageError && <Notice>{workspace.storageError}</Notice>}
-        {section === "topics" && (
+        {page === "topics" && (
           <>
             {workspace.profiles.length > 1 && (
               <View style={styles.row}>
@@ -241,13 +255,15 @@ function Workspace({
               </View>
             )}
             {composing && profile && (
-              <Card>
-                <Text accessibilityRole="header" style={styles.heading}>新建话题</Text>
-                <Field autoFocus accessibilityLabel="话题名称" placeholder="话题名称" value={title} editable={!creating}
-                  onChangeText={setTitle} onSubmitEditing={() => void create()} returnKeyType="done" />
-                <Action primary title={creating ? "创建中…" : "创建话题"}
-                  disabled={!title.trim() || creating || workspace.network !== "online"} onPress={() => void create()} />
-              </Card>
+              <Animated.View style={!reduced && motion.reveal}>
+                <Card>
+                  <Text accessibilityRole="header" style={styles.heading}>新建话题</Text>
+                  <Field autoFocus accessibilityLabel="话题名称" placeholder="话题名称" value={title} editable={!creating}
+                    onChangeText={setTitle} onSubmitEditing={() => void create()} returnKeyType="done" />
+                  <Action primary title={creating ? "创建中…" : "创建话题"}
+                    disabled={!title.trim() || creating || workspace.network !== "online"} onPress={() => void create()} />
+                </Card>
+              </Animated.View>
             )}
             {visibleTopics.length > 0 ? (
               <View style={[layout.group, { backgroundColor: colors.surface }]}>
@@ -268,7 +284,7 @@ function Workspace({
             ) : null}
           </>
         )}
-        {section === "inbox" && (workspace.inbox.length > 0 ? (
+        {page === "inbox" && (workspace.inbox.length > 0 ? (
           <View style={[layout.group, { backgroundColor: colors.surface }]}>
             {workspace.inbox.map((item, index) => (
               <View key={item.inbox_id} style={[styles.listItem, layout.inboxRow, index > 0 && layout.divided, { borderColor: colors.edge }]}>
@@ -281,8 +297,16 @@ function Workspace({
             ))}
           </View>
         ) : workspace.ready ? <EmptyState icon="inbox" title="暂无消息" description="这里会显示定时任务结果和 Hermes 主动发送的消息。" /> : null)}
-        {section === "manage" && <ManagementMenu profiles={workspace.profiles} profile={profile} onProfile={setProfileId} onOpen={setManagementPage} />}
-        {section === "connection" && (
+        {page === "settings" && (
+          <Group>
+            <Row title="管理" subtitle="定时任务、模型、日志、技能和 MCP" icon="manage" onPress={() => showPage("manage", "push")} />
+            <Row divided title="连接" subtitle={connection} icon="link" onPress={() => showPage("connection", "push")} />
+          </Group>
+        )}
+        {settingsPage && settingsPage !== "connection" && (
+          <ManagementMenu profiles={workspace.profiles} profile={profile} onProfile={setProfileId} onOpen={(next) => showPage(next, "push")} />
+        )}
+        {page === "connection" && (
           <>
             <View>
               <Text accessibilityRole="header" style={styles.sectionLabel}>服务器</Text>
@@ -318,19 +342,41 @@ function Workspace({
           </>
         )}
       </ScrollView>
-      <View accessibilityRole="tablist" style={[layout.tabs, { borderColor: colors.edge, backgroundColor: colors.surface }]}>
-        {(Object.keys(sections) as Section[]).map((id) => {
-          const { title, icon } = sections[id];
-          const active = section === id;
-          const color = active ? colors.accent : colors.muted;
-          return (
-            <Pressable key={id} accessibilityRole="tab" accessibilityLabel={title} accessibilityState={{ selected: active }} onPress={() => showSection(id)}
-              style={({ pressed }) => [layout.tab, active && { backgroundColor: colors.tint }, pressed && styles.faded]}>
-              <Icon name={icon} size={19} color={color} />
-              <Text style={[layout.tabLabel, { color }]}>{title}</Text>
+  );
+
+  return (
+    <>
+      <Animated.View key={page} style={[styles.frame, !reduced && motion[transition]]}>
+        {settingsPage && (
+          <View style={[layout.backBar, { backgroundColor: colors.surface, borderColor: colors.edge }]}>
+            <Pressable accessibilityRole="button" accessibilityLabel={`返回${backLabel}`}
+              onPress={() => showPage(settingsParent, "pop")} style={({ pressed }) => [layout.back, pressed && styles.faded]}>
+              <Icon name="back" size={16} color={colors.accent} />
+              <Text style={[styles.text, { color: colors.accent }]}>{backLabel}</Text>
             </Pressable>
-          );
-        })}
+          </View>
+        )}
+        {content}
+      </Animated.View>
+      <View accessibilityRole="tablist" style={[layout.tabs, { borderColor: colors.edge, backgroundColor: colors.surface }]}>
+        <View style={layout.tabStrip}>
+          <Animated.View style={[layout.tabIndicator, {
+            backgroundColor: colors.tint,
+            transform: [{ translateX: `${tabs.indexOf(section) * 100}%` }],
+          }, !reduced && motion.indicator]} />
+          {tabs.map((id) => {
+            const { title, icon } = sections[id];
+            const active = section === id;
+            const color = active ? colors.accent : colors.muted;
+            return (
+              <Pressable key={id} accessibilityRole="tab" accessibilityLabel={title} aria-selected={active} onPress={() => showPage(id)}
+                style={({ pressed }) => [layout.tab, pressed && styles.faded]}>
+                <Icon name={icon} size={19} color={color} />
+                <Text style={[layout.tabLabel, { color }]}>{title}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
       </View>
     </>
   );
@@ -360,7 +406,7 @@ export default function HomeScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.frame}>
+    <SafeAreaView style={[styles.frame, layout.clip]}>
       <StatusBar style={dark ? "light" : "dark"} />
       {session === undefined ? (
         <View style={styles.pairContent}>
@@ -376,6 +422,7 @@ export default function HomeScreen() {
 }
 
 const layout = StyleSheet.create({
+  clip: { overflow: "hidden" },
   page: { width: "100%", maxWidth: 680, alignSelf: "center", paddingTop: 16 },
   pageHeader: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: 8 },
   grow: { flex: 1, minWidth: 0 },
@@ -389,10 +436,13 @@ const layout = StyleSheet.create({
   inboxRow: { alignItems: "flex-start" },
   date: { marginTop: 3 },
   chatHeader: { borderBottomWidth: StyleSheet.hairlineWidth, minHeight: 48, paddingHorizontal: 12, paddingVertical: 2 },
+  backBar: { alignItems: "flex-start", borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12 },
   back: { flexDirection: "row", gap: 2, minHeight: 44, minWidth: 65, alignItems: "center" },
   backSpace: { width: 65 },
   chatTitle: { textAlign: "center" },
-  tabs: { width: "87%", maxWidth: 400, alignSelf: "center", flexDirection: "row", borderWidth: StyleSheet.hairlineWidth, borderRadius: 25, marginTop: 4, marginBottom: 5, padding: 3, gap: 2 },
+  tabs: { width: "87%", maxWidth: 400, alignSelf: "center", borderWidth: StyleSheet.hairlineWidth, borderRadius: 25, marginTop: 4, marginBottom: 5, padding: 3 },
+  tabStrip: { flexDirection: "row" },
+  tabIndicator: { position: "absolute", left: 0, top: 0, bottom: 0, width: `${100 / tabs.length}%`, borderRadius: 22, pointerEvents: "none" },
   tab: { flex: 1, minHeight: 44, borderRadius: 22, justifyContent: "center", alignItems: "center", gap: 2, paddingVertical: 3, paddingHorizontal: 2 },
   tabLabel: { fontSize: 11, fontWeight: "600", textAlign: "center" },
 });

@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { ActivityIndicator, FlatList, Modal, Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import Animated from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { Skill } from "@hermes-mobile/protocol";
 import type { useWorkspace } from "../sync/use-workspace";
+import { motion, useReduceMotion } from "../ui/motion";
 import { profileLabel } from "../ui/text";
 import { Action, Icon, Notice, useTheme } from "../ui/theme";
 
@@ -85,14 +87,15 @@ export function ComposerMenu({
   onSkill: (skill: Skill) => void;
 }) {
   const { colors, styles } = useTheme();
+  const reduced = useReduceMotion();
   const { height } = useWindowDimensions();
 
   return (
-    <Modal transparent animationType="fade" onRequestClose={onClose}>
+    <Modal transparent animationType={reduced ? "none" : "fade"} onRequestClose={onClose}>
       <View style={menu.backdrop}>
         <SafeAreaView accessibilityViewIsModal edges={["bottom", "left", "right"]}
           style={[menu.sheet, { backgroundColor: colors.surface }]}>
-          <View style={menu.content}>
+          <Animated.View style={[menu.content, !reduced && motion.reveal]}>
             <View style={menu.header}>
               <View style={menu.grow}>
                 <Text accessibilityRole="header" style={styles.heading}>{kind === "skills" ? "技能" : "命令"}</Text>
@@ -118,7 +121,7 @@ export function ComposerMenu({
                 )}
               />
             )}
-          </View>
+          </Animated.View>
         </SafeAreaView>
       </View>
     </Modal>
