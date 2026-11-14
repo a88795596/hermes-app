@@ -32,6 +32,12 @@ pnpm install
 pnpm typecheck
 ```
 
+已有 `hermes-mobile-postgres`、`hermes-dev` 容器和 `.data/dev.env` 时，运行 `pnpm dev:services`。脚本依次检查 PostgreSQL、Hermes API、BFF 和连接器，跳过已经运行的服务。新启动的 BFF 和连接器在后台运行，日志分别在 `.data/bff.log` 和 `.data/connector.log`。
+
+运行 `pnpm dev:stop` 依次停止连接器、BFF、Hermes 和 PostgreSQL。脚本跳过未运行的服务，保留容器、数据库文件和日志。
+
+`.data/dev.env` 使用 Shell 变量赋值，需包含 `POSTGRES_PASSWORD`、`APP_PAIRING_TOKEN` 和 `CONNECTOR_TOKEN`。可以通过 `PORT` 指定 BFF 端口，默认端口为 `4317`。首次准备环境或分步启动时，使用以下命令。
+
 1. 启动 BFF，配置数据库地址和两个不同的随机令牌。手机用配对令牌换取设备专用凭据，连接器使用机器令牌。可用 Docker 启动专用的开发数据库。
 
    ```sh

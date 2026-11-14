@@ -8,6 +8,8 @@
     "pnpm": ">=10.14.0"
   },
   "scripts": {
+    "dev:services": "bash scripts/start-dev.sh",
+    "dev:stop": "bash scripts/stop-dev.sh",
     "dev:mobile": "pnpm --filter @hermes-mobile/mobile start",
     "dev:bff": "pnpm --filter @hermes-mobile/bff dev",
     "dev:connector": "pnpm --filter @hermes-mobile/connector dev",
