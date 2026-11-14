@@ -1,7 +1,7 @@
 import { closeSync, mkdirSync, openSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { Control, ModelSelection } from '@hermes-mobile/protocol';
+import type { Control, ModelSelection, ReasoningEffort } from '@hermes-mobile/protocol';
 import type { JsonObject } from './gateway.js';
 
 type CommandRow = { digest: string; result: string | null };
@@ -35,6 +35,9 @@ export class Spool {
       );
       CREATE TABLE IF NOT EXISTS model_selections (
         topic_id TEXT PRIMARY KEY, provider TEXT NOT NULL, model TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS reasoning_selections (
+        topic_id TEXT PRIMARY KEY, effort TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS cursors (
         topic_id TEXT PRIMARY KEY, epoch TEXT NOT NULL, sequence TEXT NOT NULL
@@ -97,7 +100,13 @@ export class Spool {
       .get(topicId) as ModelSelection | undefined;
   }
 
-  finish(id: string, result: JsonObject, binding?: Binding, turn?: Turn, selection?: ModelSelection & { topicId: string }): void {
+  reasoningEffort(topicId: string): ReasoningEffort | undefined {
+    return this.#db.prepare('SELECT effort FROM reasoning_selections WHERE topic_id = ?')
+      .get(topicId)?.effort as ReasoningEffort | undefined;
+  }
+
+  finish(id: string, result: JsonObject, binding?: Binding, turn?: Turn,
+    selection?: (ModelSelection | { effort: ReasoningEffort | null }) & { topicId: string }): void {
     this.#transaction(() => {
       if (binding) {
         this.#db.prepare(`
@@ -105,7 +114,14 @@ export class Spool {
         `).run(binding.topicId, binding.sessionId, binding.profileId, binding.profileRef);
       }
       if (turn) this.#storeTurn(turn);
-      if (selection) {
+      if (selection && 'effort' in selection) {
+        if (selection.effort === null) {
+          this.#db.prepare('DELETE FROM reasoning_selections WHERE topic_id = ?').run(selection.topicId);
+        } else {
+          this.#db.prepare(`INSERT INTO reasoning_selections (topic_id, effort) VALUES (?, ?)
+            ON CONFLICT (topic_id) DO UPDATE SET effort = excluded.effort`).run(selection.topicId, selection.effort);
+        }
+      } else if (selection) {
         this.#db.prepare(`
           INSERT INTO model_selections (topic_id, provider, model) VALUES (?, ?, ?)
           ON CONFLICT (topic_id) DO UPDATE SET provider = excluded.provider, model = excluded.model

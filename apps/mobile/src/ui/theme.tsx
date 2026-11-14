@@ -1,6 +1,6 @@
 import { SymbolView, type AndroidSymbol, type SFSymbol } from "expo-symbols";
 import { useState, type ReactNode } from "react";
-import { Pressable, StyleSheet, Text, TextInput, View, useColorScheme, type TextInputProps } from "react-native";
+import { Platform, Pressable, StyleSheet, Text, TextInput, View, useColorScheme, type TextInputProps } from "react-native";
 import { errorLabel } from "./text";
 
 const light = {
@@ -50,6 +50,7 @@ const symbols = {
   compose: ["square.and.pencil", "edit_square"],
   back: ["chevron.left", "chevron_left"],
   chevron: ["chevron.right", "chevron_right"],
+  down: ["chevron.down", "expand_more"],
   lock: ["lock", "lock"],
   server: ["server.rack", "dns"],
   activity: ["waveform.path", "monitor_heart"],
@@ -77,7 +78,7 @@ export function useTheme() {
 }
 
 export function Action({
-  title, onPress, primary, disabled, selected, destructive, icon,
+  title, onPress, primary, disabled, selected, destructive, icon, compact, disclosure, accessibilityLabel, toggled,
 }: {
   title: string;
   onPress: () => void;
@@ -86,28 +87,38 @@ export function Action({
   selected?: boolean;
   destructive?: boolean;
   icon?: IconName;
+  compact?: boolean;
+  disclosure?: boolean;
+  accessibilityLabel?: string;
+  toggled?: boolean;
 }) {
   const { colors, styles } = useTheme();
   const [focused, setFocused] = useState(false);
   const tint = primary ? colors.onAccent : destructive ? colors.error : colors.accent;
+  const fill = [primary && styles.buttonPrimary, selected && styles.buttonSelected];
+  const content = <>
+    {icon && <Icon name={icon} size={compact ? 13 : 15} color={tint} />}
+    <Text style={[styles.buttonLabel, compact && styles.compactLabel, { color: tint }]}>{title}</Text>
+    {disclosure && <Icon name="down" size={13} color={tint} />}
+  </>;
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
       accessibilityState={{ disabled, selected }}
+      aria-pressed={toggled}
       disabled={disabled}
       onPress={onPress}
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
       style={({ pressed }) => [
         styles.button,
-        primary && styles.buttonPrimary,
-        selected && styles.buttonSelected,
+        compact ? styles.compactButton : fill,
         focused && styles.focused,
         (pressed || disabled) && styles.faded,
       ]}
     >
-      {icon && <Icon name={icon} size={15} color={tint} />}
-      <Text style={[styles.buttonLabel, { color: tint }]}>{title}</Text>
+      {compact ? <View style={[styles.compactFace, fill]}>{content}</View> : content}
     </Pressable>
   );
 }
@@ -196,6 +207,11 @@ function createTheme(colors: typeof light, dark: boolean) {
       buttonPrimary: { backgroundColor: colors.accentFill },
       buttonSelected: { backgroundColor: colors.tint },
       buttonLabel: { fontSize: 14, fontWeight: "600", flexShrink: 1, textAlign: "center" },
+      compactButton: { minHeight: Platform.OS === "android" ? 48 : 44, minWidth: Platform.OS === "android" ? 48 : 44,
+        paddingHorizontal: 0, paddingVertical: 0, backgroundColor: "transparent", borderRadius: 7 },
+      compactFace: { flexDirection: "row", alignItems: "center", justifyContent: "center", minHeight: 28, flexShrink: 1,
+        paddingHorizontal: 7, paddingVertical: 3, gap: 3, borderRadius: 7, backgroundColor: colors.secondary },
+      compactLabel: { fontSize: 13 },
       focused: { borderColor: colors.accent },
       faded: { opacity: 0.53 },
       empty: { alignItems: "center", gap: 6, paddingHorizontal: 16, paddingVertical: 24, alignSelf: "center", maxWidth: 350 },

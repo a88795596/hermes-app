@@ -5,7 +5,7 @@ import {
 import type { CanonicalAdmission, CanonicalPrompt, ServerRequest, SessionSnapshot } from '@hermes-mobile/hermes-adapter';
 import type { Command, CommandResult, ConnectorEvent, Control, TopicQuery, TopicQueryData } from '@hermes-mobile/protocol';
 import { MAX_CLARIFY_CHOICE_BYTES } from '@hermes-mobile/protocol';
-import { Gateway, GatewayRefusal, object } from './gateway.js';
+import { Gateway, GatewayRefusal, integer, object } from './gateway.js';
 import type { JsonObject } from './gateway.js';
 import { hasModel, modelCatalog } from './models.js';
 import { Spool } from './spool.js';
@@ -45,6 +45,10 @@ function receiptStatus(receipt: CanonicalAdmission): Turn['status'] {
 function knownRefusal(error: unknown): error is GatewayRefusal {
   return error instanceof GatewayRefusal && [4000, 4001, 4030, 4404, -32601, -32602].includes(error.code)
     && !['storage_unavailable', 'outcome_unknown', 'execution_unknown'].includes(error.reason ?? '');
+}
+
+function isRevision(value: unknown): boolean {
+  return typeof value === 'bigint' ? value >= 0n && value <= 9_223_372_036_854_775_807n : integer(value) !== undefined;
 }
 
 export class CanonicalConnector {
@@ -200,6 +204,40 @@ export class CanonicalConnector {
       return;
     }
     if (!current() || !session.gateway.connected) return;
+    if (command.kind === 'select_reasoning') {
+      if (!this.spool.begin(id, digest)) return;
+      try {
+        const snapshot = parseSessionSnapshot(await session.gateway.rpc('session.resume', {
+          session_id: binding.sessionId, omit_messages: true,
+        }));
+        this.#checkSnapshot(session, snapshot);
+        let receipt = result(id, 'unknown', { error: 'Hermes 无法确认思考强度是否已切换。' });
+        if (snapshot.running || snapshot.pending.length) {
+          receipt = result(id, 'error', { error: '请等待当前回复完成后再切换思考强度。' });
+        } else if (current() && session.gateway.connected) {
+          const reply = await session.gateway.rpc('session.mutate', {
+            session_id: binding.sessionId, request_id: id, operation: 'reasoning', payload: command.body,
+            expected_revision: canonicalInteger(snapshot.revision),
+            expected_generation: canonicalInteger(snapshot.executionGeneration),
+          }, id);
+          if (reply.session_id === binding.sessionId && reply.operation === 'reasoning' && reply.effort === command.body.effort) {
+            if (reply.status === 'deferred') {
+              receipt = result(id, 'unknown', { error: 'Hermes 已安排稍后切换思考强度。请在回复结束后重新确认档位。' });
+            } else if (reply.status === undefined && isRevision(reply.revision) && isRevision(reply.execution_generation)) {
+              receipt = result(id, 'ok');
+            }
+          }
+        }
+        this.spool.finish(id, { ...receipt });
+      } catch (error) {
+        if (error instanceof GatewayRefusal && (error.code === -32601 || error.reason === 'invalid_params')) {
+          this.spool.finish(id, { ...result(id, 'error', { error: '当前 Hermes 网关版本不支持切换思考强度。' }) });
+        } else {
+          this.#failedWrite(id, error);
+        }
+      }
+      return;
+    }
     if (command.kind === 'model_options' || command.kind === 'select_model') {
       if (!this.spool.begin(id, digest)) return;
       try {

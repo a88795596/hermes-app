@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import type { Command, Control, Message, ModelSelection, Topic } from "@hermes-mobile/protocol";
+import type { Command, Control, Message, ModelSelection, ReasoningEffort, Topic } from "@hermes-mobile/protocol";
 import type { PoolClient } from "pg";
 import { profileId, topicData, topicRow } from "./projections.js";
 import { ApiError, conflict, missing } from "./validation.js";
@@ -45,6 +45,12 @@ function requireReady(row: Awaited<ReturnType<typeof topicRow>>) {
   return row.session_id;
 }
 
+async function requireIdle(db: PoolClient, topicId: string, message: string) {
+  const { rowCount } = await db.query(`SELECT 1 FROM submissions WHERE topic_id = $1
+    AND data->>'status' IN ('accepted', 'queued', 'streaming') LIMIT 1`, [topicId]);
+  if (rowCount) throw new ApiError(409, "TOPIC_BUSY", message);
+}
+
 export async function submit(db: PoolClient, refs: Set<string>, topicId: string, submissionId: string, text: string) {
   const row = await topicRow(db, topicId, refs);
   const body = { submission_id: submissionId, text };
@@ -86,14 +92,28 @@ export async function requestModel(
   if (saved) return saved;
   const envelope = { type: "command" as const, command_id: requestId, topic_id: row.id, profile_ref: row.profile_ref,
     session_id: requireReady(row) };
-  if (selection) {
-    const { rowCount } = await db.query(`SELECT 1 FROM submissions WHERE topic_id = $1
-      AND data->>'status' IN ('accepted', 'queued', 'streaming') LIMIT 1`, [topicId]);
-    if (rowCount) throw new ApiError(409, "TOPIC_BUSY", "请等当前回复结束后再切换模型。");
-  }
+  if (selection) await requireIdle(db, topicId, "请等当前回复结束后再切换模型。");
   await enqueue(db, selection ? { ...envelope, kind: "select_model", body: selection }
     : { ...envelope, kind: "model_options", body: {} }, receipt);
   return receipt;
+}
+
+export async function requestReasoning(db: PoolClient, refs: Set<string>, topicId: string, requestId: string,
+  effort: ReasoningEffort | null, connection: "ready" | "offline" | "legacy") {
+  const row = await topicRow(db, topicId, refs);
+  const body = { effort };
+  const receipt = { status: "pending" as const, was_unconfirmed: row.reasoning_status === "unknown" };
+  const saved = await prior<typeof receipt>(db, requestId, "select_reasoning", topicId, body);
+  if (saved) return { status: saved.status };
+  const session_id = requireReady(row);
+  if (connection === "offline") throw new ApiError(503, "CONNECTOR_OFFLINE", "请连接 Hermes 后重试。");
+  if (connection === "legacy") throw new ApiError(503, "REASONING_UNAVAILABLE", "请更新 Hermes 连接器以切换思考强度。");
+  if (row.reasoning_status === "pending") throw new ApiError(409, "REASONING_PENDING", "Hermes 仍在处理上一次思考强度切换。");
+  await requireIdle(db, topicId, "请等当前回复结束后再切换思考强度。");
+  await enqueue(db, { type: "command", command_id: requestId, topic_id: row.id, profile_ref: row.profile_ref,
+    session_id, kind: "select_reasoning", body }, receipt);
+  await db.query("UPDATE topics SET reasoning_status = 'pending' WHERE id = $1", [topicId]);
+  return { status: receipt.status };
 }
 
 export async function respond(db: PoolClient, refs: Set<string>, controlId: string, responseId: string, answer: string) {
