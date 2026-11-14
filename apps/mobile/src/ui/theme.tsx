@@ -40,6 +40,7 @@ const night: typeof light = {
 const symbols = {
   topics: ["bubble.left.and.bubble.right", "forum"],
   inbox: ["tray", "inbox"],
+  archive: ["archivebox", "archive"],
   settings: ["gearshape", "settings"],
   manage: ["slider.horizontal.3", "tune"],
   schedule: ["calendar", "calendar_month"],

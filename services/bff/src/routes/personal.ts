@@ -5,7 +5,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
 import { deviceAuth, matchesToken } from "../auth.js";
 import { registerBridge } from "../bridge.js";
-import { createTopic, findProfile, interrupt, requestModel, requestReasoning, respond, submit } from "../mutations.js";
+import { createTopic, findProfile, interrupt, requestModel, requestReasoning, respond, setTopicArchived, submit } from "../mutations.js";
 import { detail, modelRequest, profiles, reasoningRequest, topicRow, topics } from "../projections.js";
 import { registerPushRoutes } from "../push.js";
 import type { Store } from "../store.js";
@@ -99,8 +99,22 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
   api.get(`${prefix}/status`, requireDevice, (request) => success(request, {
     connector_online: bridge.online(), reasoning_supported: bridge.reasoningSupported(),
   }));
-  api.get(`${prefix}/topics`, requireDevice, async (request) => success(request, await topics(store, refs)));
+  api.get(`${prefix}/topics`, requireDevice, async (request) => {
+    const { include_archived } = record(request.query);
+    if (include_archived !== undefined && include_archived !== "true" && include_archived !== "false") {
+      invalid("include_archived 必须为 true 或 false。");
+    }
+    return success(request, await topics(store, refs, include_archived === "true"));
+  });
   api.get(`${prefix}/topics/:id`, requireDevice, async (request) => success(request, await detail(store, pathId(request), refs)));
+  api.put(`${prefix}/topics/:id/archive`, requireDevice, async (request) => {
+    const id = pathId(request);
+    const { archived } = record(request.body, ["archived"]);
+    if (typeof archived !== "boolean") invalid("必须指定是否归档。");
+    const topic = await store.transaction((db) => setTopicArchived(db, refs, id, archived));
+    changed();
+    return success(request, topic);
+  });
   for (const kind of ["skills", "status", "version"] satisfies TopicQuery["kind"][]) {
     api.get(`${prefix}/topics/:id/${kind}`, requireDevice, async (request) => {
       const topic = await topicRow(store, pathId(request), refs);

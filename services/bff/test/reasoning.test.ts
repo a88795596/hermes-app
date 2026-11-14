@@ -11,6 +11,7 @@ import type { Store } from "../src/store.js";
 
 test("思考强度只在连接器确认后投影到已配对设备的话题", { timeout: 5_000 }, async (t) => {
   const topic = { id: randomUUID(), profile_ref: "default", status: "ready", session_id: "bound-session",
+    created_at: new Date(), updated_at: new Date(), archived: false,
     reasoning_effort: null as string | null, reasoning_status: null as string | null };
   const requestId = randomUUID();
   let activeRequestId = requestId;

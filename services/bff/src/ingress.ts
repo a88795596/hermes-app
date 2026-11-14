@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { Command, CommandResult, ConnectorEvent, Control, DeliveryFrame, InboxItem, Message } from "@hermes-mobile/protocol";
 import type { PoolClient } from "pg";
-import { queueTopicTitle } from "./mutations.js";
+import { queueTopicTitle, touchTopic } from "./mutations.js";
 import { topicRow } from "./projections.js";
 import { queueInboxPush } from "./push.js";
 import { conflict, invalid, missing } from "./validation.js";
@@ -23,6 +23,7 @@ async function applySubmission(db: PoolClient, topicId: string, id: string, stat
   await db.query("UPDATE messages SET data = (data - 'error') || $2::jsonb WHERE id = $1", [submission.message_id, {
     status, ...(error ? { error } : {}),
   }]);
+  await touchTopic(db, topicId);
   return status === "final";
 }
 
@@ -51,7 +52,7 @@ export async function applyResult(db: PoolClient, frame: CommandResult, refs: Se
   if (payload.kind === "create") {
     if (frame.status === "ok" && !frame.session_id) invalid("创建结果缺少会话 ID。");
     const success = frame.status === "ok";
-    await db.query("UPDATE topics SET session_id = $2, status = $3, error = $4 WHERE id = $1", [
+    await db.query("UPDATE topics SET session_id = $2, status = $3, error = $4, updated_at = clock_timestamp() WHERE id = $1", [
       topic.id, success ? frame.session_id : null, success ? "ready" : "error",
       success ? null : (frame.error ?? "Hermes 无法确认会话是否创建成功。"),
     ]);
@@ -62,21 +63,25 @@ export async function applyResult(db: PoolClient, frame: CommandResult, refs: Se
     const status = frame.status === "ok" ? "queued" : frame.status === "error" ? "failed" : "unknown";
     await applySubmission(db, topic.id, payload.body.submission_id, status, frame.error, frame.admission_id);
   } else if (payload.kind === "select_reasoning") {
-    await db.query("UPDATE topics SET reasoning_effort = $2, reasoning_status = $3 WHERE id = $1", [topic.id,
+    await db.query("UPDATE topics SET reasoning_effort = $2, reasoning_status = $3, updated_at = clock_timestamp() WHERE id = $1", [topic.id,
       frame.status === "ok" ? payload.body.effort : topic.reasoning_effort,
       frame.status === "unknown" || (frame.status === "error" && command.receipt.was_unconfirmed) ? "unknown" : null]);
   } else if (payload.kind === "summarize_title" && frame.title) {
-    await db.query("UPDATE topics SET title = $2 WHERE id = $1 AND auto_title AND title_revision = $3",
+    await db.query(`UPDATE topics SET title = $2, updated_at = clock_timestamp()
+      WHERE id = $1 AND auto_title AND title_revision = $3 AND title IS DISTINCT FROM $2`,
       [topic.id, frame.title, command.receipt.title_revision]);
+  } else if (frame.model_result?.type === "selected" || frame.model_result?.type === "deferred") {
+    await touchTopic(db, topic.id);
   } else if (payload.kind === "respond") {
     const closed = frame.control_status === "closed";
     const answer = closed && frame.status === "ok" ? payload.body.answer : undefined;
-    await db.query(`UPDATE controls SET data = data || $3::jsonb ||
+    const result = await db.query(`UPDATE controls SET data = data || $3::jsonb ||
       jsonb_build_object('status', CASE WHEN data->>'status' = 'closed' THEN 'closed' ELSE $4::text END)
       WHERE id = $1 AND topic_id = $2 AND data->>'status' <> 'pending'`,
       [payload.body.control_id, topic.id,
         { ...(answer === undefined ? {} : { answer }), ...(frame.error ? { error: frame.error } : {}) },
         closed ? "closed" : "unknown"]);
+    if (result.rowCount) await touchTopic(db, topic.id);
   }
   await db.query("UPDATE commands SET result = $2 WHERE id = $1", [frame.command_id, frame]);
   return topic;
@@ -100,7 +105,9 @@ export async function applyEvent(db: PoolClient, frame: ConnectorEvent, refs: Se
   if (frame.type === "submission") {
     const completed = await applySubmission(db, topic.id, frame.submission_id, frame.status, frame.error);
     if (completed) return queueTopicTitle(db, topic);
-  } else if (frame.type === "message") {
+    return;
+  }
+  if (frame.type === "message") {
     if (frame.submission_id) {
       const { rowCount } = await db.query("SELECT id FROM submissions WHERE id = $1 AND topic_id = $2", [frame.submission_id, topic.id]);
       if (!rowCount) missing("消息提交记录");
@@ -136,6 +143,7 @@ export async function applyEvent(db: PoolClient, frame: ConnectorEvent, refs: Se
     await db.query("INSERT INTO controls (id, topic_id, data) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET data = excluded.data",
       [control.control_id, topic.id, control]);
   }
+  await touchTopic(db, topic.id);
 }
 
 export async function applyDelivery(db: PoolClient, frame: DeliveryFrame, refs: Set<string>) {

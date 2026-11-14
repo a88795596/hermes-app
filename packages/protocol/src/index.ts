@@ -13,6 +13,10 @@ export interface Topic {
   profile_id: string;
   title: string;
   status: "creating" | "ready" | "error";
+  // 旧版服务端和移动端缓存可能缺少这些字段。
+  created_at?: string;
+  updated_at?: string;
+  archived?: boolean;
   error?: string;
   reasoning_effort?: ReasoningEffort;
   reasoning_status?: "pending" | "unknown";

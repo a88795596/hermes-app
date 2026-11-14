@@ -24,6 +24,7 @@ test("最终回复兼容旧消息帧并保留已收到的回复过程", async ()
         stored = args[2] as Message;
         return { rowCount: 1 };
       }
+      if (sql.startsWith("UPDATE topics SET updated_at")) return { rowCount: 1 };
       throw new Error(`未预期的查询：${sql}`);
     },
   } as unknown as PoolClient;

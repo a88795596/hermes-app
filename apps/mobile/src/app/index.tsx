@@ -1,6 +1,6 @@
 import { randomUUID } from "expo-crypto";
 import { StatusBar } from "expo-status-bar";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, BackHandler, Keyboard, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import Animated from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -8,6 +8,7 @@ import { DEFAULT_TOPIC_TITLE, topicTitlePreview } from "@hermes-mobile/protocol"
 import { Pairing } from "../auth/pairing";
 import { loadSession, saveSession, type Session } from "../auth/session";
 import { Conversation } from "../chat/conversation";
+import { TopicList, type TopicListRow } from "../chat/topic-list";
 import { ManagementMenu, ManagementScreen, type ManagementPage } from "../manage";
 import { Group, Row } from "../manage/shared";
 import { enablePushNotifications, pushAvailable } from "../notifications";
@@ -23,7 +24,7 @@ const sections = {
   settings: { title: "设置", icon: "settings" },
 } as const;
 type Section = keyof typeof sections;
-type Page = Section | "manage" | "connection" | ManagementPage;
+type Page = Section | "manage" | "connection" | "archive" | ManagementPage;
 type PageMotion = "fade" | "push" | "pop";
 type Navigation = { page: Page; transition: PageMotion; fromTopics?: boolean };
 const tabs = Object.keys(sections) as Section[];
@@ -50,13 +51,15 @@ function Workspace({
   const { colors, styles } = useTheme();
   const reduced = useReduceMotion();
   const [{ page, transition, fromTopics }, setNavigation] = useState<Navigation>({ page: "topics", transition: "fade" });
-  const [chat, setChat] = useState<{ id: string; newProfileId?: string }>();
+  const [chat, setChat] = useState<Pick<TopicListRow, "id" | "newProfileId">>();
   const [profileId, setProfileId] = useState<string>();
   const [signingOut, setSigningOut] = useState(false);
   const [push, setPush] = useState<"idle" | "enabling" | "enabled">("idle");
   const [error, setError] = useState<string>();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [showProcess, setShowProcess] = useState<Record<string, boolean>>({});
+  const archiveInFlight = useRef(false);
+  const [archiving, setArchiving] = useState(false);
   const topicId = chat?.id ?? null;
   const workspace = useWorkspace(session, topicId, chat?.newProfileId !== undefined);
   const profile = workspace.profiles.find((item) => item.profile_id === profileId) ?? workspace.profiles[0];
@@ -67,24 +70,31 @@ function Workspace({
       pendingTopics.set(item.topic_id, item);
     }
   }
-  const visibleTopics = workspace.topics.filter((item) => !profile || item.profile_id === profile.profile_id);
+  const archived = page === "archive";
+  const topicListPage = page === "topics" || archived;
   const section = page === "topics" || page === "inbox" ? page : "settings";
   const settingsPage = page === "topics" || page === "inbox" || page === "settings" ? undefined : page;
-  const managementPage = settingsPage === "manage" || settingsPage === "connection" ? undefined : settingsPage;
+  const managementPage = settingsPage === "manage" || settingsPage === "connection" || settingsPage === "archive" ? undefined : settingsPage;
   const settingsParent = managementPage && profile ? "manage" : fromTopics ? "topics" : "settings";
   const backLabel = backLabels[settingsParent];
-  const pageTitle = settingsPage === "connection" ? "连接" : settingsPage ? "管理" : sections[section].title;
-  const rows = [
-    ...[...pendingTopics.values()].filter((item) => item.profile_id === profile?.profile_id
-      && !visibleTopics.some((topic) => topic.topic_id === item.topic_id)).map((item) => ({
-        id: item.topic_id, newProfileId: item.profile_id, title: topicTitlePreview(item.text),
-        status: item.error ? "发送失败" : "等待发送",
-      })),
-    ...visibleTopics.map((item) => ({
+  const pageTitle = archived ? "已归档会话" : settingsPage === "connection" ? "连接" : settingsPage ? "管理" : sections[section].title;
+  const rows: TopicListRow[] = topicListPage ? workspace.topics
+    .filter((item) => Boolean(item.archived) === archived && (archived || !profile || item.profile_id === profile.profile_id))
+    .map((item) => ({
       id: item.topic_id, newProfileId: pendingTopics.get(item.topic_id)?.profile_id, title: item.title,
       status: item.status === "creating" ? "创建中…" : item.status === "error" ? "创建失败" : "",
-    })),
-  ];
+      created_at: item.created_at, updated_at: item.updated_at,
+      profileLabel: archived && workspace.profiles.length > 1
+        ? profileLabel(workspace.profiles.find((profile) => profile.profile_id === item.profile_id)?.label ?? "") : undefined,
+    })) : [];
+  if (page === "topics") {
+    const remoteIds = new Set(workspace.topics.map((topic) => topic.topic_id));
+    for (const item of pendingTopics.values()) {
+      if (item.profile_id !== profile?.profile_id || remoteIds.has(item.topic_id)) continue;
+      rows.push({ id: item.topic_id, newProfileId: item.profile_id, title: topicTitlePreview(item.text),
+        status: item.error ? "发送失败" : "等待发送", created_at: item.created_at, updated_at: item.created_at });
+    }
+  }
   const pendingFirst = chat && pendingTopics.get(chat.id);
   const chatTitle = pendingFirst && (!topic || (topic.title === DEFAULT_TOPIC_TITLE
     && !workspace.detail?.messages.some((message) => message.role === "user")))
@@ -153,6 +163,21 @@ function Workspace({
     }
   }
 
+  async function changeArchive(row: TopicListRow) {
+    if (archiveInFlight.current) return;
+    archiveInFlight.current = true;
+    setArchiving(true);
+    setError(undefined);
+    try {
+      await workspace.setTopicArchived(row.id, !archived, row.newProfileId);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : archived ? "无法恢复会话。" : "无法归档会话。");
+    } finally {
+      archiveInFlight.current = false;
+      setArchiving(false);
+    }
+  }
+
   if (workspace.sessionEnded) {
     return (
       <ScrollView contentContainerStyle={styles.content}>
@@ -188,10 +213,10 @@ function Workspace({
     return (
       <Animated.View key={id} style={[styles.frame, !reduced && motion.push]}>
         <View style={[styles.header, layout.chatHeader, { borderBottomColor: colors.edge, backgroundColor: colors.surface }]}>
-          <Pressable accessibilityRole="button" accessibilityLabel="返回话题列表" hitSlop={6} onPress={closeTopic}
+          <Pressable accessibilityRole="button" accessibilityLabel={archived ? "返回已归档会话" : "返回话题列表"} hitSlop={6} onPress={closeTopic}
             style={({ pressed }) => [layout.back, layout.chatBack, pressed && styles.faded]}>
             <Icon name="back" size={17} color={colors.accent} />
-            <Text style={[styles.text, { color: colors.accent }]}>{sections.topics.title}</Text>
+            <Text style={[styles.text, { color: colors.accent }]}>{archived ? "归档" : sections.topics.title}</Text>
           </Pressable>
           <Text accessibilityRole="header" numberOfLines={1} ellipsizeMode="tail" style={[styles.heading, layout.grow, layout.chatTitle]}>{chatTitle}</Text>
           <View style={layout.processToggle}>
@@ -251,34 +276,20 @@ function Workspace({
         {error && <Notice>{error}</Notice>}
         {workspace.error && <Notice>{workspace.error}</Notice>}
         {workspace.storageError && <Notice>{workspace.storageError}</Notice>}
-        {page === "topics" && (
-          <>
-            {workspace.profiles.length > 1 && (
-              <View style={styles.row}>
-                {workspace.profiles.map((item) => (
-                  <Action key={item.profile_id} title={profileLabel(item.label)} selected={profile?.profile_id === item.profile_id} onPress={() => setProfileId(item.profile_id)} />
-                ))}
-              </View>
-            )}
-            {rows.length > 0 ? (
-              <View style={[layout.group, { backgroundColor: colors.surface }]}>
-                {rows.map(({ id, newProfileId, title, status }, index) => (
-                  <Pressable key={id} accessibilityRole="button" onPress={() => setChat({ id, newProfileId })}
-                    style={({ pressed }) => [styles.listItem, index > 0 && layout.divided, { borderColor: colors.edge }, pressed && { backgroundColor: colors.secondary }]}>
-                    <View style={[layout.rowIcon, { backgroundColor: colors.tint }]}><Icon name="chat" size={17} color={colors.accent} /></View>
-                    <View style={layout.grow}>
-                      <Text numberOfLines={1} ellipsizeMode="tail" style={styles.heading}>{title}</Text>
-                      {!!status && <Text style={styles.caption}>{status}</Text>}
-                    </View>
-                    <Icon name="chevron" size={14} color={colors.muted} />
-                  </Pressable>
-                ))}
-              </View>
-            ) : workspace.ready ? (
-              <EmptyState icon="topics" title="暂无话题" description="点击新建按钮开始对话。" />
-            ) : null}
-          </>
+        {page === "topics" && workspace.profiles.length > 1 && (
+          <View style={styles.row}>
+            {workspace.profiles.map((item) => (
+              <Action key={item.profile_id} title={profileLabel(item.label)} selected={profile?.profile_id === item.profile_id} onPress={() => setProfileId(item.profile_id)} />
+            ))}
+          </View>
         )}
+        {topicListPage && (rows.length > 0 ? (
+          <TopicList rows={rows} archived={archived} busy={archiving}
+            onOpen={({ id, newProfileId }) => setChat({ id, newProfileId })} onArchive={(row) => void changeArchive(row)} />
+        ) : workspace.ready ? (
+          <EmptyState icon={archived ? "archive" : "topics"} title={archived ? "暂无已归档会话" : "暂无话题"}
+            description={archived ? undefined : "点击新建按钮开始对话。"} />
+        ) : null)}
         {page === "inbox" && (workspace.inbox.length > 0 ? (
           <View style={[layout.group, { backgroundColor: colors.surface }]}>
             {workspace.inbox.map((item, index) => (
@@ -296,9 +307,10 @@ function Workspace({
           <Group>
             <Row title="管理" subtitle="定时任务、模型、日志、技能和 MCP" icon="manage" onPress={() => showPage("manage", "push")} />
             <Row divided title="连接" subtitle={connection} icon="link" onPress={() => showPage("connection", "push")} />
+            <Row divided title="已归档会话" icon="archive" onPress={() => showPage("archive", "push")} />
           </Group>
         )}
-        {settingsPage && settingsPage !== "connection" && (
+        {(page === "manage" || managementPage) && (
           <ManagementMenu profiles={workspace.profiles} profile={profile} onProfile={setProfileId} onOpen={(next) => showPage(next, "push")} />
         )}
         {page === "connection" && (
