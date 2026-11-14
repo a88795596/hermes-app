@@ -14,9 +14,10 @@
 | DELETE /auth/session | 撤销自己的凭据，204 |
 | GET /profiles | `Profile[]`，通过 BFF 的 `HERMES_PROFILES` 配置。值为逗号分隔的真实配置档案名称，默认为 `default` |
 | GET /status | `{connector_online:boolean}` |
-| GET /topics | `Topic[]` |
+| GET /topics | `Topic[]` 按 `updated_at` 倒序。默认仅返回未归档话题，`?include_archived=true` 返回全部。 |
 | POST /topics | `{request_id,profile_id,title?}` → `Topic`，幂等 202。省略标题时，首条发送的消息成为默认标题。 |
 | GET /topics/:id | `{topic:Topic,messages:Message[],controls:Control[]}` |
+| PUT /topics/:id/archive | `{archived:boolean}` → `Topic`。重复设置同一状态安全，保留原会话和消息。 |
 | POST /topics/:id/submissions | `{submission_id,text}` → `Message` 用户气泡，幂等 202 |
 | POST /topics/:id/interrupt | `{request_id,submission_id}` → `{status:"accepted"}`，幂等 202 |
 | POST /topics/:id/model-requests | `{request_id}` 请求目录，`{request_id,provider,model,confirm?}` 选择模型。幂等 202 |
@@ -31,7 +32,7 @@
 
 话题 `Topic` 的结构为 `{topic_id,profile_id,title,status:"creating"|"ready"|"error",error?:string}`。配置档案 `Profile` 的结构为 `{profile_id,label}`。消息 `Message` 的结构为 `{message_id,role:"user"|"assistant",text,status:"accepted"|"queued"|"streaming"|"final"|"failed"|"unknown"|"cancelled",submission_id?:string,error?:string}`。交互 `Control` 的结构为 `{control_id,kind:"approval"|"clarify",prompt,choices:string[],status:"pending"|"responding"|"closed"|"unknown",submission_id?,multi_select?,answer?,error?}`。收件箱条目 `InboxItem` 的结构为 `{inbox_id,text,created_at}`。
 
-话题可附带已确认的 `reasoning_effort`（缺省时使用 Hermes 的默认设置），或 `reasoning_status:"pending"|"unknown"`。`GET /status` 同时返回当前连接器是否声明 `reasoning_supported`。
+话题包含 ISO 8601 格式的 `created_at`、`updated_at` 与布尔值 `archived`，旧缓存可能缺少这些字段。归档状态的变化不计入 `updated_at`。话题可附带已确认的 `reasoning_effort`（缺省时使用 Hermes 的默认设置），或 `reasoning_status:"pending"|"unknown"`。`GET /status` 同时返回当前连接器是否声明 `reasoning_supported`。
 
 ## BFF 与连接器
 

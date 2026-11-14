@@ -43,6 +43,16 @@ export async function createTopic(db: PoolClient, requestId: string, profile: st
   return topic;
 }
 
+export async function setTopicArchived(db: PoolClient, refs: Set<string>, id: string, archived: boolean) {
+  const row = await topicRow(db, id, refs);
+  if (row.archived !== archived) await db.query("UPDATE topics SET archived = $2 WHERE id = $1", [id, archived]);
+  return topicData({ ...row, archived });
+}
+
+export async function touchTopic(db: PoolClient, topicId: string) {
+  await db.query("UPDATE topics SET updated_at = clock_timestamp() WHERE id = $1", [topicId]);
+}
+
 function requireReady(row: Awaited<ReturnType<typeof topicRow>>) {
   if (row.status !== "ready" || !row.session_id) throw new ApiError(409, "TOPIC_NOT_READY", "话题尚未就绪。");
   return row.session_id;
@@ -70,6 +80,7 @@ export async function submit(db: PoolClient, refs: Set<string>, topicId: string,
     [submissionId, topicId, message.message_id, { status: "accepted" }]);
   await enqueue(db, { type: "command", command_id: submissionId, topic_id: topicId, profile_ref: row.profile_ref,
     session_id: sessionId, kind: "submit", body }, message);
+  await touchTopic(db, topicId);
   return message;
 }
 
@@ -145,7 +156,7 @@ export async function requestReasoning(db: PoolClient, refs: Set<string>, topicI
   await requireIdle(db, topicId, "请等当前回复结束后再切换思考强度。");
   await enqueue(db, { type: "command", command_id: requestId, topic_id: row.id, profile_ref: row.profile_ref,
     session_id, kind: "select_reasoning", body }, receipt);
-  await db.query("UPDATE topics SET reasoning_status = 'pending' WHERE id = $1", [topicId]);
+  await db.query("UPDATE topics SET reasoning_status = 'pending', updated_at = clock_timestamp() WHERE id = $1", [topicId]);
   return { status: receipt.status };
 }
 
@@ -166,6 +177,7 @@ export async function respond(db: PoolClient, refs: Set<string>, controlId: stri
   await db.query("UPDATE controls SET data = $2 WHERE id = $1", [controlId, { ...control.data, ...result }]);
   await enqueue(db, { type: "command", command_id: responseId, topic_id: row.id, profile_ref: row.profile_ref,
     session_id: sessionId, kind: "respond", body }, { ...result, control_id: controlId });
+  await touchTopic(db, row.id);
   return { topicId: row.id, result };
 }
 

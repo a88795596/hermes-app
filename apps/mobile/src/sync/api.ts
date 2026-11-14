@@ -14,7 +14,7 @@ export async function request<T>(
   path: string,
   { token, method = "GET", body, signal, timeoutMs = 12_000 }: {
     token?: string;
-    method?: "GET" | "POST" | "DELETE";
+    method?: "GET" | "POST" | "PUT" | "DELETE";
     body?: object;
     signal?: AbortSignal;
     timeoutMs?: number;

@@ -124,7 +124,7 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
       try {
         const [profiles, topics, inbox, status] = await Promise.all([
           call<Profile[]>("/profiles"),
-          call<Topic[]>("/topics"),
+          call<Topic[]>("/topics?include_archived=true"),
           call<InboxItem[]>("/inbox"),
           call<{ connector_online: boolean; reasoning_supported?: boolean }>("/status"),
         ]);
@@ -146,6 +146,37 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
     return task;
   }, [cache, call]);
 
+  async function setTopicArchived(id: string, archived: boolean, newProfileId?: string) {
+    if (!cache || revoked.current || signingOut.current) throw new Error("无法访问本地历史记录。");
+    if (newProfileId && !directory.topics.some((topic) => topic.topic_id === id)) await createTopic(id, newProfileId);
+    const next = await call<Topic>(`/topics/${id}/archive`, { method: "PUT", body: { archived } });
+    await directoryLoad.current;
+    if (!active.current || revoked.current) return;
+    const applyArchive = (current: Directory): Directory => ({
+      ...current,
+      topics: current.topics.some((topic) => topic.topic_id === id)
+        ? current.topics.map((topic) => topic.topic_id === id ? { ...topic, archived: next.archived } : topic)
+        : [...current.topics, next],
+    });
+    // 与目录拉取共用写入顺序，确保已确认的归档状态可离线读取。
+    const save = (async () => {
+      try {
+        const saved = await cache.get<Directory>("directory") ?? directory;
+        if (active.current && !revoked.current) await cache.set("directory", applyArchive(saved));
+      } catch (failure) {
+        if (active.current) setStorageError(failure instanceof Error ? failure.message : "无法保存本地归档状态。");
+      } finally {
+        directoryLoad.current = undefined;
+      }
+    })();
+    directoryLoad.current = save;
+    await save;
+    if (active.current && !revoked.current) {
+      setDirectory(applyArchive);
+      void loadDirectory();
+    }
+  }
+
   const loadTopic = useCallback((id: string) => {
     if (!cache || !active.current || revoked.current) return Promise.resolve(undefined);
     const existing = detailLoads.current.get(id);
@@ -159,8 +190,10 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
           if (visibleTopic.current === id) setDetail(next);
           setDirectory((current) => {
             const topic = current.topics.find((topic) => topic.topic_id === id);
-            if (!topic || (topic.title === next.topic.title && topic.status === next.topic.status)) return current;
-            return { ...current, topics: current.topics.map((topic) => topic.topic_id === id ? next.topic : topic) };
+            const updated = next.topic;
+            if (!topic || (topic.updated_at && updated.updated_at && topic.updated_at > updated.updated_at)
+              || (topic.title === updated.title && topic.status === updated.status && topic.updated_at === updated.updated_at)) return current;
+            return { ...current, topics: current.topics.map((entry) => entry.topic_id === id ? { ...updated, archived: topic.archived } : entry) };
           });
         }
         return next;
@@ -454,6 +487,7 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
     ready: Boolean(cache),
     refresh,
     call,
+    setTopicArchived,
     prepareTopic,
     enqueue,
     discard,

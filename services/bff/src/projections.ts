@@ -9,6 +9,9 @@ interface TopicRow {
   title: string;
   auto_title: boolean;
   status: Topic["status"];
+  created_at: Date;
+  updated_at: Date;
+  archived: boolean;
   error: string | null;
   session_id: string | null;
   reasoning_effort: ReasoningEffort | null;
@@ -31,6 +34,9 @@ export function topicData(row: TopicRow): Topic {
     profile_id: profileId(row.profile_ref),
     title: row.title,
     status: row.status,
+    created_at: row.created_at.toISOString(),
+    updated_at: row.updated_at.toISOString(),
+    archived: row.archived,
     ...(row.error ? { error: row.error } : {}),
     ...(row.reasoning_effort && !row.reasoning_status ? { reasoning_effort: row.reasoning_effort } : {}),
     ...(row.reasoning_status ? { reasoning_status: row.reasoning_status } : {}),
@@ -43,9 +49,10 @@ export async function topicRow(db: Pick<Store, "query">, id: string, refs: Set<s
   return rows[0];
 }
 
-export async function topics(store: Store, refs: Set<string>) {
+export async function topics(store: Store, refs: Set<string>, includeArchived: boolean) {
   const { rows } = await store.query<TopicRow>(
-    "SELECT * FROM topics WHERE profile_ref = ANY($1) ORDER BY created_at DESC, id", [[...refs]],
+    "SELECT * FROM topics WHERE profile_ref = ANY($1) AND ($2 OR NOT archived) ORDER BY updated_at DESC, id",
+    [[...refs], includeArchived],
   );
   return rows.map(topicData);
 }
