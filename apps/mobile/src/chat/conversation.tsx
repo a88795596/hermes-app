@@ -2,6 +2,7 @@ import { randomUUID } from "expo-crypto";
 import { useEffect, useRef, useState, type ComponentRef } from "react";
 import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import Animated from "react-native-reanimated";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MAX_ATTACHMENTS, type Attachment, type AttachmentUpload, type Control, type Message, type MessageProcessStep, type SessionStatus, type Skill, type Topic } from "@hermes-mobile/protocol";
 import type { useWorkspace } from "../sync/use-workspace";
 import { motion, useReduceMotion } from "../ui/motion";
@@ -182,6 +183,7 @@ export function Conversation({
   const { colors, styles } = useTheme();
   const reduced = useReduceMotion();
   const { width } = useWindowDimensions();
+  const { top: safeAreaTop } = useSafeAreaInsets();
   const messageWidth = Math.min(560, (width - transcriptGutter * 2) * 0.86);
   const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
   const pinned = useRef(true);
@@ -380,7 +382,8 @@ export function Conversation({
   }
 
   return (
-    <KeyboardAvoidingView style={styles.frame} behavior={Platform.OS === "web" ? undefined : "padding"}>
+    <KeyboardAvoidingView style={styles.frame} behavior={Platform.OS === "web" ? undefined : "padding"}
+      keyboardVerticalOffset={safeAreaTop}>
       {menu === "attachments" ? (
         <AttachmentMenu busy={picking} onClose={() => setMenu(undefined)} onPick={(kind) => void addAttachments(kind)} />
       ) : menu === "reasoning" ? (
