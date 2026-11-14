@@ -5,7 +5,6 @@ import WebSocket from 'ws';
 import type { TopicQueryResult } from '@hermes-mobile/protocol';
 import { attachmentDownloader } from './attachments.js';
 import { CanonicalConnector } from './connector.js';
-import { createDeliverySpool } from './delivery.js';
 import type { JsonObject } from './gateway.js';
 import { createHttpConnector } from './http-mode.js';
 import { createDashboardManagement } from './management.js';
@@ -46,8 +45,6 @@ async function main(): Promise<void> {
   const webapp = webappAddress && dashboardToken ? { origin: webappAddress.origin, token: dashboardToken } : undefined;
   const path = process.env.CONNECTOR_DB_PATH ?? join(homedir(), '.hermes-mobile', 'connector.sqlite');
   const spool = new Spool(path);
-  const deliveryPath = process.env.HERMES_MOBILE_SPOOL_PATH;
-  const delivery = deliveryPath ? createDeliverySpool(deliveryPath) : undefined;
   let socket: WebSocket | undefined;
   const shutdown = new AbortController();
   let serial = Promise.resolve();
@@ -83,10 +80,8 @@ async function main(): Promise<void> {
       const current = () => !shutdown.signal.aborted && socket === peer && peer.readyState === WebSocket.OPEN;
       const resultIds = new Set<string>();
       const eventIds = new Set<string>();
-      const deliveryIds = new Set<string>();
       const assigned = new Set<string>();
       const awaitingCreateAck = new Map<string, string>();
-      let polling = false;
       let queued = 0;
       let querying = 0;
       let managementPending = 0;
@@ -115,21 +110,7 @@ async function main(): Promise<void> {
           peer.terminate();
         }
       };
-      const relay = async () => {
-        if (!delivery || !current() || polling) return;
-        polling = true;
-        try {
-          for (const frame of await delivery.pull()) {
-            if (!deliveryIds.has(frame.event_id) && send({ ...frame })) deliveryIds.add(frame.event_id);
-          }
-        } catch {
-          process.stderr.write('连接器无法读取本地投递队列\n');
-        } finally {
-          polling = false;
-        }
-      };
       const pump = setInterval(flush, 100);
-      const poll = setInterval(() => { void relay(); }, 2_000);
       const heartbeat = setInterval(() => {
         if (!current()) return;
         if (!alive) {
@@ -144,7 +125,6 @@ async function main(): Promise<void> {
       peer.on('open', () => {
         process.stdout.write('Hermes 连接器已连接 BFF\n');
         flush();
-        void relay();
       });
       peer.on('message', (raw, binary) => {
         if (binary) {
@@ -173,9 +153,6 @@ async function main(): Promise<void> {
               assigned.add(topicId);
             }
             flush();
-          }
-          if (delivery && deliveryIds.has(id)) {
-            void delivery.ack(id).then(() => deliveryIds.delete(id), () => peer.terminate());
           }
           return;
         }
@@ -235,7 +212,6 @@ async function main(): Promise<void> {
       });
       await new Promise<void>((resolve) => peer.once('close', () => resolve()));
       clearInterval(pump);
-      clearInterval(poll);
       clearInterval(heartbeat);
       socket = undefined;
       flush = () => {};

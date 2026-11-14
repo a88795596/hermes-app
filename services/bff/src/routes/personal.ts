@@ -1,11 +1,12 @@
 import { randomBytes } from "node:crypto";
-import type { InboxItem, MobileNotice, TopicQuery } from "@hermes-mobile/protocol";
-import { isManagementOperation, isReasoningEffort, MAX_ATTACHMENT_TOTAL_BYTES, MAX_CONTROL_ANSWER_BYTES, MAX_TOPIC_TITLE_BYTES } from "@hermes-mobile/protocol";
+import type { InboxDelivery, InboxItem, MobileNotice, TopicQuery } from "@hermes-mobile/protocol";
+import { isManagementOperation, isReasoningEffort, MAX_ATTACHMENT_TOTAL_BYTES, MAX_CONTROL_ANSWER_BYTES, MAX_INBOX_TEXT_BYTES, MAX_TOPIC_TITLE_BYTES } from "@hermes-mobile/protocol";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
 import { submissionAttachments } from "../attachments.js";
-import { deviceAuth, matchesToken } from "../auth.js";
+import { deviceAuth, matchesToken, readBearer } from "../auth.js";
 import { registerBridge } from "../bridge.js";
+import { applyInboxDelivery } from "../ingress.js";
 import { createTopic, findProfile, interrupt, requestModel, requestReasoning, respond, setTopicArchived, submit } from "../mutations.js";
 import { detail, modelRequest, profiles, reasoningRequest, topicRow, topics } from "../projections.js";
 import { registerPushRoutes } from "../push.js";
@@ -15,6 +16,7 @@ import { ApiError, invalid, record, string, uuid } from "../validation.js";
 interface Config {
   pairingToken: string;
   connectorToken: string;
+  inboxDeliveryToken?: string;
   profileRefs: string[];
 }
 
@@ -140,6 +142,29 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
     const { rows } = await store.query<{ data: InboxItem }>("SELECT data FROM inbox WHERE profile_ref = ANY($1) ORDER BY created_at DESC, id", [[...refs]]);
     return success(request, rows.map(({ data }) => data));
   });
+  const deliveryToken = config.inboxDeliveryToken;
+  if (deliveryToken) {
+    if (!/^[\x21-\x7e]+$/.test(deliveryToken) || [config.pairingToken, config.connectorToken].includes(deliveryToken)) {
+      throw new Error("INBOX_DELIVERY_TOKEN 必须是与配对和连接器令牌不同的凭证，且不能包含空白字符。");
+    }
+    api.post("/internal/inbox/v1/deliveries", {
+      // JSON 转义后单个正文字符最多占 6 字节。
+      bodyLimit: 6 * MAX_INBOX_TEXT_BYTES + 1024,
+      onRequest: async (request) => {
+        if (!matchesToken(readBearer(request), deliveryToken)) throw new ApiError(401, "UNAUTHORIZED", "收件箱投递凭证无效。");
+      },
+    }, async (request, reply) => {
+      const body = record(request.body, ["delivery_id", "profile_ref", "text"]);
+      const delivery: InboxDelivery = {
+        delivery_id: uuid(body.delivery_id, "投递 ID"),
+        profile_ref: string(body.profile_ref, "配置档案名称", 64),
+        text: string(body.text, "消息正文", MAX_INBOX_TEXT_BYTES),
+      };
+      const applied = await store.transaction((db) => applyInboxDelivery(db, delivery, refs));
+      if (applied) changed();
+      return reply.code(204).send();
+    });
+  }
 
   api.post(`${prefix}/topics`, requireDevice, async (request, reply) => {
     const body = record(request.body, ["request_id", "profile_id", "title"]);

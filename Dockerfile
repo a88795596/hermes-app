@@ -12,7 +12,6 @@ RUN pnpm install --frozen-lockfile
 COPY tsconfig.base.json ./
 COPY packages/ ./packages/
 COPY services/ ./services/
-COPY plugins/hermes-mobile-delivery/src/hermes_mobile_delivery/spool.py ./plugins/hermes-mobile-delivery/src/hermes_mobile_delivery/
 RUN pnpm --filter @hermes-mobile/connector build \
     && pnpm --filter @hermes-mobile/connector exec esbuild ../bff/src/main.ts \
         --bundle --platform=node --target=node24 --format=esm --packages=external \
@@ -24,7 +23,7 @@ RUN pnpm --filter @hermes-mobile/bff... install --prod --frozen-lockfile
 FROM node:24-bookworm-slim
 WORKDIR /app
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates python3 \
+    && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && install -d -m 0700 -o node -g node /var/lib/hermes-mobile
 COPY --from=production-deps /build/node_modules ./node_modules

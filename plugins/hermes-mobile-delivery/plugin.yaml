@@ -4,13 +4,19 @@ kind: platform
 version: 0.0.0
 description: 将 Hermes Agent 的文本持久化投递到 Hermes 移动端收件箱。
 requires_env:
-  - name: HERMES_MOBILE_SPOOL_PATH
-    description: 本地投递队列 SQLite 数据库的绝对路径。
+  - name: HERMES_MOBILE_INBOX_URL
+    description: 应用后端收件箱投递 API 的完整 URL。
     password: false
+  - name: HERMES_MOBILE_INBOX_TOKEN
+    description: 应用后端的收件箱投递令牌。
+    password: true
   - name: HERMES_MOBILE_HOME_CHANNEL
     description: 唯一允许的 Hermes 移动端投递目标 ID。
     password: false
 optional_env:
   - name: HERMES_MOBILE_PROFILE
     description: 允许投递的 Hermes 配置档案名称，默认值为 default。
+    password: false
+  - name: HERMES_MOBILE_SPOOL_PATH
+    description: Hermes 内待投递队列的绝对路径，默认位于当前配置档案的数据目录。
     password: false

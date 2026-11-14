@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import type { Command, CommandResult, ConnectorEvent, Control, DeliveryFrame, InboxItem, Message } from "@hermes-mobile/protocol";
+import type { Command, CommandResult, ConnectorEvent, Control, DeliveryFrame, InboxDelivery, InboxItem, Message } from "@hermes-mobile/protocol";
 import type { PoolClient } from "pg";
 import { touchTopic } from "./mutations.js";
 import { topicRow } from "./projections.js";
@@ -89,7 +89,9 @@ async function recordEvent(db: PoolClient, kind: string, id: string, payload: ob
   );
   if (inserted.rowCount) return true;
   const { rows } = await db.query("SELECT payload FROM connector_ingest WHERE kind = $1 AND id = $2", [kind, id]);
-  if (!isDeepStrictEqual(rows[0]?.payload, payload)) conflict("不同的事件数据使用了同一个连接器事件 ID。");
+  if (!isDeepStrictEqual(rows[0]?.payload, payload)) {
+    conflict(kind === "delivery" ? "同一个投递 ID 对应不同的数据。" : "不同的事件数据使用了同一个连接器事件 ID。");
+  }
   return false;
 }
 
@@ -148,11 +150,16 @@ export async function applyEvent(db: PoolClient, frame: ConnectorEvent, refs: Se
 }
 
 export async function applyDelivery(db: PoolClient, frame: DeliveryFrame, refs: Set<string>) {
-  if (!refs.has(frame.profile_ref)) missing("配置档案");
+  const applied = await applyInboxDelivery(db, frame, refs);
   await recordEvent(db, "event", frame.event_id, frame);
-  const { delivery_id, profile_ref, text } = frame;
-  if (!await recordEvent(db, "delivery", delivery_id, { profile_ref, text })) return;
+  return applied;
+}
+
+export async function applyInboxDelivery(db: PoolClient, { delivery_id, profile_ref, text }: InboxDelivery, refs: Set<string>) {
+  if (!refs.has(profile_ref)) missing("配置档案");
+  if (!await recordEvent(db, "delivery", delivery_id, { profile_ref, text })) return false;
   const item: InboxItem = { inbox_id: delivery_id, text, created_at: new Date().toISOString() };
   await db.query("INSERT INTO inbox (id, profile_ref, data) VALUES ($1, $2, $3)", [item.inbox_id, profile_ref, item]);
   await queueInboxPush(db, item.inbox_id);
+  return true;
 }

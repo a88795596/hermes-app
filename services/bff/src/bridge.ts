@@ -205,9 +205,10 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
             changed(topic.id);
             pump();
           } else if (frame.type === "delivery") {
-            await store.transaction((db) => applyDelivery(db, frame, refs));
+            // shortcut: 兼容旧连接器的队列，旧部署清空队列并升级后移除。
+            const applied = await store.transaction((db) => applyDelivery(db, frame, refs));
             send({ type: "ack", id: frame.event_id });
-            changed();
+            if (applied) changed();
           } else {
             await store.transaction((db) => applyEvent(db, frame, refs, sessions));
             send({ type: "ack", id: frame.event_id });

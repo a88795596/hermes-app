@@ -1,13 +1,11 @@
-"""持久化投递队列，供 Hermes 连接器通过命令行拉取并确认。"""
+"""Hermes 插件私有的持久化投递队列。"""
 
-import argparse
 from contextlib import closing, contextmanager
 from pathlib import Path
-import json
 import os
 import sqlite3
 import stat
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 
 @contextmanager
@@ -44,38 +42,15 @@ def enqueue(path: Path, profile_ref: str, text: str) -> str:
     return delivery_id
 
 
-def pull(path: Path) -> list[dict[str, str]]:
+def pull(path: Path, profile_ref: str, limit: int = 20) -> list[tuple[str, str]]:
     if not path.exists():
         return []
     with _connect(path) as db:
-        rows = db.execute("SELECT delivery_id, profile_ref, text FROM deliveries ORDER BY rowid LIMIT 20").fetchall()
-    return [
-        {"type": "delivery", "event_id": delivery_id, "delivery_id": delivery_id, "profile_ref": profile_ref, "text": text}
-        for delivery_id, profile_ref, text in rows
-    ]
+        return db.execute("SELECT delivery_id, text FROM deliveries WHERE profile_ref = ? ORDER BY rowid LIMIT ?",
+                          (profile_ref, limit)).fetchall()
 
 
 def ack(path: Path, delivery_id: str) -> None:
-    if str(UUID(delivery_id)) != delivery_id:
-        raise ValueError("投递 ID 无效")
     if path.exists():
         with _connect(path) as db:
             db.execute("DELETE FROM deliveries WHERE delivery_id = ?", (delivery_id,))
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("path", type=Path, help="本地投递队列的绝对路径")
-    commands = parser.add_subparsers(dest="command", required=True, title="队列命令")
-    commands.add_parser("pull", help="读取待投递的记录")
-    acknowledge = commands.add_parser("ack", help="确认已投递的记录")
-    acknowledge.add_argument("delivery_id", help="已投递记录的 ID")
-    args = parser.parse_args()
-    if args.command == "pull":
-        print(json.dumps(pull(args.path)))
-    else:
-        ack(args.path, args.delivery_id)
-
-
-if __name__ == "__main__":
-    main()

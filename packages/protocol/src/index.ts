@@ -161,6 +161,14 @@ export interface InboxItem {
   created_at: string;
 }
 
+export const MAX_INBOX_TEXT_BYTES = 128 * 1024;
+
+export interface InboxDelivery {
+  delivery_id: string;
+  profile_ref: string;
+  text: string;
+}
+
 export interface MobileNotice {
   type: "changed";
   topic_id?: string;
@@ -203,12 +211,9 @@ interface EventEnvelope {
   topic_id: string;
 }
 
-export interface DeliveryFrame {
+export interface DeliveryFrame extends InboxDelivery {
   type: "delivery";
   event_id: string;
-  delivery_id: string;
-  profile_ref: string;
-  text: string;
 }
 
 export type ConnectorEvent =

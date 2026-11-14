@@ -11,6 +11,7 @@ interface AppOptions {
   databaseUrl: string;
   pairingToken: string;
   connectorToken: string;
+  inboxDeliveryToken?: string;
   profileRefs?: string[];
 }
 

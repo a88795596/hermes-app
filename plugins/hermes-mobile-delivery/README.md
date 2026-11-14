@@ -1,11 +1,39 @@
 # Hermes 移动端投递插件
 
-`hermes_mobile` 平台将发往移动端收件箱的文本写入队列。Hermes Agent 和连接器须以同一个 Unix 用户运行。连接器通过本地子进程管道调用 Python 3.11 或以上版本，读取并确认插件 SQLite 队列中的消息。
+`hermes_mobile` 平台通过 HTTP 向应用后端（BFF）投递纯文本。Hermes 插件和 BFF 可以运行在不同容器或主机，只需能通过网络访问投递 API。
 
-1. 将此目录连同 `plugin.yaml`、`__init__.py` 和 `src/` 复制到负责发送的 Hermes 配置档案下的 `plugins/hermes-mobile-delivery` 目录。默认配置档案的路径为 `~/.hermes/plugins/hermes-mobile-delivery`。在该配置档案下运行 `hermes plugins enable hermes-mobile-delivery` 启用插件。
-2. 在该配置档案的 `.env` 中设置 `HERMES_MOBILE_HOME_CHANNEL=1`，并将 `HERMES_MOBILE_SPOOL_PATH` 设为绝对文件路径，例如 `/Users/you/.hermes/mobile-delivery/queue.sqlite3`。请使用专用的父目录。目录不存在时，插件会按 `0700` 权限创建。使用具名配置档案时，将 `HERMES_MOBILE_PROFILE` 设为其准确名称，并把该名称加入 BFF 的 `HERMES_PROFILES`。
-3. 在连接器的环境中为 `HERMES_MOBILE_SPOOL_PATH` 设置相同的绝对路径。连接器默认从 `PATH` 查找 `python3`，需要时可通过 `HERMES_MOBILE_PYTHON` 指定可执行文件。如果 Hermes 网关正在运行，请重启它，然后启动或重启连接器。
+1. 在 BFF 环境中设置 `INBOX_DELIVERY_TOKEN`。可用 `openssl rand -hex 32` 单独生成令牌。如果使用 Compose，将它写入项目的 `.env`，然后运行 `docker compose up -d --build --wait` 应用配置。
+2. 将 `plugin.yaml`、`__init__.py` 和 `src/` 复制到负责发送的 Hermes 配置档案下的 `plugins/hermes-mobile-delivery` 目录。默认配置档案的路径为 `~/.hermes/plugins/hermes-mobile-delivery`。在该配置档案下运行 `hermes plugins enable hermes-mobile-delivery`。
+3. 在该配置档案的 `.env` 中填入下面三项。`HERMES_MOBILE_INBOX_TOKEN` 使用与 BFF 的 `INBOX_DELIVERY_TOKEN` 相同的值。使用具名配置档案时，将 `HERMES_MOBILE_PROFILE` 设为其准确名称，并把该名称加入 BFF 的 `HERMES_PROFILES`。如果 Hermes 网关正在运行，重启以加载配置。
+
+   ```dotenv
+   HERMES_MOBILE_HOME_CHANNEL=1
+   HERMES_MOBILE_INBOX_URL=https://mobile.example.com/internal/inbox/v1/deliveries
+   HERMES_MOBILE_INBOX_TOKEN=替换为投递令牌
+   ```
+
+跨主机使用 HTTPS，并在反向代理转发 `/internal/inbox/v1/deliveries`。如果 BFF 在同一受信任的容器网络中独立运行，将其 `HOST` 设为 `0.0.0.0`，插件可用 `http://bff:4317/internal/inbox/v1/deliveries`，其中 `bff` 为 BFF 的服务名，端口与 BFF 的 `PORT` 一致。
 
 运行 `hermes send --to hermes_mobile "来自 Hermes 的测试消息"` 测试投递，或将定时任务的投递目标设为 `hermes_mobile`。已配置的默认目标也可写作 `hermes_mobile:1`。插件拒绝其他投递目标和会话串 ID。
 
-插件将文本写入本地队列后，Hermes 即报告发送成功。连接器使用同一个投递 ID 重试，直到 BFF 确认已持久化。上游投递片段的稳定标识可能缺失，因此每次独立调用都会生成一条收件箱记录，即使文本相同。投递仅支持不超过 128 KiB 的纯文本。
+## 投递 API
+
+`POST /internal/inbox/v1/deliveries` 接受 `Authorization: Bearer <投递令牌>` 和 `Content-Type: application/json`。正文包含 UUID `delivery_id`、BFF 允许的 `profile_ref` 和最多 128 KiB 的 UTF-8 文本 `text`。
+
+```json
+{
+  "delivery_id": "e184243a-a270-41ff-a695-38f0d6c5099b",
+  "profile_ref": "default",
+  "text": "定时任务已完成"
+}
+```
+
+BFF 在同一个事务中保存收件箱消息和通知任务，然后返回 `204 No Content`。重发同一个投递 ID 和相同内容也会返回 `204`，内容冲突则返回 `409`。鉴权失败返回 `401`。未配置投递令牌或配置档案未加入允许名单时返回 `404`。请求内容校验失败返回 `422`。
+
+Hermes 先接受并保存消息，再通过 API 投递。网关运行时会自动补投待确认的消息。独立运行 `hermes send` 会立即尝试投递这条消息，也可能在消息仍处于队列时返回成功。启动 Hermes 网关会继续投递队列中的消息。每次重试沿用同一投递 ID，收到 `204` 后才移除本地记录。
+
+队列默认放在 Hermes 配置档案数据目录下的 `mobile-delivery/queue.sqlite3`。可通过 `HERMES_MOBILE_SPOOL_PATH` 指定 Hermes 容器内的绝对路径。队列目录和文件仅供运行 Hermes 的用户访问。Docker 部署将队列保存在 Hermes 自己的持久卷即可。
+
+## 从共享队列升级
+
+升级插件时可在 Hermes 配置中保留原有的 `HERMES_MOBILE_SPOOL_PATH`。如果 Hermes 也迁移到新容器，先停止旧版插件和连接器，再把原队列放到 Hermes 的持久卷中。新版插件会沿用原投递 ID 继续发送本档案的记录。新版 BFF 也兼容旧版连接器的投递帧，可以先用旧版连接器清空队列。升级连接器后，可以移除它的投递队列挂载、`HERMES_MOBILE_SPOOL_PATH` 和 `HERMES_MOBILE_PYTHON`。
