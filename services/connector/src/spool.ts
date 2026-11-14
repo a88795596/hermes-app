@@ -1,7 +1,7 @@
 import { closeSync, mkdirSync, openSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { Control, ModelSelection } from '@hermes-mobile/protocol';
+import type { Control, MessageProcessStep, ModelSelection } from '@hermes-mobile/protocol';
 import type { JsonObject } from './gateway.js';
 
 type CommandRow = { digest: string; result: string | null };
@@ -12,8 +12,15 @@ export type Turn = {
   admissionId: string;
   submissionId: string | null;
   text: string;
+  process?: MessageProcessStep[];
   status: 'queued' | 'streaming' | 'final' | 'failed' | 'cancelled' | 'unknown';
 };
+
+type TurnRow = Omit<Turn, 'process'> & { process: string | null };
+
+function readTurn({ process, ...turn }: TurnRow): Turn {
+  return process ? { ...turn, process: JSON.parse(process) as MessageProcessStep[] } : turn;
+}
 
 export class Spool {
   readonly #db: DatabaseSync;
@@ -41,7 +48,7 @@ export class Spool {
       );
       CREATE TABLE IF NOT EXISTS turns (
         topic_id TEXT NOT NULL, admission_id TEXT NOT NULL, submission_id TEXT,
-        text TEXT NOT NULL, status TEXT NOT NULL, PRIMARY KEY(topic_id, admission_id)
+        text TEXT NOT NULL, status TEXT NOT NULL, process TEXT, PRIMARY KEY(topic_id, admission_id)
       );
       CREATE TABLE IF NOT EXISTS intents (
         topic_id TEXT NOT NULL, submission_id TEXT NOT NULL, PRIMARY KEY(topic_id, submission_id)
@@ -53,6 +60,11 @@ export class Spool {
         id TEXT PRIMARY KEY, body TEXT NOT NULL
       );
     `);
+    this.#transaction(() => {
+      if (!this.#db.prepare('PRAGMA table_info(turns)').all().some((column) => column.name === 'process')) {
+        this.#db.exec('ALTER TABLE turns ADD COLUMN process TEXT');
+      }
+    });
   }
 
   #transaction(write: () => void): void {
@@ -146,26 +158,29 @@ export class Spool {
   }
 
   turn(topicId: string, admissionId: string): Turn | undefined {
-    return this.#db.prepare(`
-      SELECT topic_id AS topicId, admission_id AS admissionId, submission_id AS submissionId, text, status
+    const row = this.#db.prepare(`
+      SELECT topic_id AS topicId, admission_id AS admissionId, submission_id AS submissionId, text, status, process
       FROM turns WHERE topic_id = ? AND admission_id = ?
-    `).get(topicId, admissionId) as Turn | undefined;
+    `).get(topicId, admissionId) as TurnRow | undefined;
+    return row && readTurn(row);
   }
 
   activeTurns(topicId: string): Turn[] {
-    return this.#db.prepare(`
-      SELECT topic_id AS topicId, admission_id AS admissionId, submission_id AS submissionId, text, status
+    const rows = this.#db.prepare(`
+      SELECT topic_id AS topicId, admission_id AS admissionId, submission_id AS submissionId, text, status, process
       FROM turns WHERE topic_id = ? AND submission_id IS NOT NULL AND status IN ('queued', 'streaming', 'unknown')
-    `).all(topicId) as Turn[];
+    `).all(topicId) as TurnRow[];
+    return rows.map(readTurn);
   }
 
   #storeTurn(turn: Turn): void {
     this.#db.prepare(`
-      INSERT INTO turns (topic_id, admission_id, submission_id, text, status) VALUES (?, ?, ?, ?, ?)
+      INSERT INTO turns (topic_id, admission_id, submission_id, text, status, process) VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT (topic_id, admission_id)
       DO UPDATE SET submission_id = COALESCE(excluded.submission_id, turns.submission_id),
-        text = excluded.text, status = excluded.status
-    `).run(turn.topicId, turn.admissionId, turn.submissionId, turn.text, turn.status);
+        text = excluded.text, status = excluded.status, process = excluded.process
+    `).run(turn.topicId, turn.admissionId, turn.submissionId, turn.text, turn.status,
+      turn.process ? JSON.stringify(turn.process) : null);
   }
 
   record(topicId: string, frames: { id: string; body: JsonObject }[], cursor?: Cursor, turn?: Turn, controls: Control[] = []): void {

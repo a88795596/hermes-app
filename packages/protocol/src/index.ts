@@ -18,6 +18,13 @@ export interface Topic {
 
 export type MessageStatus = "accepted" | "queued" | "streaming" | "final" | "failed" | "unknown" | "cancelled";
 
+export const MAX_MESSAGE_PROCESS_STEPS = 64;
+export const MAX_MESSAGE_PROCESS_TEXT_BYTES = 4096;
+
+export type MessageProcessStep =
+  | { kind: "reasoning" | "commentary"; text: string }
+  | { kind: "tool"; id: string; name: string; status: "running" | "succeeded" | "failed" | "unknown" };
+
 export interface Message {
   message_id: string;
   role: "user" | "assistant";
@@ -25,6 +32,7 @@ export interface Message {
   status: MessageStatus;
   submission_id?: string;
   error?: string;
+  process?: MessageProcessStep[];
 }
 
 export interface Control {
@@ -152,7 +160,7 @@ export interface DeliveryFrame {
 }
 
 export type ConnectorEvent =
-  | (EventEnvelope & { type: "message"; message_id: string; submission_id?: string; text: string; status: "streaming" | "final" })
+  | (EventEnvelope & Pick<Message, "message_id" | "submission_id" | "text" | "process"> & { type: "message"; status: "streaming" | "final" })
   | (EventEnvelope & { type: "submission"; submission_id: string; status: Exclude<MessageStatus, "accepted">; error?: string })
   | (EventEnvelope & Omit<Control, "answer" | "error"> & { type: "control" });
 

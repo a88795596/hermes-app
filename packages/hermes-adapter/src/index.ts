@@ -327,8 +327,9 @@ export type CanonicalProjection =
   | ({ type: "message.start" } & TurnIdentity)
   | ({ type: "message.delta"; text: string | null; offset?: number } & SegmentIdentity)
   | ({ type: "message.interim"; text: string; alreadyStreamed: boolean } & SegmentIdentity)
-  | ({ type: "message.complete"; text?: string; outcome: TurnOutcome; submissionId?: string; rowId?: string;
+  | ({ type: "message.complete"; text?: string; reasoning?: string; outcome: TurnOutcome; submissionId?: string; rowId?: string;
        responseReused: boolean } & TurnIdentity)
+  | ({ type: "reasoning.delta" | "reasoning.available"; text: string } & TurnIdentity)
   | { type: "tool.start" | "tool.complete"; admissionId?: string; toolId: string; name: string;
       status: "running" | "succeeded" | "failed" | "unknown" }
   | ({ type: "approval.request" | "clarify.request" } & CanonicalPrompt)
@@ -359,6 +360,10 @@ export function normalizeCanonicalEvent(event: CanonicalEvent): CanonicalProject
     case "message.interim":
       return { type, ...turnIdentity(event), segment: offset(payload.segment, "消息分段"),
         text: string(payload.text, "中间文本"), alreadyStreamed: boolean(payload.already_streamed, "already_streamed") };
+    case "reasoning.delta":
+    case "reasoning.available":
+      if (typeof payload.text !== "string") return;
+      return { type, admissionId: event.admissionId, text: payload.text };
     case "message.complete": {
       const identity = turnIdentity(event);
       const admissionId = payload.admission_id == null ? identity.admissionId : id(payload.admission_id, "admission_id");
@@ -368,6 +373,7 @@ export function normalizeCanonicalEvent(event: CanonicalEvent): CanonicalProject
       const persisted = payload.persisted_turn == null ? {} : record(payload.persisted_turn, "已持久化的对话轮次");
       return {
         type, ...identity, admissionId, text, outcome: normalizeTurnOutcome(payload.outcome, payload.status),
+        reasoning: typeof payload.reasoning === "string" ? payload.reasoning : undefined,
         submissionId: persisted.submission_id == null ? undefined : id(persisted.submission_id, "submission_id"),
         rowId: persisted.final_assistant_row_id == null
           ? undefined

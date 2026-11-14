@@ -61,7 +61,11 @@ pnpm typecheck
 
    HTTP 适配器使用 Hermes API 管理的会话。如果安装了较新版本的 Hermes，可将 `HERMES_API_URL` 留空，以网关所用的账户在同一台主机上运行连接器，并将 `HERMES_BIN` 指向支持 `gateway attach --json` 的命令行程序。连接器与 BFF 的数据库应配套使用，绑定同一个 Hermes 后端和传输方式。试用其他后端时请使用独立的数据库。
 
-   在 HTTP 模式下，聊天中的「技能」菜单读取 `GET /p/<profile>/v1/skills`。如果该接口因 `include_editorial` 错误返回 500，运行 `docker build -t hermes-mobile-runtime - < services/connector/Dockerfile.hermes`，然后使用 `hermes-mobile-runtime` 作为 Hermes 容器镜像。 [上游修复](https://github.com/NousResearch/hermes-agent/pull/108968)
+   HTTP 模式可使用配套的 `hermes-mobile-runtime` 镜像转发思考和阶段说明。它也修复了部分 Hermes 版本的「技能」菜单报错。构建后使用该镜像启动 Hermes 容器。
+
+   ```sh
+   docker build -f services/connector/Dockerfile.hermes -t hermes-mobile-runtime services/connector
+   ```
 
    如果聊天运行失败，且容器日志显示 `no_provider_configured`，运行 `docker exec -it -u hermes hermes-dev hermes model`，为容器中的 Hermes 用户配置模型服务商。API 服务密钥用于验证连接器，模型服务商使用自己的凭据。
 
@@ -79,6 +83,8 @@ pnpm typecheck
 <a name="interactive-chat"></a>
 
 ## 聊天交互
+
+点击会话标题右侧的「过程」开关，可以查看每条回复的思考、阶段说明和工具执行状态。开关在本次使用期间按话题记忆，默认关闭。能查看哪些过程取决于 Hermes 和模型实际提供的数据。
 
 在话题中发送 `/model`，先选择服务商，再选择模型。菜单会显示当前 Hermes 配置档案下可用的服务商，并标记当前选项。等本轮回复完成后即可切换模型，新选择对当前话题的后续对话生效。
 

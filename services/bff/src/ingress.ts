@@ -100,7 +100,9 @@ export async function applyEvent(db: PoolClient, frame: ConnectorEvent, refs: Se
     }
     if (existing?.data.status === "final" && frame.status === "streaming") return;
     const submissionId = frame.submission_id ?? existing?.data.submission_id;
+    const process = frame.process ?? existing?.data.process;
     const message: Message = { message_id: frame.message_id, role: "assistant", text: frame.text, status: frame.status,
+      ...(process?.length ? { process } : {}),
       ...(submissionId ? { submission_id: submissionId } : {}) };
     await db.query("INSERT INTO messages (id, topic_id, data) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET data = excluded.data",
       [message.message_id, topic.id, message]);

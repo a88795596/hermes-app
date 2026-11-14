@@ -3,3 +3,7 @@ FROM nousresearch/hermes-agent:main
 # shortcut: 上游 /v1/skills 接口修复后，移除此镜像补丁。
 RUN sed -i 's/skip_disabled=False, include_editorial=True/skip_disabled=False/' \
     /opt/hermes/gateway/platforms/api_server.py
+
+# shortcut: 上游 Runs 转发思考和阶段说明后，移除此镜像补丁。
+COPY hermes-runs-process.patch /tmp/hermes-runs-process.patch
+RUN git -C /opt/hermes apply --recount /tmp/hermes-runs-process.patch && rm /tmp/hermes-runs-process.patch

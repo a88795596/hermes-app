@@ -5,18 +5,19 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 import type { Command } from '@hermes-mobile/protocol';
 import type { JsonObject } from '../src/gateway.js';
 import { createHttpConnector } from '../src/http-mode.js';
 import { Spool } from '../src/spool.js';
 
-async function harness(t: TestContext, replyStatus = 'resolved') {
+async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: JsonObject[]) {
   const calls: { path: string; body: JsonObject }[] = [];
   const frames: JsonObject[] = [];
   const topicId = randomUUID();
   const sessionId = 'mobile_test';
   const runId = 'run_' + '1'.repeat(32);
-  let pending = true;
+  let pending = !runEvents;
   const server = createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -36,6 +37,12 @@ async function harness(t: TestContext, replyStatus = 'resolved') {
     } else if (path === '/v1/runs') {
       res.statusCode = 202;
       res.end(JSON.stringify({ run_id: runId }));
+    } else if (path === `/v1/runs/${runId}/events` && runEvents) {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(': open\n\n');
+      // The terminal status is available before this subscriber receives the buffered events.
+      await delay(50);
+      res.end(runEvents.map((event, seq) => `data: ${JSON.stringify({ ...event, run_id: runId, seq })}\n\n`).join(''));
     } else if (path === `/v1/runs/${runId}`) {
       res.end(JSON.stringify({ run_id: runId, status: pending ? 'running' : 'completed', output: '已完成',
         pending_controls: pending ? [{
@@ -151,4 +158,32 @@ test('HTTP Runs 关闭已处理的问题，拒绝再次提交的回答', async (
   assert.equal(response?.control_status, 'closed');
   assert.equal(response.status, 'error');
   assert.equal(response.error, '此请求已过期或已回答。');
+});
+
+test('HTTP Runs 将思考、阶段说明和工具状态随最终回复保存', { timeout: 5000 }, async (t) => {
+  const { command, frames } = await harness(t, 'resolved', [
+    { event: 'reasoning.delta', text: '先检查' },
+    { event: 'reasoning.delta', text: '目录。' },
+    { event: 'message.delta', delta: '我先看看。' },
+    { event: 'message.interim', text: '我先看看。', already_streamed: true },
+    { event: 'tool.started', tool: 'read_file', tool_call_id: 'call-1', preview: '工具参数' },
+    { event: 'tool.completed', tool: 'read_file', tool_call_id: 'call-1', error: false, preview: '工具原始输出' },
+    { event: 'message.delta', delta: '已完成' },
+    { event: 'run.completed', output: '已完成' },
+  ]);
+  const id = randomUUID();
+  await command({ kind: 'submit', body: { submission_id: id, text: '检查目录' } }, id);
+  const finalReply = () => frames.find((frame) => frame.type === 'message' && frame.status === 'final');
+  while (!finalReply()) await delay(10, undefined, { signal: t.signal });
+  const replies = frames.filter((frame) => frame.type === 'message');
+  assert.equal(replies[0].text, '');
+  assert.deepEqual(replies[0].process, [{ kind: 'reasoning', text: '先检查' }]);
+  assert(replies.some((frame) => frame.status === 'streaming' && frame.text === '已完成'));
+  assert.equal(finalReply()?.text, '已完成');
+  assert.deepEqual(finalReply()?.process, [
+    { kind: 'reasoning', text: '先检查目录。' },
+    { kind: 'commentary', text: '我先看看。' },
+    { kind: 'tool', id: 'call-1', name: 'read_file', status: 'succeeded' },
+  ]);
+  assert(replies.every((frame) => frame.message_id === finalReply()?.message_id && frame.submission_id === id));
 });
