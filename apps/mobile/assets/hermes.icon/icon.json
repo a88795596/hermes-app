@@ -1,0 +1,21 @@
+{
+  "fill": {
+    "solid": "extended-srgb:0.90196,0.95686,0.99608,1.00000"
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "penguin.png",
+          "name": "Penguin"
+        }
+      ],
+      "specular": false
+    }
+  ],
+  "supported-platforms": {
+    "squares": [
+      "iOS"
+    ]
+  }
+}
