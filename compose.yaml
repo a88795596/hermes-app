@@ -1,0 +1,47 @@
+services:
+  app:
+    build: .
+    init: true
+    network_mode: host
+    restart: unless-stopped
+    stop_grace_period: 20s
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      HOST: 127.0.0.1
+      PORT: ${BFF_PORT:-4317}
+      DATABASE_URL: postgresql://hermes_mobile@127.0.0.1:${POSTGRES_PORT:-55433}/hermes_mobile
+      PGPASSWORD: ${POSTGRES_PASSWORD:?请设置 POSTGRES_PASSWORD}
+      APP_PAIRING_TOKEN: ${APP_PAIRING_TOKEN:?请设置 APP_PAIRING_TOKEN}
+      CONNECTOR_TOKEN: ${CONNECTOR_TOKEN:-}
+      HERMES_API_URL: ${HERMES_API_URL:-http://127.0.0.1:8642}
+      HERMES_API_KEY: ${HERMES_API_KEY:?请设置 HERMES_API_KEY}
+      HERMES_PROFILES: ${HERMES_PROFILES:-default}
+      HERMES_DASHBOARD_URL: ${HERMES_DASHBOARD_URL:-}
+      HERMES_DASHBOARD_SESSION_TOKEN: ${HERMES_DASHBOARD_SESSION_TOKEN:-}
+      EXPO_ACCESS_TOKEN: ${EXPO_ACCESS_TOKEN:-}
+    volumes:
+      - connector-data:/var/lib/hermes-mobile
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: hermes_mobile
+      POSTGRES_USER: hermes_mobile
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请设置 POSTGRES_PASSWORD}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-55433}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "hermes_mobile", "-d", "hermes_mobile"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  connector-data:
+  postgres-data:
