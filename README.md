@@ -9,7 +9,7 @@
 | `services/connector` | Node 服务 | 从 Hermes 主机主动连接 BFF |
 | `packages/protocol` | 共享包 | 定义移动端与连接器的通信协议 |
 | `packages/hermes-adapter` | 共享包 | 校验并规范化 Hermes 数据 |
-| `plugins/hermes-mobile-delivery` | Hermes Python 插件 | 为定时任务和 `hermes send` 注册文本投递通道 |
+| `plugins/hermes-mobile-delivery` | Hermes Python 插件 | 为定时任务和 `hermes send` 提供移动端收件箱与 Bark 投递渠道 |
 
 `packages/protocol` 独立于应用框架。Hermes 凭据由连接器保管，移动端只依赖能在设备上运行的代码。BFF 通过连接器与 Hermes 通信。
 
@@ -69,6 +69,8 @@ BFF 和连接器在同一个容器运行，PostgreSQL 由 Compose 单独启动�
 
 启用移动端收件箱投递时，在应用服务的 `.env` 中设置独立的 `INBOX_DELIVERY_TOKEN`。在运行 Hermes 的主机或容器里安装插件，并配置从该环境可访问的 `/internal/inbox/v1/deliveries` 地址。默认 Compose 的 BFF 监听回环地址，分容器部署可使用 HTTPS 反向代理并转发该路径。 [Hermes 投递插件](plugins/hermes-mobile-delivery/README.md)
 
+使用 Bark 时，在 Hermes 配置档案中设置 `BARK_KEY`。 [Bark 推送配置](plugins/hermes-mobile-delivery/README.md#bark-推送)
+
 升级时重新执行 `docker compose up -d --build --wait`。已有共享投递队列的部署可将原队列交给新版插件继续发送。`docker compose down` 停止部署并保留两个命名卷 `postgres-data` 和 `connector-data`。它们分别保存配对和聊天数据、连接器的会话绑定和待发送记录。备份或迁移时应成对保留，`docker compose down -v` 会删除这两个卷。PostgreSQL 首次初始化使用 `POSTGRES_PASSWORD`，之后如需轮换密码，请同步修改数据库角色密码与 `.env`。 [投递队列升级](plugins/hermes-mobile-delivery/README.md#从共享队列升级)
 
 <a name="run-the-personal-mvp"></a>
@@ -124,7 +126,7 @@ pnpm typecheck
 
    安装开发客户端后，运行 `pnpm dev:mobile` 重新启动 Metro。使用 `APP_PAIRING_TOKEN` 和 BFF 地址配对。在 iOS 模拟器中使用 `http://127.0.0.1:4317`，在 Android 模拟器中使用 `http://10.0.2.2:4317`，在真机上使用 BFF 受信任的 HTTPS 反向代理。原生应用通过 SecureStore 保存设备令牌，并在应用私有的 SQLite 数据库中保存历史记录和待发文本。开发构建配置 Expo 项目 ID 和 APNs／FCM 凭据后，可在「设置」的「连接」中开启收件箱通知。
 
-4. 如需在本地通过 npm 安装连接器，运行 `pnpm --filter @hermes-mobile/connector pack` 并安装生成的压缩包。定时投递与 `hermes send` 需要在 Hermes 运行环境安装插件，并为投递 API 配置地址和令牌。 [Hermes 投递插件](plugins/hermes-mobile-delivery/README.md)
+4. 如需在本地通过 npm 安装连接器，运行 `pnpm --filter @hermes-mobile/connector pack` 并安装生成的压缩包。使用定时投递或 `hermes send` 时，在 Hermes 运行环境安装插件，再配置所用渠道。 [Hermes 投递插件](plugins/hermes-mobile-delivery/README.md)
 
 <a name="interactive-chat"></a>
 

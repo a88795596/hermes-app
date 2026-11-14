@@ -2,7 +2,7 @@ name: hermes-mobile-delivery
 label: Hermes 移动端
 kind: platform
 version: 0.0.0
-description: 将 Hermes Agent 的文本持久化投递到 Hermes 移动端收件箱。
+description: 向 Hermes 移动端收件箱和 Bark 投递 Hermes Agent 的消息。
 requires_env:
   - name: HERMES_MOBILE_INBOX_URL
     description: 应用后端收件箱投递 API 的完整 URL。
@@ -19,4 +19,13 @@ optional_env:
     password: false
   - name: HERMES_MOBILE_SPOOL_PATH
     description: Hermes 内待投递队列的绝对路径，默认位于当前配置档案的数据目录。
+    password: false
+  - name: BARK_KEY
+    description: Bark 设备 Key。多个 Key 以英文逗号分隔。
+    password: true
+  - name: BARK_URL
+    description: Bark 服务器地址，默认 https://api.day.app。
+    password: false
+  - name: BARK_HOME_CHANNEL
+    description: Bark 定时任务的默认投递目标 ID，填写 1 即可。
     password: false
