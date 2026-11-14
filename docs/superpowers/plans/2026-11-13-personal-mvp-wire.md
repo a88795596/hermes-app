@@ -30,7 +30,7 @@
 | POST /ws-tickets | `{ticket:string}`，短时单次 |
 | GET /events?ticket=… | WS，服务端仅发 `{type:"changed",topic_id?:string}` 和连接就绪变更。移动端重新拉取受影响数据。握手 URL 不写日志。 |
 
-话题 `Topic` 的结构为 `{topic_id,profile_id,title,status:"creating"|"ready"|"error",error?:string}`。配置档案 `Profile` 的结构为 `{profile_id,label}`。消息 `Message` 的结构为 `{message_id,role:"user"|"assistant",text,status:"accepted"|"queued"|"streaming"|"final"|"failed"|"unknown"|"cancelled",submission_id?:string,error?:string}`。交互 `Control` 的结构为 `{control_id,kind:"approval"|"clarify",prompt,choices:string[],status:"pending"|"responding"|"closed"|"unknown",submission_id?,multi_select?,answer?,error?}`。收件箱条目 `InboxItem` 的结构为 `{inbox_id,text,created_at}`。
+话题 `Topic` 的结构为 `{topic_id,profile_id,title,status:"creating"|"ready"|"error",error?:string}`。配置档案 `Profile` 的结构为 `{profile_id,label}`。消息 `Message` 的结构为 `{message_id,role:"user"|"assistant",text,status:"accepted"|"queued"|"streaming"|"final"|"failed"|"unknown"|"cancelled",submission_id?:string,error?:string}`。交互 `Control` 的结构为 `{control_id,kind:"approval"|"clarify",prompt,choices:string[],status:"pending"|"responding"|"closed"|"unknown",submission_id?,multi_select?,answer?,error?}`。收件箱条目 `InboxItem` 的结构为 `{inbox_id,profile_id,title,text,created_at}`。旧版服务端或移动端缓存可能缺少 `profile_id`、`title`；新版响应从已保存的配置档案补齐 `profile_id`，无标题时从正文首个非空行生成简短标题，原始 `text` 不变。
 
 话题包含 ISO 8601 格式的 `created_at`、`updated_at` 与布尔值 `archived`，旧缓存可能缺少这些字段。归档状态的变化不计入 `updated_at`。话题可附带已确认的 `reasoning_effort`（缺省时使用 Hermes 的默认设置），或 `reasoning_status:"pending"|"unknown"`。
 
@@ -56,6 +56,6 @@
 - `{type:"message",event_id,topic_id,message_id,submission_id?,text,status:"streaming"|"final"}`，同一响应使用稳定的 `message_id`，`text` 为当前完整的累计文本。`final` 优先于迟到的 `streaming` 更新。
 - `{type:"submission",event_id,topic_id,submission_id,status:"queued"|"streaming"|"final"|"failed"|"cancelled"|"unknown",error?}`，更新原用户气泡执行状态，禁止复活已知终态。
 - `{type:"control",event_id,topic_id,control_id,kind,prompt,choices,status,submission_id?,multi_select?}`。连接器按话题映射上游请求 ID。BFF 收到明确的成功回执后才投影已提交的答案。
-- `{type:"delivery",event_id,delivery_id,profile_ref,text}` 供旧版连接器清空升级前的队列。新版插件使用 `POST /internal/inbox/v1/deliveries`，HTTP 和旧连接器共用投递 ID 去重。 [收件箱投递 API](../../../plugins/hermes-mobile-delivery/README.md#投递-api)
+- `{type:"delivery",event_id,delivery_id,profile_ref,title?,text}` 供旧版连接器清空升级前的队列，可选标题最多 256 个 UTF-8 字节。新版插件使用 `POST /internal/inbox/v1/deliveries`，HTTP 和旧连接器共用投递 ID 去重。 [收件箱投递 API](../../../plugins/hermes-mobile-delivery/README.md#投递-api)
 
 连接器使用环境变量 `BFF_URL` 和 `CONNECTOR_TOKEN`，可选 `HERMES_BIN` 和 `CONNECTOR_DB_PATH`。容器部署使用 `HERMES_WEBAPP_URL` 和 `HERMES_DASHBOARD_SESSION_TOKEN` 换取原版 WebSocket 票据。已有 HTTP Runs 会话通过 `HERMES_API_URL` 和 `HERMES_API_KEY` 继续使用。BFF 使用环境变量 `DATABASE_URL`、`APP_PAIRING_TOKEN` 和 `CONNECTOR_TOKEN`，可选 `PORT`（3000）、`HOST`（127.0.0.1）、`HERMES_PROFILES`（`default`）和 `EXPO_ACCESS_TOKEN`。隔离开发可用本地 HTTP，远程连接使用 HTTPS／WSS。

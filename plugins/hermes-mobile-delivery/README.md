@@ -40,15 +40,18 @@ hermes send --to bark '{"title":"早报","subtitle":"今日摘要","markdown":"*
 
 ## 投递 API
 
-`POST /internal/inbox/v1/deliveries` 接受 `Authorization: Bearer <投递令牌>` 和 `Content-Type: application/json`。正文包含 UUID `delivery_id`、BFF 允许的 `profile_ref` 和最多 128 KiB 的 UTF-8 文本 `text`。
+`POST /internal/inbox/v1/deliveries` 接受 `Authorization: Bearer <投递令牌>` 和 `Content-Type: application/json`。正文包含 UUID `delivery_id`、BFF 允许的 `profile_ref` 和最多 128 KiB 的 UTF-8 文本 `text`，可选 `title` 为最多 256 字节的非空 UTF-8 标题。
 
 ```json
 {
   "delivery_id": "e184243a-a270-41ff-a695-38f0d6c5099b",
   "profile_ref": "default",
+  "title": "任务完成",
   "text": "定时任务已完成"
 }
 ```
+
+Hermes 插件继续投递原始文本。省略 `title` 时，BFF 取正文首个非空行生成最多 64 个字符的标题，去除开头的 Markdown 标题标记；完整 `text` 始终原样保留。移动端列表显示标题和两行正文，详情显示完整内容。收件箱响应同时包含所属 `profile_id`，历史记录也会补齐标题和配置档案，无须迁移队列。
 
 BFF 在同一个事务中保存收件箱消息和通知任务，然后返回 `204 No Content`。重发同一个投递 ID 和相同内容也会返回 `204`，内容冲突则返回 `409`。鉴权失败返回 `401`。未配置投递令牌或配置档案未加入允许名单时返回 `404`。请求内容校验失败返回 `422`。
 

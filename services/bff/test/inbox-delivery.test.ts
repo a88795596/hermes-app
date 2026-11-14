@@ -3,15 +3,36 @@ import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import test from "node:test";
 import websocket from "@fastify/websocket";
-import type { InboxDelivery } from "@hermes-mobile/protocol";
+import type { InboxDelivery, InboxItem } from "@hermes-mobile/protocol";
+import { inboxTitle, MAX_INBOX_TITLE_BYTES } from "@hermes-mobile/protocol";
 import Fastify from "fastify";
 import pg from "pg";
 import WebSocket from "ws";
+import { connectorFrame } from "../src/connector-frame.js";
+import { profileId } from "../src/projections.js";
 import { migratePush } from "../src/push.js";
 import { registerPersonalRoutes } from "../src/routes/personal.js";
 import { openStore } from "../src/store.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
+
+test("收件箱标题取首个非空行并保留 Unicode 字符边界", () => {
+  assert.equal(inboxTitle("\n  ## 今日早报\r\n正文第一行\n正文第二行"), "今日早报");
+  assert.equal(inboxTitle("\r单行消息"), "单行消息");
+  assert.equal(inboxTitle("\n\t"), "新消息");
+  assert.equal(inboxTitle("#"), "新消息");
+  assert.equal(inboxTitle("😀".repeat(65)), "😀".repeat(63) + "…");
+});
+
+test("连接器投递兼容无标题帧并校验独立标题", () => {
+  const frame = { type: "delivery", event_id: randomUUID(), delivery_id: randomUUID(), profile_ref: "work", text: "完整正文" };
+  assert.deepEqual(connectorFrame(frame), frame);
+  assert.deepEqual(connectorFrame({ ...frame, title: "早报" }), { ...frame, title: "早报" });
+  assert.equal((connectorFrame({ ...frame, title: "a".repeat(MAX_INBOX_TITLE_BYTES) }) as InboxDelivery).title?.length, MAX_INBOX_TITLE_BYTES);
+  for (const title of [null, " ", "含\u0000字符", "\ud800", "a".repeat(MAX_INBOX_TITLE_BYTES + 1), "中".repeat(86)]) {
+    assert.throws(() => connectorFrame({ ...frame, title }), { statusCode: 422 });
+  }
+});
 
 test("HTTP 投递不需要连接器，重复请求只写入一条收件箱消息和一条通知任务", { skip: !databaseUrl, timeout: 15_000 }, async (t) => {
   const schema = `inbox_delivery_${randomUUID().replaceAll("-", "")}`;
@@ -36,7 +57,7 @@ test("HTTP 投递不需要连接器，重复请求只写入一条收件箱消息
     const wsUrl = address.replace(/^http/, "ws");
     const headers = (token: string) => ({ authorization: `Bearer ${token}` });
     const delivery: InboxDelivery = { delivery_id: randomUUID(), profile_ref: "work", text: "定时任务已完成" };
-    const post = (payload: InboxDelivery, token = config.inboxDeliveryToken) => app.inject({
+    const post = (payload: object, token = config.inboxDeliveryToken) => app.inject({
       method: "POST", url: "/internal/inbox/v1/deliveries", headers: token ? headers(token) : {}, payload,
     });
 
@@ -48,6 +69,9 @@ test("HTTP 投递不需要连接器，重复请求只写入一条收件箱消息
     assert.equal((await post({ ...delivery, text: " " })).statusCode, 422);
     assert.equal((await post({ ...delivery, text: "a\u0000b" })).statusCode, 422);
     assert.equal((await post({ ...delivery, text: "中".repeat(44_000) })).statusCode, 422);
+    for (const title of [null, " ", "含\u0000字符", "\ud800", "a".repeat(MAX_INBOX_TITLE_BYTES + 1), "中".repeat(86)]) {
+      assert.equal((await post({ ...delivery, title })).statusCode, 422);
+    }
 
     const paired = await app.inject({ method: "POST", url: "/mobile/v1/pairings/redeem",
       payload: { pairing_token: config.pairingToken, device_name: "收件箱测试设备" } });
@@ -79,14 +103,28 @@ test("HTTP 投递不需要连接器，重复请求只写入一条收件箱消息
     connector.send(JSON.stringify({ type: "delivery", event_id: legacy.delivery_id, ...legacy }));
     assert.deepEqual(JSON.parse((await legacyPendingAck)[0].toString()), { type: "ack", id: legacy.delivery_id });
     assert.equal((await post(legacy)).statusCode, 204);
+    await store.query("UPDATE inbox SET data = data - 'title' - 'profile_id' WHERE id = $1", [legacy.delivery_id]);
+    const legacyReceipt = await store.query("SELECT payload FROM connector_ingest WHERE kind = 'delivery' AND id = $1", [legacy.delivery_id]);
+    assert.deepEqual(legacyReceipt.rows[0].payload, { profile_ref: legacy.profile_ref, text: legacy.text });
+
+    const titled: InboxDelivery = { delivery_id: randomUUID(), profile_ref: "default", title: "周报已完成",
+      text: "# 周报\n\n正文第一行\n正文第二行\n正文第三行" };
+    assert.equal((await post(titled)).statusCode, 204);
+    assert.equal((await post(titled)).statusCode, 204);
+    assert.equal((await post({ ...titled, title: "不同标题" })).statusCode, 409);
+    const titledAck = once(connector, "message", { signal: t.signal });
+    connector.send(JSON.stringify({ type: "delivery", event_id: titled.delivery_id, ...titled }));
+    assert.deepEqual(JSON.parse((await titledAck)[0].toString()), { type: "ack", id: titled.delivery_id });
 
     const inbox = await app.inject({ url: "/mobile/v1/inbox", headers: device });
     assert.equal(inbox.statusCode, 200);
-    assert.deepEqual(inbox.json().data.map(({ inbox_id, text }: { inbox_id: string; text: string }) => ({ inbox_id, text })), [
-      { inbox_id: legacy.delivery_id, text: legacy.text }, { inbox_id: delivery.delivery_id, text: delivery.text },
+    assert.deepEqual(inbox.json().data.map(({ inbox_id, profile_id, title, text }: InboxItem) => ({ inbox_id, profile_id, title, text })), [
+      { inbox_id: titled.delivery_id, profile_id: profileId("default"), title: titled.title, text: titled.text },
+      { inbox_id: legacy.delivery_id, profile_id: profileId("work"), title: legacy.text, text: legacy.text },
+      { inbox_id: delivery.delivery_id, profile_id: profileId("work"), title: delivery.text, text: delivery.text },
     ]);
     assert.deepEqual((await store.query("SELECT inbox_id FROM push_outbox ORDER BY inbox_id")).rows.map(({ inbox_id }) => inbox_id),
-      [delivery.delivery_id, legacy.delivery_id].sort());
+      [delivery.delivery_id, legacy.delivery_id, titled.delivery_id].sort());
   } finally {
     mobile?.terminate();
     connector?.terminate();

@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { InboxDelivery, InboxItem, MobileNotice, TopicQuery } from "@hermes-mobile/protocol";
-import { isManagementOperation, isReasoningEffort, MAX_ATTACHMENT_TOTAL_BYTES, MAX_CONTROL_ANSWER_BYTES, MAX_INBOX_TEXT_BYTES, MAX_TOPIC_TITLE_BYTES } from "@hermes-mobile/protocol";
+import { inboxTitle, isManagementOperation, isReasoningEffort, MAX_ATTACHMENT_TOTAL_BYTES, MAX_CONTROL_ANSWER_BYTES, MAX_INBOX_TEXT_BYTES, MAX_INBOX_TITLE_BYTES, MAX_TOPIC_TITLE_BYTES } from "@hermes-mobile/protocol";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
 import { submissionAttachments } from "../attachments.js";
@@ -8,7 +8,7 @@ import { deviceAuth, matchesToken, readBearer } from "../auth.js";
 import { registerBridge } from "../bridge.js";
 import { applyInboxDelivery } from "../ingress.js";
 import { createTopic, findProfile, interrupt, requestModel, requestReasoning, respond, setTopicArchived, submit } from "../mutations.js";
-import { detail, modelRequest, profiles, reasoningRequest, topicRow, topics } from "../projections.js";
+import { detail, modelRequest, profileId, profiles, reasoningRequest, topicRow, topics } from "../projections.js";
 import { registerPushRoutes } from "../push.js";
 import type { Store } from "../store.js";
 import { ApiError, invalid, record, string, uuid } from "../validation.js";
@@ -139,8 +139,9 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
     });
   }
   api.get(`${prefix}/inbox`, requireDevice, async (request) => {
-    const { rows } = await store.query<{ data: InboxItem }>("SELECT data FROM inbox WHERE profile_ref = ANY($1) ORDER BY created_at DESC, id", [[...refs]]);
-    return success(request, rows.map(({ data }) => data));
+    const { rows } = await store.query<{ profile_ref: string; data: InboxItem }>("SELECT profile_ref, data FROM inbox WHERE profile_ref = ANY($1) ORDER BY created_at DESC, id", [[...refs]]);
+    return success(request, rows.map(({ profile_ref, data }) => ({ ...data,
+      profile_id: profileId(profile_ref), title: data.title ?? inboxTitle(data.text) })));
   });
   const deliveryToken = config.inboxDeliveryToken;
   if (deliveryToken) {
@@ -149,15 +150,16 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
     }
     api.post("/internal/inbox/v1/deliveries", {
       // JSON 转义后单个正文字符最多占 6 字节。
-      bodyLimit: 6 * MAX_INBOX_TEXT_BYTES + 1024,
+      bodyLimit: 6 * (MAX_INBOX_TEXT_BYTES + MAX_INBOX_TITLE_BYTES) + 1024,
       onRequest: async (request) => {
         if (!matchesToken(readBearer(request), deliveryToken)) throw new ApiError(401, "UNAUTHORIZED", "收件箱投递凭证无效。");
       },
     }, async (request, reply) => {
-      const body = record(request.body, ["delivery_id", "profile_ref", "text"]);
+      const body = record(request.body, ["delivery_id", "profile_ref", "title", "text"]);
       const delivery: InboxDelivery = {
         delivery_id: uuid(body.delivery_id, "投递 ID"),
         profile_ref: string(body.profile_ref, "配置档案名称", 64),
+        ...(body.title === undefined ? {} : { title: string(body.title, "消息标题", MAX_INBOX_TITLE_BYTES) }),
         text: string(body.text, "消息正文", MAX_INBOX_TEXT_BYTES),
       };
       const applied = await store.transaction((db) => applyInboxDelivery(db, delivery, refs));
