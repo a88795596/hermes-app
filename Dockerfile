@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim AS workspace
+FROM node:24.22.1-bookworm-slim AS workspace
 WORKDIR /build
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN corepack enable && pnpm --version
@@ -20,7 +20,7 @@ RUN pnpm --filter @hermes-mobile/connector build \
 FROM workspace AS production-deps
 RUN pnpm --filter @hermes-mobile/bff... install --prod --frozen-lockfile
 
-FROM node:24-bookworm-slim
+FROM node:24.22.1-bookworm-slim
 WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \

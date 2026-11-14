@@ -7,6 +7,7 @@
 | `apps/mobile` | Expo Router 应用 | 原生客户端和本地优先的界面 |
 | `services/bff` | Fastify 服务 | 对外提供移动端 API，负责授权与数据投影 |
 | `services/connector` | Node 服务 | 从 Hermes 主机主动连接 BFF |
+| `services/updates` | Node 服务 | Hot Updater 热更新目录与更新包存储 |
 | `packages/protocol` | 共享包 | 定义移动端与连接器的通信协议 |
 | `packages/hermes-adapter` | 共享包 | 校验并规范化 Hermes 数据 |
 | `plugins/hermes-mobile-delivery` | Hermes Python 插件 | 为定时任务和 `hermes send` 提供移动端收件箱与 Bark 投递渠道 |
@@ -20,6 +21,10 @@
 - [并行开发工作包与验收用例](docs/superpowers/plans/2026-11-13-hermes-mobile-parallel-plan.md)
 - [个人版已实现的通信协议](docs/superpowers/plans/2026-11-13-personal-mvp-wire.md)
 - [工程设计规格书 v2](docs/reference/hermes-expo-engineering-spec-v2.md)
+
+## App 热更新
+
+项目已接入 Hot Updater，独立的 `services/updates` 负责分发 JavaScript 和资源更新。首次启用需安装一次新的原生 Release 包，之后兼容更新在后台下载、下次冷启动生效。服务通过可选 Compose profile `updates` 启用，当前尚未部署或完成首次真机 OTA 验收。配置、发布和回退步骤见 [热更新操作文档](docs/hot-updates.md)。
 
 ## Docker Compose 部署
 
@@ -77,7 +82,7 @@ BFF 和连接器在同一个容器运行，PostgreSQL 由 Compose 单独启动�
 
 ## 本地运行个人版
 
-使用 Node 24 和 pnpm 10.14 安装依赖。个人版需要一个 BFF 进程、一个 PostgreSQL 数据库和一个连接器进程。BFF 启动时自动建表。以下命令均在工作区根目录执行。
+使用 Node 24.22.1 或以上的 24.x 版本和 pnpm 10.14 安装依赖。个人版需要一个 BFF 进程、一个 PostgreSQL 数据库和一个连接器进程。BFF 启动时自动建表。以下命令均在工作区根目录执行。
 
 ```sh
 pnpm install

@@ -4,7 +4,7 @@
   "private": true,
   "packageManager": "pnpm@10.14.0",
   "engines": {
-    "node": ">=24",
+    "node": "^24.22.1",
     "pnpm": ">=10.14.0"
   },
   "scripts": {
@@ -13,6 +13,10 @@
     "dev:mobile": "pnpm --filter @hermes-mobile/mobile start",
     "dev:bff": "pnpm --filter @hermes-mobile/bff dev",
     "dev:connector": "pnpm --filter @hermes-mobile/connector dev",
+    "dev:updates": "pnpm --filter @hermes-mobile/updates dev",
+    "ota:fingerprint": "pnpm --filter @hermes-mobile/mobile ota:fingerprint",
+    "ota:deploy": "pnpm --filter @hermes-mobile/mobile ota:deploy",
+    "ota:console": "pnpm --filter @hermes-mobile/mobile ota:console",
     "typecheck": "pnpm --recursive --if-present run typecheck",
     "test": "pnpm --recursive --if-present run test"
   }
