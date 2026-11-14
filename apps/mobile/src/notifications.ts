@@ -12,7 +12,7 @@ export async function enablePushNotifications(session: { origin: string; token: 
     if (Platform.OS === "android") {
       await Notifications.setNotificationChannelAsync("inbox", {
         name: "Hermes 收件箱",
-        importance: Notifications.AndroidImportance.DEFAULT,
+        importance: Notifications.AndroidImportance.HIGH,
       });
     }
     let permission = await Notifications.getPermissionsAsync();

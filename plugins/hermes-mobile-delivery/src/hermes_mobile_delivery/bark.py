@@ -23,6 +23,7 @@ def post_bark(endpoint: SplitResult, keys: list[str], message: str) -> dict[str,
         payload = json.loads(message) if message.lstrip().startswith("{") else {"body": message}
         if any(key.lower() in {"device_key", "device_keys"} for key in payload):
             return {"error": "请通过 BARK_KEY 配置 Bark 推送设备"}
+        payload.setdefault("level", "timeSensitive")
         if len(keys) == 1:
             payload["device_key"] = keys[0]
         else:
