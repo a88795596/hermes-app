@@ -28,7 +28,9 @@ async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: Jso
     const path = req.url!.replace('/p/default', '');
     calls.push({ path, body });
     res.setHeader('content-type', 'application/json');
-    if (path === '/api/hermes-mobile/title') {
+    if (path === '/api/hermes-mobile/attachment') {
+      res.end(JSON.stringify({ path: '/opt/data/cache/documents/report.txt' }));
+    } else if (path === '/api/hermes-mobile/title') {
       res.end(JSON.stringify({ text: '「移动端   同步排查」' }));
     } else if (path === '/api/model/options?include_unconfigured=false') {
       res.end(JSON.stringify({
@@ -70,7 +72,8 @@ async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: Jso
   assert(address && typeof address !== 'string');
   const directory = mkdtempSync(join(tmpdir(), 'hermes-mobile-interactions-'));
   const filename = join(directory, 'connector.sqlite');
-  const options = { url: `http://127.0.0.1:${address.port}`, token: 'test-key', send: (frame: JsonObject) => frames.push(frame) };
+  const options = { url: `http://127.0.0.1:${address.port}`, token: 'test-key', send: (frame: JsonObject) => frames.push(frame),
+    downloadAttachment: async (_id: string, number: number) => Buffer.from(number === 1 ? 'YWJj' : png, 'base64') };
   let spool = new Spool(filename);
   const createId = randomUUID();
   spool.begin(createId, 'create');
@@ -99,6 +102,36 @@ async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: Jso
   }
   return { calls, frames, restart, command, disconnectSession: () => { sessionAvailable = false; } };
 }
+
+const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jLG0AAAAASUVORK5CYII=';
+
+test('HTTP Runs 同一轮收到描述、Hermes 本地文件引用和真实图片', async (t) => {
+  const { command, calls } = await harness(t);
+  const submission_id = randomUUID();
+  const result = await command({ kind: 'submit', body: { submission_id, text: '对比两份附件。', attachments: [
+    { name: 'report.txt', mime: 'text/plain', size: 3,
+      sha256: 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad' },
+    { name: 'pixel.png', mime: 'image/png', size: 68, sha256: '2ae67197d8706fbe5a6fdf6a46b7f6ba46a3a9568a905f7f1d2d10ee22cc3e36' },
+  ] } }, submission_id);
+  assert.equal(result?.status, 'ok');
+  const staged = calls.find(({ path }) => path === '/api/hermes-mobile/attachment');
+  assert.deepEqual(staged?.body, { name: 'report.txt', content_base64: 'YWJj' });
+  const input = calls.find(({ path }) => path === '/v1/runs')?.body.input as { role: string; content: JsonObject[] }[];
+  assert.equal(input[0].role, 'user');
+  assert.match(String(input[0].content[0].text), /对比两份附件。/);
+  assert.match(String(input[0].content[0].text), /\/opt\/data\/cache\/documents\/report.txt/);
+  assert.deepEqual(input[0].content[1], { type: 'image_url', image_url: { url: `data:image/png;base64,${png}` } });
+});
+
+test('附件摘要不匹配时停止提交', async (t) => {
+  const { command, calls } = await harness(t);
+  const submission_id = randomUUID();
+  const result = await command({ kind: 'submit', body: { submission_id, text: '读取附件', attachments: [
+    { name: 'report.txt', mime: 'text/plain', size: 3, sha256: '0'.repeat(64) },
+  ] } }, submission_id);
+  assert.equal(result?.status, 'error');
+  assert.deepEqual(calls, []);
+});
 
 async function waitForQuestion(frames: JsonObject[]) {
   const control = await new Promise<JsonObject>((resolve, reject) => {
@@ -198,7 +231,7 @@ test('Canonical Gateway 按话题绑定的会话和当前版本切换思考强�
         ...(deferred ? { status: 'deferred' } : {}) };
     },
   }));
-  const connector = new CanonicalConnector('unused', spool, () => {});
+  const connector = new CanonicalConnector('unused', spool, () => {}, async () => { throw new Error('意外的附件下载'); });
   t.after(() => { connector.close(); spool.close(); rmSync(directory, { recursive: true, force: true }); });
 
   const id = randomUUID();

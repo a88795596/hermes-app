@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
-import type { BridgeFrame, Command, CommandResult } from '@hermes-mobile/protocol';
-import { isManagementOperation, isReasoningEffort, MAX_CONTROL_ANSWER_BYTES, MAX_TITLE_INPUT_BYTES } from '@hermes-mobile/protocol';
+import type { AttachmentReference, BridgeFrame, Command, CommandResult } from '@hermes-mobile/protocol';
+import { isAttachmentMime, isAttachmentName, isManagementOperation, isReasoningEffort, MAX_ATTACHMENTS, MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENT_TOTAL_BYTES, MAX_CONTROL_ANSWER_BYTES, MAX_TITLE_INPUT_BYTES } from '@hermes-mobile/protocol';
 import { object } from './gateway.js';
 
 export function stableId(parts: string[]): string {
@@ -22,6 +23,24 @@ export function uuid(value: unknown): value is string {
 export function text(value: unknown, max: number, empty = false): value is string {
   return typeof value === 'string' && (empty || !!value.trim()) && !value.includes('\u0000')
     && Buffer.byteLength(value) <= max && Buffer.from(value).toString() === value;
+}
+
+function attachmentReferences(value: unknown): AttachmentReference[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || !value.length || value.length > MAX_ATTACHMENTS) throw new Error('BFF 附件清单无效');
+  let total = 0;
+  return value.map((raw: unknown) => {
+    const item = object(raw);
+    const { name, mime, size, sha256 } = item ?? {};
+    if (!item || Object.keys(item).length !== 4 || !text(name, 200) || !isAttachmentName(name) || typeof mime !== 'string'
+      || !isAttachmentMime(mime) || typeof size !== 'number' || !Number.isSafeInteger(size) || size < 1
+      || size > MAX_ATTACHMENT_BYTES || typeof sha256 !== 'string' || !/^[a-f0-9]{64}$/u.test(sha256)) {
+      throw new Error('BFF 附件清单无效');
+    }
+    total += size;
+    if (total > MAX_ATTACHMENT_TOTAL_BYTES) throw new Error('BFF 附件总大小超出限制');
+    return { name, mime, size, sha256 };
+  });
 }
 
 export function bridgeFrame(source: string): BridgeFrame {
@@ -76,11 +95,15 @@ export function bridgeFrame(source: string): BridgeFrame {
         return { ...base, session_id, kind: 'select_reasoning', body: { effort: body.effort } };
       }
       break;
-    case 'submit':
-      if (body.submission_id === command_id && text(body.text, 256 * 1024)) {
-        return { ...base, session_id, kind: 'submit', body: { submission_id: command_id, text: body.text } };
+    case 'submit': {
+      const attachments = attachmentReferences(body.attachments);
+      if (body.submission_id === command_id && text(body.text, 256 * 1024, attachments.length > 0)) {
+        return { ...base, session_id, kind: 'submit', body: {
+          submission_id: command_id, text: body.text, ...(attachments.length && { attachments }),
+        } };
       }
       break;
+    }
     case 'interrupt':
       if (uuid(body.submission_id)) {
         return { ...base, session_id, kind: 'interrupt', body: { submission_id: body.submission_id } };

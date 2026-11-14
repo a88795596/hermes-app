@@ -5,6 +5,7 @@ import {
 import type { CanonicalAdmission, CanonicalPrompt, ServerRequest, SessionSnapshot } from '@hermes-mobile/hermes-adapter';
 import type { Command, CommandResult, ConnectorEvent, Control, TopicQuery, TopicQueryData } from '@hermes-mobile/protocol';
 import { MAX_CLARIFY_CHOICE_BYTES } from '@hermes-mobile/protocol';
+import { attachmentBase64, attachmentFilename, type DownloadAttachment } from './attachments.js';
 import { Gateway, GatewayRefusal, integer, object } from './gateway.js';
 import type { JsonObject } from './gateway.js';
 import { addProcessText, removeStreamedCommentary, updateProcessTool } from './message-process.js';
@@ -64,6 +65,7 @@ export class CanonicalConnector {
     readonly binary: string,
     readonly spool: Spool,
     readonly onReconnect: () => void,
+    readonly downloadAttachment: DownloadAttachment,
   ) {
     for (const binding of spool.bindings()) this.#bindings.set(binding.topicId, binding);
   }
@@ -374,11 +376,34 @@ export class CanonicalConnector {
       return;
     }
 
-    if (!this.spool.begin(id, digest, { topicId, submissionId: command.body.submission_id })) return;
+    const files: string[] = [];
+    const images: { path: string; mime: string }[] = [];
+    try {
+      for (const [index, attachment] of (command.body.attachments ?? []).entries()) {
+        const content_base64 = await attachmentBase64(this.downloadAttachment, id, index + 1, attachment);
+        const name = attachmentFilename(attachment.name);
+        if (attachment.mime.startsWith('image/')) {
+          const image = await session.gateway.rpc('image.attach_bytes', { session_id: binding.sessionId, filename: name, content_base64 });
+          if (image.attached !== true || !text(image.path, 4096) || image.mime !== attachment.mime) throw new Error('无法暂存图片');
+          images.push({ path: image.path, mime: attachment.mime });
+        } else {
+          const file = await session.gateway.rpc('file.attach', { session_id: binding.sessionId, name,
+            data_url: `data:${attachment.mime};base64,${content_base64}` });
+          if (file.attached !== true || !text(file.ref_text, 4096) || !file.ref_text.startsWith('@file:')) throw new Error('无法暂存文件');
+          files.push(file.ref_text);
+        }
+      }
+    } catch {
+      if (current()) finish('error', { error: 'Hermes 无法读取附件，请重新发送。' });
+      return;
+    }
+    if (!current() || !session.gateway.connected || !this.spool.begin(id, digest, { topicId, submissionId: command.body.submission_id })) return;
     session.buffer = { frames: [], bytes: 0 };
     try {
       const receipt = parseAdmissionReceipt(await session.gateway.rpc('prompt.submit', {
-        session_id: binding.sessionId, submission_id: command.body.submission_id, text: command.body.text,
+        session_id: binding.sessionId, submission_id: command.body.submission_id,
+        text: [command.body.text, files.join('\n')].filter((part) => part.trim()).join('\n\n') || '请查看上传的图片。',
+        ...(images.length && { attachments: images }),
         ...(session.gateway.clarifyBatch ? { clarify_batch: true } : {}),
       }, id));
       if (receipt.kind === 'voice_stopped') {

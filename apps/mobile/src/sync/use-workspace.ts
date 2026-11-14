@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
-import type { Control, InboxItem, Message, MobileNotice, ModelRequest, ModelSelection, Profile, ReasoningEffort, ReasoningRequest, Topic, TopicDetail } from "@hermes-mobile/protocol";
+import type { AttachmentUpload, Control, InboxItem, Message, MobileNotice, ModelRequest, ModelSelection, Profile, ReasoningEffort, ReasoningRequest, Topic, TopicDetail } from "@hermes-mobile/protocol";
 import type { Session } from "../auth/session";
 import { openCache, type Cache } from "../db/cache";
 import { ApiError, request } from "./api";
@@ -11,6 +11,7 @@ interface Directory {
   inbox: InboxItem[];
   connector_online?: boolean;
   reasoning_supported?: boolean;
+  attachments_supported?: boolean;
 }
 
 export interface Pending {
@@ -18,6 +19,7 @@ export interface Pending {
   topic_id: string;
   profile_id?: string;
   text: string;
+  attachments?: AttachmentUpload[];
   created_at: number;
   error?: string;
 }
@@ -126,7 +128,7 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
           call<Profile[]>("/profiles"),
           call<Topic[]>("/topics"),
           call<InboxItem[]>("/inbox"),
-          call<{ connector_online: boolean; reasoning_supported?: boolean }>("/status"),
+          call<Pick<Directory, "connector_online" | "reasoning_supported" | "attachments_supported">>("/status"),
         ]);
         if (!active.current || revoked.current) return;
         const next = { profiles, topics, inbox, ...status };
@@ -219,7 +221,9 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
               }
             }
             await call<Message>(`/topics/${item.topic_id}/submissions`, {
-              method: "POST", body: { submission_id: item.submission_id, text: item.text },
+              method: "POST", body: { submission_id: item.submission_id, text: item.text,
+                ...(item.attachments?.length && { attachments: item.attachments }) },
+              timeoutMs: item.attachments?.length ? 60_000 : undefined,
             });
           } catch (failure) {
             if (revoked.current) return;

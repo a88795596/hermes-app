@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, BackHandler, Keyboard, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import Animated from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { DEFAULT_TOPIC_TITLE, topicTitlePreview } from "@hermes-mobile/protocol";
+import { DEFAULT_TOPIC_TITLE, topicTitlePreview, type AttachmentUpload } from "@hermes-mobile/protocol";
 import { Pairing } from "../auth/pairing";
 import { loadSession, saveSession, type Session } from "../auth/session";
 import { Conversation } from "../chat/conversation";
@@ -56,6 +56,7 @@ function Workspace({
   const [push, setPush] = useState<"idle" | "enabling" | "enabled">("idle");
   const [error, setError] = useState<string>();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [draftAttachments, setDraftAttachments] = useState<Record<string, AttachmentUpload[]>>({});
   const [showProcess, setShowProcess] = useState<Record<string, boolean>>({});
   const topicId = chat?.id ?? null;
   const workspace = useWorkspace(session, topicId, chat?.newProfileId !== undefined);
@@ -77,7 +78,7 @@ function Workspace({
   const rows = [
     ...[...pendingTopics.values()].filter((item) => item.profile_id === profile?.profile_id
       && !visibleTopics.some((topic) => topic.topic_id === item.topic_id)).map((item) => ({
-        id: item.topic_id, newProfileId: item.profile_id, title: topicTitlePreview(item.text),
+        id: item.topic_id, newProfileId: item.profile_id, title: topicTitlePreview(item.text || item.attachments?.[0]?.name || ""),
         status: item.error ? "发送失败" : "等待发送",
       })),
     ...visibleTopics.map((item) => ({
@@ -88,7 +89,7 @@ function Workspace({
   const pendingFirst = chat && pendingTopics.get(chat.id);
   const chatTitle = pendingFirst && (!topic || (topic.title === DEFAULT_TOPIC_TITLE
     && !workspace.detail?.messages.some((message) => message.role === "user")))
-    ? topicTitlePreview(pendingFirst.text) : topic?.title ?? (chat?.newProfileId ? DEFAULT_TOPIC_TITLE : "话题");
+    ? topicTitlePreview(pendingFirst.text || pendingFirst.attachments?.[0]?.name || "") : topic?.title ?? (chat?.newProfileId ? DEFAULT_TOPIC_TITLE : "话题");
   const connected = workspace.network === "online" && workspace.connector_online === true;
   const connection = workspace.network === "offline" ? "离线"
     : workspace.network === "connecting" ? "连接中…"
@@ -214,6 +215,8 @@ function Workspace({
           workspace={workspace}
           draft={drafts[id] ?? ""}
           onDraftChange={(value) => setDrafts((current) => ({ ...current, [id]: value }))}
+          attachments={draftAttachments[id] ?? []}
+          onAttachmentsChange={(value) => setDraftAttachments((current) => ({ ...current, [id]: value }))}
           onNewTopic={() => {
             const profileId = topic?.profile_id ?? newProfileId;
             if (profileId) startConversation(profileId);

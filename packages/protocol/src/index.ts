@@ -30,6 +30,27 @@ export function topicTitlePreview(text: string): string {
 
 export type MessageStatus = "accepted" | "queued" | "streaming" | "final" | "failed" | "unknown" | "cancelled";
 
+export const MAX_ATTACHMENTS = 10;
+export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+export const MAX_ATTACHMENT_TOTAL_BYTES = 6 * 1024 * 1024;
+
+export interface Attachment {
+  name: string;
+  mime: string;
+  size: number;
+}
+
+export type AttachmentUpload = Attachment & { content_base64: string };
+export type AttachmentReference = Attachment & { sha256: string };
+
+export function isAttachmentName(name: string): boolean {
+  return !!name.trim() && name !== "." && name !== ".." && !/[\\/\p{Cc}]/u.test(name);
+}
+
+export function isAttachmentMime(value: string): boolean {
+  return value.length <= 127 && /^[a-z0-9][a-z0-9.+_-]*\/[a-z0-9][a-z0-9.+_-]*$/u.test(value);
+}
+
 export const MAX_MESSAGE_PROCESS_STEPS = 64;
 export const MAX_MESSAGE_PROCESS_TEXT_BYTES = 4096;
 
@@ -41,6 +62,7 @@ export interface Message {
   message_id: string;
   role: "user" | "assistant";
   text: string;
+  attachments?: Attachment[];
   status: MessageStatus;
   submission_id?: string;
   error?: string;
@@ -151,7 +173,7 @@ interface CommandEnvelope {
 
 export type Command = CommandEnvelope & (
   | { kind: "create"; body: { request_id: string } }
-  | { kind: "submit"; body: { submission_id: string; text: string } }
+  | { kind: "submit"; body: { submission_id: string; text: string; attachments?: AttachmentReference[] } }
   | { kind: "interrupt"; body: { submission_id: string } }
   | { kind: "respond"; body: { control_id: string; response_id: string; answer: string } }
   | { kind: "model_options"; body: Record<string, never> }

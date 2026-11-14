@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { DEFAULT_TOPIC_TITLE, topicTitlePreview } from "@hermes-mobile/protocol";
-import type { Command, Control, Message, ModelSelection, ReasoningEffort, Topic } from "@hermes-mobile/protocol";
+import type { AttachmentReference, Command, Control, Message, ModelSelection, ReasoningEffort, Topic } from "@hermes-mobile/protocol";
 import type { PoolClient } from "pg";
 import { profileId, topicData, topicRow } from "./projections.js";
 import { ApiError, conflict, missing } from "./validation.js";
@@ -54,20 +54,30 @@ async function requireIdle(db: PoolClient, topicId: string, message: string) {
   if (rowCount) throw new ApiError(409, "TOPIC_BUSY", message);
 }
 
-export async function submit(db: PoolClient, refs: Set<string>, topicId: string, submissionId: string, text: string) {
+export async function submit(db: PoolClient, refs: Set<string>, topicId: string, submissionId: string, text: string,
+  attachments: { reference: AttachmentReference; content: Buffer }[], attachmentsSupported: boolean) {
   const row = await topicRow(db, topicId, refs);
-  const body = { submission_id: submissionId, text };
+  const body = { submission_id: submissionId, text,
+    ...(attachments.length && { attachments: attachments.map(({ reference }) => reference) }) };
   const saved = await prior<Message>(db, submissionId, "submit", topicId, body);
   if (saved) return saved;
   const sessionId = requireReady(row);
+  if (attachments.length && !attachmentsSupported) {
+    throw new ApiError(409, "ATTACHMENTS_UNAVAILABLE", "更新 Hermes 连接器后可发送附件。");
+  }
   if (row.auto_title && row.title === DEFAULT_TOPIC_TITLE) {
     await db.query(`UPDATE topics SET title = $2 WHERE id = $1 AND NOT EXISTS
-      (SELECT 1 FROM submissions WHERE topic_id = $1)`, [topicId, topicTitlePreview(text)]);
+      (SELECT 1 FROM submissions WHERE topic_id = $1)`, [topicId, topicTitlePreview(text.trim() || attachments[0]?.reference.name || "")]);
   }
-  const message: Message = { message_id: randomUUID(), role: "user", text, status: "accepted", submission_id: submissionId };
+  const message: Message = { message_id: randomUUID(), role: "user", text, status: "accepted", submission_id: submissionId,
+    ...(attachments.length && { attachments: attachments.map(({ reference: { name, mime, size } }) => ({ name, mime, size })) }) };
   await db.query("INSERT INTO messages (id, topic_id, data) VALUES ($1, $2, $3)", [message.message_id, topicId, message]);
   await db.query("INSERT INTO submissions (id, topic_id, message_id, data) VALUES ($1, $2, $3, $4)",
     [submissionId, topicId, message.message_id, { status: "accepted" }]);
+  for (const [index, { content }] of attachments.entries()) {
+    await db.query("INSERT INTO submission_attachments (submission_id, position, content) VALUES ($1, $2, $3)",
+      [submissionId, index + 1, content]);
+  }
   await enqueue(db, { type: "command", command_id: submissionId, topic_id: topicId, profile_ref: row.profile_ref,
     session_id: sessionId, kind: "submit", body }, message);
   return message;
@@ -80,7 +90,7 @@ export async function queueTopicTitle(db: PoolClient, topic: Awaited<ReturnType<
   );
   // shortcut: 用现有标题和最近四轮控制提示长度，长会话需要覆盖更早内容时再加入滚动摘要。
   const { rows } = await db.query<{ user: string; assistant: string | null }>(`
-    SELECT left(u.data->>'text', 600) AS "user", (
+    SELECT left(COALESCE(NULLIF(btrim(u.data->>'text'), ''), u.data#>>'{attachments,0,name}', ''), 600) AS "user", (
       SELECT left(a.data->>'text', 600) FROM messages AS a
       WHERE a.topic_id = s.topic_id AND a.data->>'submission_id' = s.id::text
         AND a.data->>'role' = 'assistant' AND a.data->>'status' = 'final'
