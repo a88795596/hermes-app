@@ -3,7 +3,7 @@ import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Modal, ScrollView, StyleSheet, Text, View } from "react-native";
 import type { ModelCatalog, ModelRequest, ModelResult, ModelSelection } from "@hermes-mobile/protocol";
 import { useReduceMotion } from "../ui/motion";
-import { Action, Notice, useTheme } from "../ui/theme";
+import { Action, CloseButton, Notice, useTheme } from "../ui/theme";
 
 type Request = ModelSelection & { confirm?: string };
 
@@ -85,7 +85,7 @@ export function ModelPicker({
             <Text accessibilityRole="header" style={[styles.heading, picker.heading]}>
               {confirmation ? "确认切换模型" : provider ? provider.name : "选择服务商"}
             </Text>
-            <Action title="关闭" onPress={onClose} />
+            <CloseButton onPress={onClose} />
           </View>
           {catalog?.model && !confirmation && (
             <Text style={styles.muted}>当前模型 · {catalog.model}{currentProvider ? `（${currentProvider.name}）` : ""}</Text>

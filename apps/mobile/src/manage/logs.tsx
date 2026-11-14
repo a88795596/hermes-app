@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Text, View } from "react-native";
-import { Action, Card, EmptyState, useTheme } from "../ui/theme";
+import { Action, Card, CloseButton, EmptyState, useTheme } from "../ui/theme";
 import { ActionState, DataState, EditField, mono, useManagementAction, useManagementData, type ManageCall } from "./shared";
 
 const files = ["agent", "errors", "gateway", "gui", "desktop", "mcp"];
@@ -28,13 +28,16 @@ export function Logs({ call }: { call: ManageCall }) {
   return <>
     <View style={styles.row}>
       <Action icon="refresh" title="刷新" disabled={data.loading || action.busy} onPress={() => void data.reload()} />
-      <Action title={options ? "隐藏筛选条件" : "筛选"} onPress={() => showOptions(!options)} />
-      <Action title={settings ? "隐藏日志设置" : "日志设置"} disabled={!data.data || action.busy}
-        onPress={() => { if (!settings) setLevel(data.data?.level ?? "INFO"); showSettings(!settings); }} />
+      {!options && <Action title="筛选" onPress={() => showOptions(true)} />}
+      {!settings && <Action title="日志设置" disabled={!data.data || action.busy}
+        onPress={() => { setLevel(data.data?.level ?? "INFO"); showSettings(true); }} />}
     </View>
     <Text style={styles.caption}>来源 · 连接器所在主机的 Hermes 日志</Text>
     {options && <Card>
-      <Text style={styles.label}>日志文件</Text>
+      <View style={styles.row}>
+        <Text style={[styles.label, { flex: 1 }]}>日志文件</Text>
+        <CloseButton accessibilityLabel="关闭筛选" onPress={() => showOptions(false)} />
+      </View>
       {choices(files, filters.file, (file) => setFilters({ ...filters, file }))}
       <Text style={styles.label}>最低级别</Text>
       {choices(["ALL", ...levels, "CRITICAL"], filters.level, (level) => setFilters({ ...filters, level }))}
@@ -48,7 +51,10 @@ export function Logs({ call }: { call: ManageCall }) {
     </Card>}
     <ActionState {...action} />
     {settings && <Card>
-      <Text accessibilityRole="header" style={styles.heading}>日志级别</Text>
+      <View style={styles.row}>
+        <Text accessibilityRole="header" style={[styles.heading, { flex: 1 }]}>日志级别</Text>
+        <CloseButton accessibilityLabel="关闭日志设置" disabled={!data.data || action.busy} onPress={() => showSettings(false)} />
+      </View>
       <Text style={styles.muted}>此设置控制 Hermes 写入哪些日志。重启相应的 Hermes 进程后生效。</Text>
       {choices(levels, level, setLevel)}
       <Action primary title={action.busy ? "保存中…" : "保存日志级别"} disabled={action.busy || data.data?.level === level}

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Text, View } from "react-native";
-import { Action, Card, useTheme } from "../ui/theme";
+import { Action, Card, CloseButton, useTheme } from "../ui/theme";
 import { ActionState, Confirm, DataState, EditField, Group, Row, useManagementAction, useManagementData, type ManageCall } from "./shared";
 
 type Assignment = { provider: string; model: string; base_url?: string; base_url_masked?: boolean; task?: string };
@@ -101,9 +101,9 @@ function ModelForm({ call, current, onClose, onSave }: { call: ManageCall; curre
         help={auxiliary && !baseUrl.trim() ? "请先填写接口地址，再设置密钥。"
           : "选填。留空将使用该服务商已有的凭证。"} />
       <View style={styles.row}>
-        <Action title={browse ? "隐藏模型目录" : "浏览模型"} disabled={action.busy || !!confirm} onPress={() => setBrowse(!browse)} />
+        {!browse && <Action title="浏览模型" disabled={action.busy || !!confirm} onPress={() => setBrowse(true)} />}
         {!confirm && <Action primary title={action.busy ? "保存中…" : "保存模型"} disabled={action.busy || !ready} onPress={() => save()} />}
-        <Action title="取消" disabled={action.busy} onPress={onClose} />
+        <CloseButton accessibilityLabel="取消" disabled={action.busy} onPress={onClose} />
       </View>
       {confirm && <>
         <Text style={styles.muted}>请查看 Hermes 提供的模型说明，再确认保存。</Text>
@@ -114,7 +114,7 @@ function ModelForm({ call, current, onClose, onSave }: { call: ManageCall; curre
         </View>
       </>}
     </Card>
-    {browse && !confirm && <ModelCatalog call={call} disabled={action.busy} onChoose={(provider, model) => {
+    {browse && !confirm && <ModelCatalog call={call} disabled={action.busy} onClose={() => setBrowse(false)} onChoose={(provider, model) => {
       changeProvider(provider);
       setModel(model);
       setBrowse(false);
@@ -122,7 +122,9 @@ function ModelForm({ call, current, onClose, onSave }: { call: ManageCall; curre
   </>;
 }
 
-function ModelCatalog({ call, disabled, onChoose }: { call: ManageCall; disabled: boolean; onChoose: (provider: string, model: string) => void }) {
+function ModelCatalog({ call, disabled, onClose, onChoose }: {
+  call: ManageCall; disabled: boolean; onClose: () => void; onChoose: (provider: string, model: string) => void;
+}) {
   const { styles } = useTheme();
   const catalog = useManagementData<Provider[]>(call, "model.options");
   const [slug, select] = useState<string>();
@@ -131,6 +133,10 @@ function ModelCatalog({ call, disabled, onChoose }: { call: ManageCall; disabled
   const results = (provider?.models ?? []).filter((model) => model.toLowerCase().includes(search.trim().toLowerCase()));
   const [count, setCount] = useState(30);
   return <>
+    <View style={styles.row}>
+      <Text accessibilityRole="header" style={[styles.heading, { flex: 1 }]}>模型目录</Text>
+      <CloseButton accessibilityLabel="关闭模型目录" disabled={disabled} onPress={onClose} />
+    </View>
     <View style={styles.row}>
       {provider && <Action icon="back" title="全部服务商" onPress={() => select(undefined)} />}
       <Action icon="refresh" title="刷新目录" disabled={catalog.loading} onPress={() => void catalog.reload()} />
@@ -185,7 +191,7 @@ function ModelKeys({ call, onClose }: { call: ManageCall; onClose: () => void })
       <View style={styles.row}>
         <Action primary title={action.busy ? "处理中…" : "保存 API 密钥"} disabled={!value.trim() || action.busy}
           onPress={() => updateKey(selected.key, value.trim())} />
-        <Action title="取消" disabled={action.busy} onPress={() => { select(undefined); setValue(""); }} />
+        <CloseButton accessibilityLabel="取消" disabled={action.busy} onPress={() => { select(undefined); setValue(""); }} />
       </View>
       {configured && <Confirm title="移除 API 密钥" description={`确定移除 ${selected.label} 的 API 密钥吗？`}
         disabled={action.busy || keys.loading} onConfirm={() => updateKey(selected.key)} />}

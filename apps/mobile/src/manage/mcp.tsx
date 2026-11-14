@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Text, View } from "react-native";
-import { Action, Card, EmptyState, Notice, useTheme } from "../ui/theme";
+import { Action, Card, CloseButton, EmptyState, Notice, useTheme } from "../ui/theme";
 import { ActionState, Confirm, DataState, EditField, Group, InstallProgress, Row, Toggle, entries,
   useManagementAction, useManagementData, type ManageCall } from "./shared";
 
@@ -69,7 +69,7 @@ export function Mcp({ call }: { call: ManageCall }) {
               setProbe(undefined);
               return "Bearer 令牌已更新。";
             })} />
-            <Action title="取消" disabled={action.busy} onPress={closeToken} />
+            <CloseButton accessibilityLabel="取消" disabled={action.busy} onPress={closeToken} />
           </View>
         </> : <Action title="更新 Bearer 令牌" disabled={action.busy} onPress={() => rotate(true)} />)}
         <Confirm title="移除服务器" description={`确定从 Hermes 移除「${server.name}」吗？`} disabled={action.busy}
@@ -188,7 +188,7 @@ function ServerForm({ server, busy, onCancel, onSave }: { server?: Server; busy:
     <View style={styles.row}>
       <Action primary title={busy ? "保存中…" : server ? "保存服务器" : "添加 MCP 服务器"} disabled={busy || !dirty || !name.trim()
         || (transport === "http" && !url.trim() && !server?.url_masked) || (transport === "stdio" && !command.trim())} onPress={save} />
-      <Action title="取消" disabled={busy} onPress={onCancel} />
+      <CloseButton accessibilityLabel="取消" disabled={busy} onPress={onCancel} />
     </View>
   </Card>;
 }

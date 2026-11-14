@@ -80,6 +80,22 @@ export function useTheme() {
   return dark ? darkTheme : lightTheme;
 }
 
+export function CloseButton({ onPress, disabled, accessibilityLabel = "关闭" }: {
+  onPress: () => void;
+  disabled?: boolean;
+  accessibilityLabel?: string;
+}) {
+  const { colors, styles } = useTheme();
+  const [focused, setFocused] = useState(false);
+  return (
+    <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel} accessibilityState={{ disabled }}
+      disabled={disabled} onPress={onPress} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+      style={({ pressed }) => [styles.closeButton, focused && styles.focused, (pressed || disabled) && styles.faded]}>
+      <Icon name="close" size={17} color={colors.muted} />
+    </Pressable>
+  );
+}
+
 export function Action({
   title, onPress, primary, disabled, selected, destructive, icon, compact, disclosure, accessibilityLabel, toggled,
 }: {
@@ -210,6 +226,8 @@ function createTheme(colors: typeof light, dark: boolean) {
       buttonPrimary: { backgroundColor: colors.accentFill },
       buttonSelected: { backgroundColor: colors.tint },
       buttonLabel: { fontSize: 14, fontWeight: "600", flexShrink: 1, textAlign: "center" },
+      closeButton: { minWidth: Platform.OS === "android" ? 48 : 44, minHeight: Platform.OS === "android" ? 48 : 44,
+        alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "transparent", borderRadius: 9 },
       compactButton: { minHeight: Platform.OS === "android" ? 48 : 44, minWidth: Platform.OS === "android" ? 48 : 44,
         paddingHorizontal: 0, paddingVertical: 0, backgroundColor: "transparent", borderRadius: 7 },
       compactFace: { flexDirection: "row", alignItems: "center", justifyContent: "center", minHeight: 28, flexShrink: 1,

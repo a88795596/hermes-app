@@ -7,7 +7,7 @@ import { reasoningEfforts, type ReasoningEffort, type Skill } from "@hermes-mobi
 import type { useWorkspace } from "../sync/use-workspace";
 import { motion, useReduceMotion } from "../ui/motion";
 import { profileLabel } from "../ui/text";
-import { Action, Icon, Notice, useTheme } from "../ui/theme";
+import { Action, CloseButton, Icon, Notice, useTheme } from "../ui/theme";
 
 const commands = [
   { name: "status", label: "查看会话状态" },
@@ -44,7 +44,7 @@ function ComposerSheet({ title, subtitle, busy, onClose, children }: {
                 <Text accessibilityRole="header" style={styles.heading}>{title}</Text>
                 {subtitle && <Text style={styles.caption}>{subtitle}</Text>}
               </View>
-              <Action title="关闭" disabled={busy} onPress={onClose} />
+              <CloseButton disabled={busy} onPress={onClose} />
             </View>
             {children}
           </Animated.View>

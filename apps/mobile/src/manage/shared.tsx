@@ -4,7 +4,7 @@ import Animated from "react-native-reanimated";
 import type { ManagementOperation } from "@hermes-mobile/protocol";
 import { ApiError } from "../sync/api";
 import { motion, useReduceMotion } from "../ui/motion";
-import { Action, Field, Icon, Notice, useTheme, type IconName } from "../ui/theme";
+import { Action, CloseButton, Field, Icon, Notice, useTheme, type IconName } from "../ui/theme";
 
 export type ManageCall = <T>(operation: ManagementOperation, input?: object, signal?: AbortSignal) => Promise<T>;
 
@@ -134,7 +134,7 @@ export function Confirm({ title, description, onConfirm, disabled }: {
     <Text style={styles.text}>{description}</Text>
     <View style={styles.row}>
       <Action destructive title={`确认${title}`} disabled={disabled} onPress={() => { setAsking(false); onConfirm(); }} />
-      <Action title="取消" disabled={disabled} onPress={() => setAsking(false)} />
+      <CloseButton accessibilityLabel="取消" disabled={disabled} onPress={() => setAsking(false)} />
     </View>
   </Animated.View> : <Action destructive title={title} disabled={disabled} onPress={() => setAsking(true)} />;
 }

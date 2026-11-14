@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Text, View } from "react-native";
-import { Action, Card, EmptyState, useTheme } from "../ui/theme";
+import { Action, Card, CloseButton, EmptyState, useTheme } from "../ui/theme";
 import { ActionState, DataState, EditField, Group, InstallProgress, Row, Toggle, mono,
   useManagementAction, useManagementData, type ManageCall } from "./shared";
 
@@ -50,18 +50,21 @@ export function Skills({ call }: { call: ManageCall }) {
     </> : <>
       <View style={styles.row}>
         <Action primary icon="compose" title="新建技能" disabled={!skills.data} onPress={() => { setCreate(true); setInstall(false); }} />
-        <Action title={install ? "关闭安装" : "从技能中心安装"} disabled={!skills.data || !!pending || action.busy} onPress={() => setInstall(!install)} />
+        {!install && <Action title="从技能中心安装" disabled={!skills.data || !!pending || action.busy} onPress={() => setInstall(true)} />}
         <Action icon="refresh" title="刷新" disabled={skills.loading || action.busy} onPress={() => void skills.reload()} />
       </View>
       {install && <Card>
         <EditField label="技能标识或网址" placeholder="owner/repository/skill-name" value={identifier} onChangeText={setIdentifier} editable={!action.busy} />
-        <Action primary title={action.busy ? "正在启动安装…" : "安装技能"} disabled={action.busy || !identifier.trim()} onPress={() => void action.run(async () => {
-          setInstalled(undefined);
-          const result = await call<{ name: string }>("skill.install", { identifier: identifier.trim() });
-          setPending(result.name);
-          setInstall(false);
-          setIdentifier("");
-        })} />
+        <View style={styles.row}>
+          <Action primary title={action.busy ? "正在启动安装…" : "安装技能"} disabled={action.busy || !identifier.trim()} onPress={() => void action.run(async () => {
+            setInstalled(undefined);
+            const result = await call<{ name: string }>("skill.install", { identifier: identifier.trim() });
+            setPending(result.name);
+            setInstall(false);
+            setIdentifier("");
+          })} />
+          <CloseButton accessibilityLabel="关闭安装" disabled={!skills.data || !!pending || action.busy} onPress={() => setInstall(false)} />
+        </View>
       </Card>}
       <DataState {...skills} />
       {skills.data && <EditField label="搜索已安装的技能" value={search} onChangeText={(value) => { setSearch(value); setLimit(30); }} />}
@@ -118,7 +121,7 @@ function SkillForm({ name, content, busy, onCancel, onSave }: {
     <View style={styles.row}>
       <Action primary title={busy ? "保存中…" : name ? "保存技能" : "创建技能"}
         disabled={busy || !skillName.trim() || !body.trim() || content === body} onPress={() => onSave(skillName.trim(), body, category.trim())} />
-      <Action title="取消" disabled={busy} onPress={onCancel} />
+      <CloseButton accessibilityLabel="取消" disabled={busy} onPress={onCancel} />
     </View>
   </Card>;
 }

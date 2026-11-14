@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Text, View } from "react-native";
 import { formatDateTime } from "../ui/text";
-import { Action, Card, EmptyState, useTheme } from "../ui/theme";
+import { Action, Card, CloseButton, EmptyState, useTheme } from "../ui/theme";
 import { ActionState, Confirm, DataState, EditField, Group, Row, Toggle, entries,
   useManagementAction, useManagementData, type ManageCall } from "./shared";
 
@@ -112,12 +112,12 @@ export function ScheduledTasks({ call }: { call: ManageCall }) {
         </View>
         {!job.enabled && <Text style={styles.caption}>恢复任务后即可运行。</Text>}
         <View style={styles.row}>
-          <Action title={history ? "隐藏运行记录" : "运行记录"} onPress={() => showHistory(!history)} />
+          {!history && <Action title="运行记录" onPress={() => showHistory(true)} />}
           <Confirm title="删除任务" description={`确定删除定时任务「${jobName(job)}」吗？`} disabled={action.busy}
             onConfirm={() => void action.run(async () => { await call("cron.remove", { id: job.id }); close(); await jobs.reload(); return "任务已删除。"; })} />
         </View>
       </Card>
-      {history && <RunHistory key={job.id} call={call} id={job.id} />}
+      {history && <RunHistory key={job.id} call={call} id={job.id} onClose={() => showHistory(false)} />}
     </> : <>
       <View style={styles.row}>
         <Action primary icon="compose" title="新建任务" disabled={!jobs.data || action.busy} onPress={() => edit(true)} />
@@ -132,12 +132,15 @@ export function ScheduledTasks({ call }: { call: ManageCall }) {
   </>;
 }
 
-function RunHistory({ call, id }: { call: ManageCall; id: string }) {
+function RunHistory({ call, id, onClose }: { call: ManageCall; id: string; onClose: () => void }) {
   const { styles } = useTheme();
   const input = useMemo(() => ({ id }), [id]);
   const history = useManagementData<{ runs: { id: string; title?: string; started_at: number; ended_at?: number | null; is_active?: boolean }[] }>(call, "cron.runs", input);
   return <Card>
-    <Text accessibilityRole="header" style={styles.heading}>近期运行记录</Text>
+    <View style={styles.row}>
+      <Text accessibilityRole="header" style={[styles.heading, { flex: 1 }]}>近期运行记录</Text>
+      <CloseButton accessibilityLabel="关闭运行记录" onPress={onClose} />
+    </View>
     <DataState {...history} />
     {history.data?.runs.map((run) => {
       const started = when(run.started_at);
@@ -191,7 +194,10 @@ function JobForm({ job, busy, onCancel, onSave }: { job?: Job; busy: boolean; on
     {field("prompt", "提示词", "希望 Hermes 执行什么？", true)}
     {field("deliver", "投递目标", "填写 local 或 hermes_mobile")}
     <Text style={styles.caption}>填写 local 将结果留在主机，填写 hermes_mobile 将结果发送到已配置的收件箱。</Text>
-    <Action title={advanced ? "隐藏高级选项" : "高级选项"} onPress={() => expand(!advanced)} />
+    {advanced ? <View style={styles.row}>
+      <Text style={styles.label}>高级选项</Text>
+      <CloseButton accessibilityLabel="关闭高级选项" onPress={() => expand(false)} />
+    </View> : <Action title="高级选项" onPress={() => expand(true)} />}
     {advanced && <>
       {advancedFields.map(([key, label, hint]) => field(key, label, hint))}
       <Toggle label="直接运行脚本，跳过模型" disabled={busy} value={draft.no_agent} onChange={(no_agent) => set({ ...draft, no_agent })} />
@@ -199,7 +205,7 @@ function JobForm({ job, busy, onCancel, onSave }: { job?: Job; busy: boolean; on
     <View style={styles.row}>
       <Action primary title={busy ? "保存中…" : job ? "保存任务" : "创建任务"}
         disabled={busy || !draft.schedule.trim() || (job && dirty.length === 0)} onPress={save} />
-      <Action title="取消" disabled={busy} onPress={onCancel} />
+      <CloseButton accessibilityLabel="取消" disabled={busy} onPress={onCancel} />
     </View>
   </Card>;
 }

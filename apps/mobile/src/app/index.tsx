@@ -1,7 +1,7 @@
 import { randomUUID } from "expo-crypto";
 import { StatusBar } from "expo-status-bar";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, BackHandler, Keyboard, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
+import { ActivityIndicator, BackHandler, Keyboard, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import Animated from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { DEFAULT_TOPIC_TITLE, topicTitlePreview, type AttachmentUpload } from "@hermes-mobile/protocol";
@@ -215,28 +215,19 @@ function Workspace({
       <Animated.View key={id} style={[styles.frame, !reduced && motion.push]}>
         <View style={[styles.header, layout.chatHeader, { borderBottomColor: colors.edge, backgroundColor: colors.surface }]}>
           <Pressable accessibilityRole="button" accessibilityLabel={archived ? "返回已归档会话" : "返回话题列表"} hitSlop={6} onPress={closeTopic}
-            style={({ pressed }) => [layout.back, layout.chatBack, pressed && styles.faded]}>
+            style={({ pressed }) => [layout.back, layout.chatHeaderSide, pressed && styles.faded]}>
             <Icon name="back" size={17} color={colors.accent} />
             <Text style={[styles.text, { color: colors.accent }]}>{archived ? "归档" : sections.topics.title}</Text>
           </Pressable>
           <Text accessibilityRole="header" numberOfLines={1} ellipsizeMode="tail" style={[styles.heading, layout.grow, layout.chatTitle]}>{chatTitle}</Text>
-          <View style={layout.processToggle}>
-            <Text style={styles.caption} accessible={false}>过程</Text>
-            <Switch
-              accessibilityLabel="显示回复过程"
-              value={processVisible}
-              onValueChange={(visible) => setShowProcess((current) => ({ ...current, [id]: visible }))}
-              hitSlop={8}
-              ios_backgroundColor={colors.edge}
-              trackColor={{ false: colors.edge, true: colors.accentFill }}
-            />
-          </View>
+          <View style={layout.chatHeaderSide} />
         </View>
         <Conversation
           id={id}
           topic={topic}
           newProfileId={newProfileId}
           showProcess={processVisible}
+          onToggleProcess={() => setShowProcess((current) => ({ ...current, [id]: !current[id] }))}
           workspace={workspace}
           draft={drafts[id] ?? ""}
           onDraftChange={(value) => setDrafts((current) => ({ ...current, [id]: value }))}
@@ -448,8 +439,7 @@ const layout = StyleSheet.create({
   chatHeader: { borderBottomWidth: StyleSheet.hairlineWidth, minHeight: 48, paddingHorizontal: 12, paddingVertical: 2 },
   backBar: { alignItems: "flex-start", borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12 },
   back: { flexDirection: "row", gap: 2, minHeight: 44, minWidth: 65, alignItems: "center" },
-  chatBack: { minWidth: 80 },
-  processToggle: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 6, minHeight: 44 },
+  chatHeaderSide: { minWidth: 80 },
   chatTitle: { textAlign: "center" },
   tabs: { width: "87%", maxWidth: 400, alignSelf: "center", borderWidth: StyleSheet.hairlineWidth, borderRadius: 25, marginTop: 4, marginBottom: 5, padding: 3 },
   tabStrip: { flexDirection: "row" },

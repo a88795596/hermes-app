@@ -1,12 +1,14 @@
 import { randomUUID } from "expo-crypto";
-import { useEffect, useRef, useState, type ComponentRef } from "react";
+import { openBrowserAsync, WebBrowserPresentationStyle } from "expo-web-browser";
+import { useCallback, useEffect, useRef, useState, type ComponentRef } from "react";
 import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import Animated from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MAX_ATTACHMENTS, type Attachment, type AttachmentUpload, type Control, type Message, type MessageProcessStep, type SessionStatus, type Skill, type Topic } from "@hermes-mobile/protocol";
 import type { useWorkspace } from "../sync/use-workspace";
 import { motion, useReduceMotion } from "../ui/motion";
-import { Action, Card, EmptyState, Field, Icon, Notice, useTheme } from "../ui/theme";
+import { Action, Card, CloseButton, EmptyState, Field, Icon, Notice, useTheme } from "../ui/theme";
+import { AnswerMarkdown } from "./answer-markdown";
 import { pickAttachments } from "./attachments";
 import { AttachmentMenu, ComposerMenu, ReasoningMenu, reasoningLabels, type ComposerCommand } from "./composer-menu";
 import { ModelPicker } from "./model-picker";
@@ -167,7 +169,7 @@ function MessageAttachments({ items, tint }: { items: Attachment[]; tint: string
 }
 
 export function Conversation({
-  id, topic, newProfileId, workspace, draft, onDraftChange, attachments, onAttachmentsChange, onNewTopic, showProcess,
+  id, topic, newProfileId, workspace, draft, onDraftChange, attachments, onAttachmentsChange, onNewTopic, showProcess, onToggleProcess,
 }: {
   id: string;
   topic?: Topic;
@@ -176,6 +178,7 @@ export function Conversation({
   draft: string;
   attachments: AttachmentUpload[];
   showProcess: boolean;
+  onToggleProcess: () => void;
   onDraftChange: (value: string) => void;
   onAttachmentsChange: (value: AttachmentUpload[]) => void;
   onNewTopic: () => void;
@@ -240,6 +243,19 @@ export function Conversation({
   const reasoningLabel = reasoningBlocked ? "不可用"
     : reasoningStatus === "pending" ? "切换中" : reasoningStatus === "unknown" ? "待确认"
     : reasoning === null ? "跟随配置档案" : reasoningLabels[reasoning];
+
+  const openLink = useCallback((url: string) => {
+    Keyboard.dismiss();
+    setError(undefined);
+    void openBrowserAsync(url, {
+      dismissButtonStyle: "close",
+      presentationStyle: WebBrowserPresentationStyle.PAGE_SHEET,
+      createTask: false,
+      toolbarColor: colors.surface,
+      controlsColor: colors.foreground,
+      windowFeatures: { noopener: true, noreferrer: true },
+    }).catch(() => setError("无法打开网页，请重试。"));
+  }, [colors.foreground, colors.surface]);
 
   function keepLatestVisible() {
     if (pinned.current) scroll.current?.scrollToEnd({ animated: false });
@@ -444,7 +460,7 @@ export function Conversation({
           const attachedControls = outgoing && message.submission_id ? historyControls.get(message.submission_id) : undefined;
           return (
             <View key={message.message_id} style={chat.messageGroup}>
-              <View style={[chat.message, { maxWidth: messageWidth }, outgoing && chat.outgoing, startGroup && chat.startGroup]}>
+              <View style={[chat.message, outgoing ? [chat.outgoing, { maxWidth: messageWidth }] : chat.incoming, startGroup && chat.startGroup]}>
                 {!!process?.length && (
                   <View style={[chat.process, { borderStartColor: colors.edge }]}>
                     {process.map((step, stepIndex) => {
@@ -465,16 +481,16 @@ export function Conversation({
                   <View style={[
                     chat.bubble,
                     outgoing ? chat.outgoingBubble : chat.incomingBubble,
-                    { backgroundColor: outgoing ? colors.accentFill : colors.secondary },
+                    { backgroundColor: outgoing ? colors.accentFill : colors.surface },
                   ]}>
-                    {!!message.attachments?.length && <MessageAttachments items={message.attachments} tint={colors.onAccent} />}
-                    {!!message.text && <Text
+                    {!!message.attachments?.length && <MessageAttachments items={message.attachments} tint={outgoing ? colors.onAccent : colors.foreground} />}
+                    {!!message.text && (outgoing ? <Text
                       selectable
-                      accessibilityLabel={`${outgoing ? "你" : "Hermes"}：${message.text}`}
-                      style={[styles.text, chat.messageText, outgoing && { color: colors.onAccent }]}
+                      accessibilityLabel={`你：${message.text}`}
+                      style={[styles.text, chat.messageText, { color: colors.onAccent }]}
                     >
                       {message.text}
-                    </Text>}
+                    </Text> : <AnswerMarkdown text={message.text} onOpenLink={openLink} />)}
                   </View>
                 )}
                 {messageStatus[message.status] ? (
@@ -531,9 +547,13 @@ export function Conversation({
           <Action compact title={openingSkills ? "正在加载技能…" : "技能"}
             disabled={!canWrite || openingSkills || (topic?.status !== "ready" && !canControl)}
             onPress={() => { Keyboard.dismiss(); void openSkills(); }} />
-          <Action compact disclosure title={reasoningLabel === "跟随配置档案" ? "思考强度" : `思考 · ${reasoningLabel}`}
-            accessibilityLabel={`思考强度：${reasoningLabel}`} selected={reasoning !== null && !reasoningLegacy} disabled={!canWrite}
-            onPress={() => { Keyboard.dismiss(); setMenu("reasoning"); }} />
+          <View style={chat.replyOptions}>
+            <Action compact disclosure title={reasoningLabel === "跟随配置档案" ? "思考强度" : `思考 · ${reasoningLabel}`}
+              accessibilityLabel={`思考强度：${reasoningLabel}`} selected={reasoning !== null && !reasoningLegacy} disabled={!canWrite}
+              onPress={() => { Keyboard.dismiss(); setMenu("reasoning"); }} />
+            <Action compact title={showProcess ? "过程 · 开" : "过程 · 关"} accessibilityLabel="显示回复过程"
+              selected={showProcess} toggled={showProcess} onPress={onToggleProcess} />
+          </View>
           {running && (
             <Action compact title={stopping ? "停止中…" : "停止回复"} icon="stop"
               accessibilityLabel={stopping ? "正在请求停止回复" : undefined} disabled={!canControl || stopping} onPress={() => void stop()} />
@@ -545,13 +565,11 @@ export function Conversation({
               <View key={index} style={[chat.attachmentChip, { backgroundColor: colors.tint, borderColor: colors.edge }]}>
                 <Icon name={item.mime.startsWith("image/") ? "photo" : "attachment"} size={16} color={colors.accent} />
                 <Text numberOfLines={1} style={[styles.text, chat.attachmentName, chat.chipName]}>{item.name}</Text>
-                <Pressable accessibilityRole="button" accessibilityLabel={`移除附件 ${item.name}`} disabled={sending || picking}
+                <CloseButton accessibilityLabel={`移除附件 ${item.name}`} disabled={sending || picking}
                   onPress={() => {
                     onAttachmentsChange(attachments.filter((_item, itemIndex) => itemIndex !== index));
                     setError(undefined);
-                  }} style={({ pressed }) => [chat.iconButton, pressed && styles.faded]}>
-                  <Icon name="close" size={14} color={colors.muted} />
-                </Pressable>
+                  }} />
               </View>
             ))}
           </ScrollView>
@@ -625,15 +643,17 @@ const chat = StyleSheet.create({
   message: { alignSelf: "flex-start", alignItems: "flex-start", gap: 3 },
   messageGroup: { gap: 6 },
   process: { borderStartWidth: 1, paddingStart: 10, paddingVertical: 4, gap: 6, alignSelf: "stretch" },
+  incoming: { alignSelf: "stretch", maxWidth: 640 },
   outgoing: { alignSelf: "flex-end", alignItems: "flex-end" },
   startGroup: { marginTop: 5 },
   bubble: { borderRadius: 16, paddingHorizontal: 11, paddingVertical: 7, gap: 4 },
-  incomingBubble: { borderBottomStartRadius: 5 },
+  incomingBubble: { alignSelf: "stretch", borderBottomStartRadius: 5, paddingHorizontal: 14, paddingVertical: 12 },
   outgoingBubble: { borderBottomEndRadius: 5 },
   messageText: { fontSize: 14, lineHeight: 20 },
   outgoingStatus: { textAlign: "right", marginEnd: 3 },
   composer: { paddingHorizontal: 10, paddingBottom: 6, borderTopWidth: StyleSheet.hairlineWidth, gap: 2 },
   toolbar: { gap: 8 },
+  replyOptions: { flexDirection: "row", gap: 8 },
   attachmentLine: { flexDirection: "row", alignItems: "center", gap: 6 },
   attachmentName: { flexShrink: 1, fontSize: 13 },
   attachmentTray: { gap: 6, paddingVertical: 3 },
