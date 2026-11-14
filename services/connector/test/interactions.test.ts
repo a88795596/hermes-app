@@ -5,18 +5,22 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 import type { Command } from '@hermes-mobile/protocol';
-import type { JsonObject } from '../src/gateway.js';
+import { CanonicalConnector } from '../src/connector.js';
+import { Gateway, type JsonObject } from '../src/gateway.js';
 import { createHttpConnector } from '../src/http-mode.js';
 import { Spool } from '../src/spool.js';
+import { bridgeFrame } from '../src/wire.js';
 
-async function harness(t: TestContext, replyStatus = 'resolved') {
+async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: JsonObject[]) {
   const calls: { path: string; body: JsonObject }[] = [];
   const frames: JsonObject[] = [];
   const topicId = randomUUID();
   const sessionId = 'mobile_test';
   const runId = 'run_' + '1'.repeat(32);
-  let pending = true;
+  let pending = !runEvents;
+  let sessionAvailable = true;
   const server = createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -24,7 +28,11 @@ async function harness(t: TestContext, replyStatus = 'resolved') {
     const path = req.url!.replace('/p/default', '');
     calls.push({ path, body });
     res.setHeader('content-type', 'application/json');
-    if (path === '/api/model/options?include_unconfigured=false') {
+    if (path === '/api/hermes-mobile/attachment') {
+      res.end(JSON.stringify({ path: '/opt/data/cache/documents/report.txt' }));
+    } else if (path === '/api/hermes-mobile/title') {
+      res.end(JSON.stringify({ text: '「移动端   同步排查」' }));
+    } else if (path === '/api/model/options?include_unconfigured=false') {
       res.end(JSON.stringify({
         provider: 'nous', model: 'default-model',
         providers: [
@@ -33,9 +41,18 @@ async function harness(t: TestContext, replyStatus = 'resolved') {
           { slug: 'unconfigured', name: '未配置的服务商', models: ['ignored'], authenticated: false },
         ],
       }));
+    } else if (path === `/api/sessions/${sessionId}`) {
+      res.statusCode = sessionAvailable ? 200 : 503;
+      res.end(JSON.stringify(sessionAvailable ? { session: { id: sessionId } } : {}));
     } else if (path === '/v1/runs') {
       res.statusCode = 202;
       res.end(JSON.stringify({ run_id: runId }));
+    } else if (path === `/v1/runs/${runId}/events` && runEvents) {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(': open\n\n');
+      // The terminal status is available before this subscriber receives the buffered events.
+      await delay(50);
+      res.end(runEvents.map((event, seq) => `data: ${JSON.stringify({ ...event, run_id: runId, seq })}\n\n`).join(''));
     } else if (path === `/v1/runs/${runId}`) {
       res.end(JSON.stringify({ run_id: runId, status: pending ? 'running' : 'completed', output: '已完成',
         pending_controls: pending ? [{
@@ -55,7 +72,8 @@ async function harness(t: TestContext, replyStatus = 'resolved') {
   assert(address && typeof address !== 'string');
   const directory = mkdtempSync(join(tmpdir(), 'hermes-mobile-interactions-'));
   const filename = join(directory, 'connector.sqlite');
-  const options = { url: `http://127.0.0.1:${address.port}`, token: 'test-key', send: (frame: JsonObject) => frames.push(frame) };
+  const options = { url: `http://127.0.0.1:${address.port}`, token: 'test-key', send: (frame: JsonObject) => frames.push(frame),
+    downloadAttachment: async (_id: string, number: number) => Buffer.from(number === 1 ? 'YWJj' : png, 'base64') };
   let spool = new Spool(filename);
   const createId = randomUUID();
   spool.begin(createId, 'create');
@@ -75,13 +93,45 @@ async function harness(t: TestContext, replyStatus = 'resolved') {
     connector = createHttpConnector({ ...options, spool });
   }
   async function command(payload: Pick<Command, 'kind' | 'body'>, id = randomUUID() as string) {
-    await connector.command({
+    const frame = bridgeFrame(JSON.stringify({
       ...payload, type: 'command', command_id: id, topic_id: topicId, profile_ref: 'default', session_id: sessionId,
-    } as Command, () => true);
+    }));
+    assert(frame.type === 'command');
+    await connector.command(frame, () => true);
     return frames.find((frame) => frame.type === 'command_result' && frame.command_id === id);
   }
-  return { calls, frames, restart, command };
+  return { calls, frames, restart, command, disconnectSession: () => { sessionAvailable = false; } };
 }
+
+const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jLG0AAAAASUVORK5CYII=';
+
+test('HTTP Runs 同一轮收到描述、Hermes 本地文件引用和真实图片', async (t) => {
+  const { command, calls } = await harness(t);
+  const submission_id = randomUUID();
+  const result = await command({ kind: 'submit', body: { submission_id, text: '对比两份附件。', attachments: [
+    { name: 'report.txt', mime: 'text/plain', size: 3,
+      sha256: 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad' },
+    { name: 'pixel.png', mime: 'image/png', size: 68, sha256: '2ae67197d8706fbe5a6fdf6a46b7f6ba46a3a9568a905f7f1d2d10ee22cc3e36' },
+  ] } }, submission_id);
+  assert.equal(result?.status, 'ok');
+  const staged = calls.find(({ path }) => path === '/api/hermes-mobile/attachment');
+  assert.deepEqual(staged?.body, { name: 'report.txt', content_base64: 'YWJj' });
+  const input = calls.find(({ path }) => path === '/v1/runs')?.body.input as { role: string; content: JsonObject[] }[];
+  assert.equal(input[0].role, 'user');
+  assert.match(String(input[0].content[0].text), /对比两份附件。/);
+  assert.match(String(input[0].content[0].text), /\/opt\/data\/cache\/documents\/report.txt/);
+  assert.deepEqual(input[0].content[1], { type: 'image_url', image_url: { url: `data:image/png;base64,${png}` } });
+});
+
+test('附件摘要不匹配时停止提交', async (t) => {
+  const { command, calls } = await harness(t);
+  const submission_id = randomUUID();
+  const result = await command({ kind: 'submit', body: { submission_id, text: '读取附件', attachments: [
+    { name: 'report.txt', mime: 'text/plain', size: 3, sha256: '0'.repeat(64) },
+  ] } }, submission_id);
+  assert.equal(result?.status, 'error');
+  assert.deepEqual(calls, []);
+});
 
 async function waitForQuestion(frames: JsonObject[]) {
   const control = await new Promise<JsonObject>((resolve, reject) => {
@@ -101,6 +151,18 @@ async function waitForQuestion(frames: JsonObject[]) {
   assert(typeof control_id === 'string');
   return { control_id, choices, multi_select };
 }
+
+test('HTTP 模式使用单次模型调用生成标题，重放命令沿用已保存的结果', async (t) => {
+  const { command, calls, restart } = await harness(t);
+  const id = randomUUID();
+  const input = '{"turns":[{"user":"排查同步延迟","assistant":"已检查重试"}]}';
+  const payload = { kind: 'summarize_title', body: { input } } as const;
+  assert.equal((await command(payload, id))?.title, '移动端 同步排查');
+  restart();
+  assert.equal((await command(payload, id))?.title, '移动端 同步排查');
+  assert.deepEqual(calls.map(({ path }) => path), ['/api/hermes-mobile/title']);
+  assert.equal(calls[0].body.input, input);
+});
 
 test('HTTP 模式的模型选择器返回已配置的服务商目录，并在重启后保留选择', async (t) => {
   const { command, calls, restart } = await harness(t);
@@ -123,6 +185,70 @@ test('HTTP 模式的模型选择器返回已配置的服务商目录，并在重
   assert.deepEqual(calls.find((call) => call.path === '/v1/runs')?.body, {
     session_id: 'mobile_test', input: '你好', ...selection,
   });
+});
+
+test('HTTP Runs 保留话题的思考强度，恢复默认后不再覆盖 Hermes 配置', async (t) => {
+  const { command, calls, restart } = await harness(t);
+  assert.equal((await command({ kind: 'select_reasoning', body: { effort: 'high' } }))?.status, 'ok');
+  restart();
+  const highId = randomUUID();
+  await command({ kind: 'submit', body: { submission_id: highId, text: '使用高强度' } }, highId);
+  assert.deepEqual(calls.find((call) => call.path === '/v1/runs')?.body.model_options, { reasoning_effort: 'high' });
+
+  assert.equal((await command({ kind: 'select_reasoning', body: { effort: null } }))?.status, 'ok');
+  const defaultId = randomUUID();
+  await command({ kind: 'submit', body: { submission_id: defaultId, text: '使用档案默认值' } }, defaultId);
+  assert.equal(calls.filter((call) => call.path === '/v1/runs').at(-1)?.body.model_options, undefined);
+});
+
+test('HTTP 模式无法访问会话时拒绝切换思考强度', async (t) => {
+  const { command, disconnectSession } = await harness(t);
+  disconnectSession();
+  assert.equal((await command({ kind: 'select_reasoning', body: { effort: 'high' } }))?.status, 'error');
+});
+
+test('Canonical Gateway 按话题绑定的会话和当前版本切换思考强度', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'hermes-mobile-reasoning-'));
+  const spool = new Spool(join(directory, 'connector.sqlite'));
+  const topicId = randomUUID();
+  const sessionId = 'canonical-session';
+  spool.begin(topicId, 'create');
+  spool.finish(topicId, {}, { topicId, sessionId, profileId: 'default', profileRef: 'default' });
+  const snapshot = { session_id: sessionId, stored_session_id: sessionId, subscription_id: 'sub',
+    authority_epoch: 1, replay_epoch: 'replay', last_sequence: 0,
+    revision: 4, execution_generation: 2, running: false, pending: [], prompts: [] };
+  const mutations: JsonObject[] = [];
+  let deferred = false;
+  t.mock.method(Gateway, 'connect', async () => ({
+    connected: true, identity: { profileId: 'default', authorityEpoch: '1' }, close() {},
+    async rpc(method: string, params: JsonObject) {
+      if (method === 'session.events.since') return { events: [], snapshot_required: false };
+      if (method === 'session.resume') return snapshot;
+      if (method === 'config.get') return { value: '1' };
+      assert.equal(method, 'session.mutate');
+      mutations.push(params);
+      return { session_id: sessionId, operation: 'reasoning', effort: 'none', revision: 5, execution_generation: 3,
+        ...(deferred ? { status: 'deferred' } : {}) };
+    },
+  }));
+  const connector = new CanonicalConnector('unused', spool, () => {}, async () => { throw new Error('意外的附件下载'); });
+  t.after(() => { connector.close(); spool.close(); rmSync(directory, { recursive: true, force: true }); });
+
+  const id = randomUUID();
+  const frame = { type: 'command', command_id: id, topic_id: topicId, profile_ref: 'default',
+    session_id: sessionId, kind: 'select_reasoning', body: { effort: 'none' } };
+  assert.throws(() => bridgeFrame(JSON.stringify({ ...frame, body: { effort: 'unsupported' } })));
+  const command = bridgeFrame(JSON.stringify(frame));
+  assert(command.type === 'command');
+  await connector.command(command, () => true);
+  assert.deepEqual(mutations, [{ session_id: sessionId, request_id: id, operation: 'reasoning',
+    payload: { effort: 'none' }, expected_revision: 4, expected_generation: 2 }]);
+  assert.equal(JSON.parse(spool.command(id)!.result!).status, 'ok');
+
+  deferred = true;
+  const deferredId = randomUUID();
+  await connector.command({ ...command, command_id: deferredId }, () => true);
+  assert.equal(JSON.parse(spool.command(deferredId)!.result!).status, 'unknown');
 });
 
 test('HTTP Runs 投影多选问题并将回答转发给等待中的执行', async (t) => {
@@ -151,4 +277,34 @@ test('HTTP Runs 关闭已处理的问题，拒绝再次提交的回答', async (
   assert.equal(response?.control_status, 'closed');
   assert.equal(response.status, 'error');
   assert.equal(response.error, '此请求已过期或已回答。');
+});
+
+test('HTTP Runs 将思考、阶段说明和工具状态随最终回复保存', { timeout: 5000 }, async (t) => {
+  const { command, frames } = await harness(t, 'resolved', [
+    { event: 'reasoning.delta', text: '先检查' },
+    { event: 'reasoning.delta', text: '目录。' },
+    { event: 'message.delta', delta: '我先看看。' },
+    { event: 'message.interim', text: '我先看看。', already_streamed: true },
+    { event: 'tool.started', tool: 'read_file', tool_call_id: 'call-1', preview: '工具参数' },
+    { event: 'tool.completed', tool: 'read_file', tool_call_id: 'call-1', error: false, preview: '工具原始输出' },
+    { event: 'message.delta', delta: '已完成' },
+    { event: 'run.completed', output: '已完成' },
+  ]);
+  const id = randomUUID();
+  await command({ kind: 'submit', body: { submission_id: id, text: '检查目录' } }, id);
+  const finalReply = () => frames.find((frame) => frame.type === 'message' && frame.status === 'final');
+  while (!finalReply()) await delay(10, undefined, { signal: t.signal });
+  const replies = frames.filter((frame) => frame.type === 'message');
+  assert.equal(replies[0].text, '');
+  assert.deepEqual(replies[0].process, [{ kind: 'reasoning', text: '先检查' }]);
+  assert(replies.some((frame) => frame.status === 'streaming' && frame.text === '已完成'));
+  assert.equal(finalReply()?.text, '已完成');
+  assert.deepEqual(finalReply()?.process, [
+    { kind: 'reasoning', text: '先检查目录。' },
+    { kind: 'commentary', text: '我先看看。' },
+    { kind: 'tool', id: 'call-1', name: 'read_file', status: 'succeeded' },
+  ]);
+  assert(replies.every((frame) => frame.message_id === finalReply()?.message_id && frame.submission_id === id));
+  const completed = frames.findIndex((frame) => frame.type === 'submission' && frame.status === 'final');
+  assert(completed > frames.indexOf(finalReply()!), '应先投影最终回复，再触发本轮标题摘要');
 });

@@ -5,12 +5,15 @@ import {
 import type { CanonicalAdmission, CanonicalPrompt, ServerRequest, SessionSnapshot } from '@hermes-mobile/hermes-adapter';
 import type { Command, CommandResult, ConnectorEvent, Control, TopicQuery, TopicQueryData } from '@hermes-mobile/protocol';
 import { MAX_CLARIFY_CHOICE_BYTES } from '@hermes-mobile/protocol';
-import { Gateway, GatewayRefusal, object } from './gateway.js';
+import { attachmentBase64, attachmentFilename, type DownloadAttachment } from './attachments.js';
+import { Gateway, GatewayRefusal, integer, object } from './gateway.js';
 import type { JsonObject } from './gateway.js';
+import { addProcessText, removeStreamedCommentary, updateProcessTool } from './message-process.js';
 import { hasModel, modelCatalog } from './models.js';
 import { Spool } from './spool.js';
 import type { Binding, Cursor, Turn } from './spool.js';
 import { QueryUnavailable, queryTimeout, runtimeVersion, sessionStatus, skillList } from './topic-query.js';
+import { titleInstructions, titleResult, titleTimeout } from './topic-title.js';
 import { boundedText, commandDigest, result, stableId, text } from './wire.js';
 
 type Target =
@@ -47,6 +50,10 @@ function knownRefusal(error: unknown): error is GatewayRefusal {
     && !['storage_unavailable', 'outcome_unknown', 'execution_unknown'].includes(error.reason ?? '');
 }
 
+function isRevision(value: unknown): boolean {
+  return typeof value === 'bigint' ? value >= 0n && value <= 9_223_372_036_854_775_807n : integer(value) !== undefined;
+}
+
 export class CanonicalConnector {
   readonly #profiles = new Map<string, Profile>();
   readonly #sessions = new Map<string, Session>();
@@ -58,6 +65,7 @@ export class CanonicalConnector {
     readonly binary: string,
     readonly spool: Spool,
     readonly onReconnect: () => void,
+    readonly downloadAttachment: DownloadAttachment,
   ) {
     for (const binding of spool.bindings()) this.#bindings.set(binding.topicId, binding);
   }
@@ -178,6 +186,7 @@ export class CanonicalConnector {
             ...buffer, frames: buffer.frames.filter((frame) => object(frame.params)?.session_id === created.sessionId),
           };
           this.#restoreSnapshot(session, snapshot);
+          await this.#enableReasoning(session);
         }
       } catch (error) {
         this.#failedWrite(id, error);
@@ -200,6 +209,49 @@ export class CanonicalConnector {
       return;
     }
     if (!current() || !session.gateway.connected) return;
+    if (command.kind === 'select_reasoning') {
+      if (!this.spool.begin(id, digest)) return;
+      try {
+        const snapshot = parseSessionSnapshot(await session.gateway.rpc('session.resume', {
+          session_id: binding.sessionId, omit_messages: true,
+        }));
+        this.#checkSnapshot(session, snapshot);
+        let receipt = result(id, 'unknown', { error: 'Hermes 无法确认思考强度是否已切换。' });
+        if (snapshot.running || snapshot.pending.length) {
+          receipt = result(id, 'error', { error: '请等待当前回复完成后再切换思考强度。' });
+        } else if (current() && session.gateway.connected) {
+          const reply = await session.gateway.rpc('session.mutate', {
+            session_id: binding.sessionId, request_id: id, operation: 'reasoning', payload: command.body,
+            expected_revision: canonicalInteger(snapshot.revision),
+            expected_generation: canonicalInteger(snapshot.executionGeneration),
+          }, id);
+          if (reply.session_id === binding.sessionId && reply.operation === 'reasoning' && reply.effort === command.body.effort) {
+            if (reply.status === 'deferred') {
+              receipt = result(id, 'unknown', { error: 'Hermes 已安排稍后切换思考强度。请在回复结束后重新确认档位。' });
+            } else if (reply.status === undefined && isRevision(reply.revision) && isRevision(reply.execution_generation)) {
+              receipt = result(id, 'ok');
+            }
+          }
+        }
+        this.spool.finish(id, { ...receipt });
+      } catch (error) {
+        if (error instanceof GatewayRefusal && (error.code === -32601 || error.reason === 'invalid_params')) {
+          this.spool.finish(id, { ...result(id, 'error', { error: '当前 Hermes 网关版本不支持切换思考强度。' }) });
+        } else {
+          this.#failedWrite(id, error);
+        }
+      }
+      return;
+    }
+    if (command.kind === 'summarize_title') {
+      if (!this.spool.begin(id, digest)) return;
+      const reply = await session.gateway.rpc('llm.oneshot', {
+        session_id: binding.sessionId, task: 'title_generation', instructions: titleInstructions,
+        input: command.body.input, max_tokens: 128,
+      }, id, titleTimeout).catch(() => undefined);
+      if (!this.#closed) this.spool.finish(id, { ...titleResult(id, reply?.text) });
+      return;
+    }
     if (command.kind === 'model_options' || command.kind === 'select_model') {
       if (!this.spool.begin(id, digest)) return;
       try {
@@ -324,11 +376,34 @@ export class CanonicalConnector {
       return;
     }
 
-    if (!this.spool.begin(id, digest, { topicId, submissionId: command.body.submission_id })) return;
+    const files: string[] = [];
+    const images: { path: string; mime: string }[] = [];
+    try {
+      for (const [index, attachment] of (command.body.attachments ?? []).entries()) {
+        const content_base64 = await attachmentBase64(this.downloadAttachment, id, index + 1, attachment);
+        const name = attachmentFilename(attachment.name);
+        if (attachment.mime.startsWith('image/')) {
+          const image = await session.gateway.rpc('image.attach_bytes', { session_id: binding.sessionId, filename: name, content_base64 });
+          if (image.attached !== true || !text(image.path, 4096) || image.mime !== attachment.mime) throw new Error('无法暂存图片');
+          images.push({ path: image.path, mime: attachment.mime });
+        } else {
+          const file = await session.gateway.rpc('file.attach', { session_id: binding.sessionId, name,
+            data_url: `data:${attachment.mime};base64,${content_base64}` });
+          if (file.attached !== true || !text(file.ref_text, 4096) || !file.ref_text.startsWith('@file:')) throw new Error('无法暂存文件');
+          files.push(file.ref_text);
+        }
+      }
+    } catch {
+      if (current()) finish('error', { error: 'Hermes 无法读取附件，请重新发送。' });
+      return;
+    }
+    if (!current() || !session.gateway.connected || !this.spool.begin(id, digest, { topicId, submissionId: command.body.submission_id })) return;
     session.buffer = { frames: [], bytes: 0 };
     try {
       const receipt = parseAdmissionReceipt(await session.gateway.rpc('prompt.submit', {
-        session_id: binding.sessionId, submission_id: command.body.submission_id, text: command.body.text,
+        session_id: binding.sessionId, submission_id: command.body.submission_id,
+        text: [command.body.text, files.join('\n')].filter((part) => part.trim()).join('\n\n') || '请查看上传的图片。',
+        ...(images.length && { attachments: images }),
         ...(session.gateway.clarifyBatch ? { clarify_batch: true } : {}),
       }, id));
       if (receipt.kind === 'voice_stopped') {
@@ -338,6 +413,8 @@ export class CanonicalConnector {
         this.spool.finish(id, { ...result(id, 'ok', { admission_id: receipt.admissionId }) }, undefined, {
           topicId, admissionId: receipt.admissionId, submissionId: command.body.submission_id, text: '', status: 'queued',
         });
+        // 先归并 RPC 等待期间收到的过程和回复，再用回执对账。
+        this.#drain(session);
         this.#applyReceipt(session, receipt, command.body.submission_id);
       }
     } catch (error) {
@@ -397,6 +474,7 @@ export class CanonicalConnector {
       }));
       this.#checkSnapshot(session, snapshot);
       this.#restoreSnapshot(session, snapshot);
+      await this.#enableReasoning(session);
       for (const turn of this.spool.activeTurns(binding.topicId)) {
         try {
           const receipt = await this.#receipt(session, turn.admissionId);
@@ -417,6 +495,16 @@ export class CanonicalConnector {
     if (snapshot.sessionId !== session.binding.sessionId ||
       snapshot.authorityEpoch !== session.gateway.identity.authorityEpoch) {
       throw new GatewayRefusal(4001, 'session_identity_mismatch');
+    }
+  }
+
+  async #enableReasoning({ binding, gateway }: Session): Promise<void> {
+    try {
+      const params = { session_id: binding.sessionId, key: 'show_reasoning' };
+      const current = await gateway.rpc('config.get', params, undefined, queryTimeout);
+      if (current.value === '0') await gateway.rpc('config.set', { ...params, value: 'on' }, undefined, queryTimeout);
+    } catch {
+      // 旧网关可能不支持此会话显示选项，仍可投影它发送的过程事件。
     }
   }
 
@@ -481,15 +569,17 @@ export class CanonicalConnector {
   #applyReceipt(session: Session, receipt: CanonicalAdmission, submissionId: string | null): void {
     const previous = this.spool.turn(session.binding.topicId, receipt.admissionId);
     const status = receiptStatus(receipt);
-    if (previous && (['final', 'failed', 'cancelled'].includes(previous.status)
-      || (previous.status === 'streaming' && status === 'queued'))) return;
+    if (previous?.status === 'streaming' && status === 'queued') return;
+    if (previous && ['final', 'failed', 'cancelled'].includes(previous.status) &&
+      (previous.status !== status || previous.text || !receipt.finalText)) return;
     const text = receipt.finalText || previous?.text || '';
     if (previous?.status === status && previous.submissionId === submissionId && previous.text === text
       && status !== 'queued') return;
     this.#setTurn(session, {
       topicId: session.binding.topicId, admissionId: receipt.admissionId, submissionId, text, status,
+      process: previous?.process,
     }, [receipt.admissionId, 'receipt', status, receipt.authorityEpoch, receipt.executionGeneration ?? ''],
-    status === 'final' || status === 'cancelled');
+    status === 'final' || status === 'cancelled' || status === 'failed');
   }
 
   #route(profileRef: string, frame: JsonObject, bytes: number): void {
@@ -566,32 +656,42 @@ export class CanonicalConnector {
           this.#applyReceipt(session, receipt, receipt.submissionId);
         }
       }
-    } else if (projection && 'admissionId' in projection && projection.admissionId &&
-      ['message.start', 'message.delta', 'message.interim', 'message.complete'].includes(projection.type)) {
+    } else if (projection && 'admissionId' in projection && projection.admissionId) {
       const admissionId = projection.admissionId;
       const existing = this.spool.turn(binding.topicId, admissionId);
       const previousText = existing?.text ?? '';
       let text = previousText;
+      let process = existing?.process;
       let status: Turn['status'] = 'streaming';
       let publishMessage = false;
       let submissionId = existing?.submissionId ?? null;
       if (projection.type === 'message.delta' && projection.text) {
         text = previousText + projection.text;
         publishMessage = true;
-      } else if (projection.type === 'message.interim' && !projection.alreadyStreamed && projection.text) {
-        text = previousText ? `${previousText}\n${projection.text}` : projection.text;
-        publishMessage = true;
+      } else if (projection.type === 'message.interim') {
+        process = addProcessText(process, 'commentary', projection.text);
+        if (projection.alreadyStreamed) text = removeStreamedCommentary(text, projection.text);
+        publishMessage = text !== previousText || process !== existing?.process;
+      } else if (projection.type === 'reasoning.delta' || projection.type === 'reasoning.available') {
+        process = addProcessText(process, 'reasoning', projection.text, projection.type === 'reasoning.delta');
+        publishMessage = process !== existing?.process;
+      } else if (projection.type === 'tool.start' || projection.type === 'tool.complete') {
+        process = updateProcessTool(process, projection.toolId, projection.name, projection.status);
+        publishMessage = process !== existing?.process;
       } else if (projection.type === 'message.complete') {
         const provided = projection.submissionId;
         if (!submissionId && provided && this.spool.hasIntent(binding.topicId, provided)) submissionId = provided;
         status = outcomeStatus(projection.outcome);
         text = projection.responseReused ? previousText || projection.text || ''
           : projection.text || previousText;
-        publishMessage = !!text;
+        if (!process?.some((step) => step.kind === 'reasoning')) {
+          process = addProcessText(process, 'reasoning', projection.reasoning);
+        }
+        publishMessage = true;
       }
-      // 回执可能在处理完积压的流式帧之前就已确认。
+      // 已结束的回复保留已确认的终态。
       if (!existing || !['final', 'failed', 'cancelled'].includes(existing.status)) {
-        this.#setTurn(session, { topicId: binding.topicId, admissionId, submissionId, text, status },
+        this.#setTurn(session, { topicId: binding.topicId, admissionId, submissionId, text, status, process },
           key, publishMessage, cursor);
         session.cursor = cursor;
         return;
@@ -605,12 +705,13 @@ export class CanonicalConnector {
     const topicId = session.binding.topicId;
     const eventId = (kind: string) => stableId([topicId, kind, ...key]);
     const frames: ConnectorEvent[] = [];
-    const text = boundedText(turn.text, 256 * 1024);
-    if (publishMessage && text) {
+    const text = turn.text.trim() ? boundedText(turn.text, 256 * 1024) : '';
+    if (publishMessage && (text || turn.process?.length)) {
       frames.push({
         type: 'message', event_id: eventId('message'), topic_id: topicId,
         message_id: stableId([topicId, 'message', turn.admissionId]), text,
         status: turn.status === 'streaming' ? 'streaming' : 'final',
+        ...(turn.process?.length ? { process: turn.process } : {}),
         ...(turn.submissionId ? { submission_id: turn.submissionId } : {}),
       });
     }

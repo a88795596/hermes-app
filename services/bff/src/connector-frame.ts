@@ -1,5 +1,5 @@
-import type { ConnectorFrame, ModelResult } from "@hermes-mobile/protocol";
-import { MAX_CLARIFY_CHOICE_BYTES } from "@hermes-mobile/protocol";
+import type { ConnectorFrame, MessageProcessStep, ModelResult } from "@hermes-mobile/protocol";
+import { MAX_CLARIFY_CHOICE_BYTES, MAX_MESSAGE_PROCESS_STEPS, MAX_MESSAGE_PROCESS_TEXT_BYTES, MAX_TOPIC_TITLE_BYTES } from "@hermes-mobile/protocol";
 import { invalid, record, string, uuid } from "./validation.js";
 
 const controlStatuses = ["pending", "responding", "closed", "unknown"] as const;
@@ -7,6 +7,20 @@ const controlStatuses = ["pending", "responding", "closed", "unknown"] as const;
 function option<const T extends string>(value: unknown, allowed: readonly T[]): T {
   if (typeof value !== "string" || !allowed.includes(value as T)) invalid("连接器的枚举值无效。");
   return value as T;
+}
+
+function messageProcess(value: unknown): MessageProcessStep[] {
+  if (!Array.isArray(value) || value.length > MAX_MESSAGE_PROCESS_STEPS) invalid("回复过程无效。");
+  return value.map((entry) => {
+    const kind = option(record(entry).kind, ["reasoning", "commentary", "tool"]);
+    if (kind === "tool") {
+      const tool = record(entry, ["kind", "id", "name", "status"]);
+      return { kind, id: string(tool.id, "工具调用 ID", 512), name: string(tool.name, "工具名称", 256),
+        status: option(tool.status, ["running", "succeeded", "failed", "unknown"]) };
+    }
+    const step = record(entry, ["kind", "text"]);
+    return { kind, text: string(step.text, "过程文本", MAX_MESSAGE_PROCESS_TEXT_BYTES, true) };
+  });
 }
 
 function modelResult(value: unknown): ModelResult {
@@ -52,13 +66,14 @@ export function connectorFrame(value: unknown): ConnectorFrame {
       invalid("管理操作结果无效。");
     }
     case "command_result": {
-      const body = record(value, ["type", "command_id", "status", "session_id", "admission_id", "error", "control_status", "model_result"]);
+      const body = record(value, ["type", "command_id", "status", "session_id", "admission_id", "error", "control_status", "model_result", "title"]);
       return { type, command_id: uuid(body.command_id, "命令 ID"), status: option(body.status, ["ok", "error", "unknown"]),
         ...(body.session_id === undefined ? {} : { session_id: string(body.session_id, "会话 ID", 512) }),
         ...(body.admission_id === undefined ? {} : { admission_id: string(body.admission_id, "受理 ID", 512) }),
         ...(body.error === undefined ? {} : { error: string(body.error, "错误提示", 1024) }),
         ...(body.control_status === undefined ? {} : { control_status: option(body.control_status, controlStatuses) }),
-        ...(body.model_result === undefined ? {} : { model_result: modelResult(body.model_result) }) };
+        ...(body.model_result === undefined ? {} : { model_result: modelResult(body.model_result) }),
+        ...(body.title === undefined ? {} : { title: string(body.title, "话题标题", MAX_TOPIC_TITLE_BYTES) }) };
     }
     case "topic_query_result": {
       const body = record(value, ["type", "request_id", "data", "error"]);
@@ -100,10 +115,11 @@ export function connectorFrame(value: unknown): ConnectorFrame {
         profile_ref: string(body.profile_ref, "配置档案名称", 256), text: string(body.text, "消息正文", 256 * 1024) };
     }
     case "message": {
-      const body = record(value, ["type", "event_id", "topic_id", "message_id", "submission_id", "text", "status"]);
+      const body = record(value, ["type", "event_id", "topic_id", "message_id", "submission_id", "text", "status", "process"]);
       return { type, event_id: uuid(body.event_id, "事件 ID"), topic_id: uuid(body.topic_id, "话题 ID"),
         message_id: uuid(body.message_id, "消息 ID"), text: string(body.text, "消息正文", 256 * 1024, true),
         status: option(body.status, ["streaming", "final"]),
+        ...(body.process === undefined ? {} : { process: messageProcess(body.process) }),
         ...(body.submission_id === undefined ? {} : { submission_id: uuid(body.submission_id, "提交 ID") }) };
     }
     case "submission": {

@@ -1,16 +1,28 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import type { Command, Control, ModelSelection, TopicQuery, TopicQueryData } from '@hermes-mobile/protocol';
+import type { Command, ConnectorEvent, Control, ModelSelection, ReasoningEffort, TopicQuery, TopicQueryData } from '@hermes-mobile/protocol';
 import { MAX_CLARIFY_CHOICE_BYTES } from '@hermes-mobile/protocol';
+import { attachmentBase64, attachmentFilename, type DownloadAttachment } from './attachments.js';
 import { integer, object, string } from './gateway.js';
 import type { JsonObject } from './gateway.js';
+import { addProcessText, removeStreamedCommentary, updateProcessTool } from './message-process.js';
 import { hasModel, modelCatalog } from './models.js';
 import type { Binding, Spool, Turn } from './spool.js';
 import { QueryUnavailable, queryTimeout, runtimeVersion, sessionStatus, skillList } from './topic-query.js';
+import { titleInstructions, titleResult, titleTimeout } from './topic-title.js';
 import { boundedText, commandDigest, result, stableId, text } from './wire.js';
 
 const unknown = 'Hermes 无法确认执行结果';
 const runId = /^run_[a-f0-9]{32}$/;
 const profileName = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
+
+function terminalStatus(status: unknown): 'final' | 'failed' | 'cancelled' | 'unknown' | undefined {
+  switch (status) {
+    case 'completed': return 'final';
+    case 'failed': return 'failed';
+    case 'cancelled': return 'cancelled';
+    case 'interrupted': return 'unknown';
+  }
+}
 
 function httpId(...identity: unknown[]): string {
   return stableId(['hermes-http-runs', JSON.stringify(identity)]);
@@ -50,9 +62,9 @@ function pendingPrompts(id: string, run: JsonObject): Prompt[] {
   });
 }
 
-type Options = { url: string; token: string; send: (frame: JsonObject) => void; spool: Spool };
+type Options = { url: string; token: string; send: (frame: JsonObject) => void; spool: Spool; downloadAttachment: DownloadAttachment };
 
-export function createHttpConnector({ url, token, send, spool }: Options) {
+export function createHttpConnector({ url, token, send, spool, downloadAttachment }: Options) {
   const endpoint = URL.parse(url);
   if (!endpoint || !['http:', 'https:'].includes(endpoint.protocol) ||
       !['127.0.0.1', '[::1]'].includes(endpoint.hostname) || endpoint.username || endpoint.password ||
@@ -64,22 +76,43 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
   const watchers = new Map<string, AbortController>();
   const commands = new Set<string>();
 
-  function request(profile: string, path: string, options: RequestInit = {}): Promise<Response> {
+  function request(profile: string, path: string, options: RequestInit = {}, timeoutMs = 15_000): Promise<Response> {
     return fetch(new URL(`/p/${encodeURIComponent(profile)}${path}`, origin), {
       ...options,
       redirect: 'error',
       headers: { authorization: `Bearer ${token}`, ...options.headers },
-      signal: AbortSignal.any([shutdown.signal, AbortSignal.timeout(15_000), ...(options.signal ? [options.signal] : [])]),
+      signal: AbortSignal.any([shutdown.signal, AbortSignal.timeout(timeoutMs), ...(options.signal ? [options.signal] : [])]),
     });
   }
 
-  async function json(profile: string, path: string, body?: JsonObject, idempotencyKey?: string) {
+  async function json(profile: string, path: string, body?: JsonObject, idempotencyKey?: string, timeoutMs?: number) {
     const response = await request(profile, path, body && {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}) },
       body: JSON.stringify(body),
-    });
+    }, timeoutMs);
     return { response, data: object(await response.json().catch(() => undefined)) };
+  }
+
+  async function prepareInput(command: Extract<Command, { kind: 'submit' }>) {
+    const { text, attachments } = command.body;
+    const documents: string[] = [];
+    const images: JsonObject[] = [];
+    for (const [index, attachment] of (attachments ?? []).entries()) {
+      const content_base64 = await attachmentBase64(downloadAttachment, command.command_id, index + 1, attachment);
+      if (attachment.mime.startsWith('image/')) {
+        images.push({ type: 'image_url', image_url: { url: `data:${attachment.mime};base64,${content_base64}` } });
+      } else {
+        const { response, data } = await json(command.profile_ref, '/api/hermes-mobile/attachment', {
+          name: attachmentFilename(attachment.name), content_base64,
+        });
+        const path = data?.path;
+        if (!response.ok || typeof path !== 'string' || !path || /[\p{Cc}]/u.test(path)) throw new Error('无法暂存文件');
+        documents.push(`用户附上了文件 ${JSON.stringify(attachment.name)}，保存在 ${JSON.stringify(path)}。请使用文件工具读取或提取其内容。`);
+      }
+    }
+    const prompt = [text, ...documents].filter((part) => part.trim()).join('\n\n') || '请查看上传的图片。';
+    return images.length ? [{ role: 'user', content: [{ type: 'text', text: prompt }, ...images] }] : prompt;
   }
 
   async function query({ kind, topic_id, profile_ref, session_id }: TopicQuery): Promise<TopicQueryData> {
@@ -115,9 +148,25 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
     for (const frame of frames) send(frame.body);
   }
 
-  function message(turn: Turn, status: 'streaming' | 'final', text: string) {
+  function message(turn: Turn, status: 'streaming' | 'final', text: string): Omit<Extract<ConnectorEvent, { type: 'message' }>, 'topic_id' | 'event_id'> {
     return { type: 'message', message_id: httpId(turn.topicId, turn.admissionId, 'message'),
-      submission_id: turn.submissionId, status, text };
+      ...(turn.submissionId ? { submission_id: turn.submissionId } : {}), status, text: text.trim() ? text : '',
+      ...(turn.process?.length ? { process: turn.process } : {}) };
+  }
+
+  function finishRun(turn: Turn, state: NonNullable<ReturnType<typeof terminalStatus>>, output: unknown) {
+    const saved = JSON.parse(turn.text) as RunState;
+    const text = state === 'final' && typeof output === 'string' ? boundedText(output, 256 * 1024) : saved.text;
+    const updated = { ...turn, status: state, text: JSON.stringify({ text, prompts: [] }) };
+    const frames: JsonObject[] = saved.prompts.map(({ control }) => ({
+      type: 'control', ...control, submission_id: turn.submissionId, status: state === 'unknown' ? 'unknown' : 'closed',
+    }));
+    if (text || saved.text || updated.process?.length) frames.push(message(updated, 'final', text));
+    const error = state === 'unknown' ? unknown : state === 'failed' ? 'Hermes 报告执行失败' : undefined;
+    if (state !== turn.status || error) {
+      frames.push({ type: 'submission', submission_id: turn.submissionId, status: state, ...(error ? { error } : {}) });
+    }
+    record(updated, frames);
   }
 
   async function stream(binding: Binding, id: string, signal: AbortSignal) {
@@ -155,14 +204,36 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
           sequence = next;
           const turn = spool.turn(binding.topicId, id);
           if (!turn || !['queued', 'streaming', 'unknown'].includes(turn.status)) return;
-          if (event.event !== 'message.delta' || typeof event.delta !== 'string' || gap) {
+          if (typeof event.event === 'string' && event.event.startsWith('run.') && terminalStatus(event.event.slice(4))) {
             record(turn, [], sequence, gap);
-            continue;
+            return;
           }
           const state = JSON.parse(turn.text) as RunState;
-          const text = boundedText(state.text + event.delta, 256 * 1024);
-          const frames = text !== state.text ? [message(turn, 'streaming', text)] : [];
-          record({ ...turn, text: JSON.stringify({ ...state, text }) }, frames, sequence);
+          let answer = state.text;
+          let process = turn.process;
+          if (event.event === 'message.delta' && typeof event.delta === 'string' && !gap) {
+            answer = boundedText(answer + event.delta, 256 * 1024);
+          } else if (event.event === 'message.interim' && typeof event.text === 'string') {
+            process = addProcessText(process, 'commentary', event.text);
+            if (event.already_streamed === true) answer = removeStreamedCommentary(answer, event.text);
+          } else if (event.event === 'reasoning.available' || (event.event === 'reasoning.delta' && !gap)) {
+            process = addProcessText(process, 'reasoning', event.text, event.event === 'reasoning.delta');
+          } else if (event.event === 'tool.started' || event.event === 'tool.completed' || event.event === 'tool.failed') {
+            const started = event.event === 'tool.started';
+            let callId = string(event.tool_call_id);
+            if (!callId) {
+              // shortcut: 旧版 Runs 省略调用 ID 时按工具名匹配最早的待完成调用，升级后使用上游 ID。
+              const pending = started ? undefined : process?.find((step) =>
+                step.kind === 'tool' && step.name === event.tool && step.status === 'running');
+              callId = pending?.kind === 'tool' ? pending.id : httpId(id, sequence, 'tool');
+            }
+            const status = started ? 'running' : event.event === 'tool.failed' || event.error === true ? 'failed'
+              : event.error === false ? 'succeeded' : 'unknown';
+            process = updateProcessTool(process, callId, event.tool, status);
+          }
+          const updated = { ...turn, process, text: JSON.stringify({ ...state, text: answer }) };
+          const frames = answer !== state.text || process !== turn.process ? [message(updated, 'streaming', answer)] : [];
+          record(updated, frames, sequence, gap);
         }
         if (buffer.length > 2 * 1024 * 1024) return;
       }
@@ -177,10 +248,14 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
     const controller = new AbortController();
     const { signal } = controller;
     watchers.set(id, controller);
+    let reading: Promise<void> | undefined;
+    let finishing = false;
     void (async () => {
-      while (!signal.aborted) {
-        await stream(binding, id, signal).catch(() => undefined);
-        await delay(1000, undefined, { signal });
+      while (!signal.aborted && !finishing) {
+        reading = stream(binding, id, signal).catch(() => undefined);
+        await reading;
+        reading = undefined;
+        if (!finishing) await delay(1000, undefined, { signal });
       }
     })().catch(() => undefined);
     void (async () => {
@@ -188,20 +263,27 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
         const result = await json(binding.profileRef, `/v1/runs/${id}`).catch(() => undefined);
         if (signal.aborted) return;
         const turn = spool.turn(binding.topicId, id);
-        if (!turn || !turn.submissionId) return;
+        if (!turn?.submissionId || ['final', 'failed', 'cancelled'].includes(turn.status)) return;
         const data = result?.data;
         const missingRun = result?.response.status === 404 && object(data?.error)?.code === 'run_not_found';
         if (data?.run_id === id || missingRun) {
           const status = data?.status;
           const frames: JsonObject[] = [];
-          const terminal = status === 'completed' || status === 'failed' || status === 'cancelled';
-          const next = terminal ? [] : pendingPrompts(id, data ?? {});
-          const state: Turn['status'] | undefined = status === 'completed' ? 'final'
-            : status === 'failed' ? 'failed'
-            : status === 'cancelled' ? 'cancelled'
-            : status === 'queued' ? turn.status === 'streaming' ? 'streaming' : 'queued'
+          const finished = missingRun ? 'unknown' : terminalStatus(status);
+          if (finished) {
+            finishing = true;
+            // GET 状态可能先于已排入 SSE 的过程事件到达。
+            const drain = reading ?? (missingRun ? undefined : stream(binding, id, signal).catch(() => undefined));
+            if (drain) await Promise.race([drain, delay(1500, undefined, { signal, ref: false })]);
+            if (signal.aborted) return;
+            const latest = spool.turn(binding.topicId, id);
+            if (latest?.submissionId) finishRun(latest, finished, data?.output);
+            return;
+          }
+          const next = pendingPrompts(id, data ?? {});
+          const state: Turn['status'] | undefined = status === 'queued' ? turn.status === 'streaming' ? 'streaming' : 'queued'
             : status === 'running' || status === 'waiting_for_approval' || status === 'stopping' ? 'streaming'
-            : missingRun || status === 'interrupted' || status === 'unknown' ? 'unknown' : undefined;
+            : status === 'unknown' ? 'unknown' : undefined;
           if (state !== undefined) {
             const saved = JSON.parse(turn.text) as RunState;
             for (const prompt of saved.prompts) {
@@ -214,16 +296,12 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
               if (saved.prompts.some(({ control }) => control.control_id === prompt.control.control_id)) continue;
               frames.push({ type: 'control', ...prompt.control, submission_id: turn.submissionId, status: 'pending' });
             }
-            const finalText = terminal ? (state === 'final' && typeof data?.output === 'string'
-              ? boundedText(data.output, 256 * 1024) : saved.text) : undefined;
-            const updated = { ...turn, status: state, text: JSON.stringify({ text: finalText ?? saved.text, prompts: next }) };
+            const updated = { ...turn, status: state, text: JSON.stringify({ ...saved, prompts: next }) };
             if (state !== turn.status) {
-              const error = state === 'unknown' ? unknown : state === 'failed' ? 'Hermes 报告执行失败' : undefined;
+              const error = state === 'unknown' ? unknown : undefined;
               frames.push({ type: 'submission', submission_id: turn.submissionId, status: state, ...(error ? { error } : {}) });
             }
-            if (finalText) frames.push(message(updated, 'final', finalText));
             if (frames.length) record(updated, frames);
-            if (terminal || missingRun || status === 'interrupted') return;
           }
         }
         await delay(1500, undefined, { signal });
@@ -252,6 +330,20 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
       return;
     }
     if (commands.has(command_id)) return;
+    let input: Awaited<ReturnType<typeof prepareInput>> | undefined;
+    if (command.kind === 'submit' && bound && command.body.attachments && !saved) {
+      try {
+        input = await prepareInput(command);
+      } catch {
+        if (current() && !shutdown.signal.aborted && spool.begin(command_id, digest)) {
+          const receipt = result(command_id, 'error', { error: 'Hermes 无法读取附件，请重新发送。' });
+          spool.finish(command_id, { ...receipt });
+          send({ ...receipt });
+        }
+        return;
+      }
+      if (!current() || shutdown.signal.aborted) return;
+    }
     if (!spool.begin(command_id, digest)) {
       const uncertain = result(command_id, 'unknown', { error: unknown });
       spool.finish(command_id, { ...uncertain });
@@ -263,7 +355,7 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
     let receipt = result(command_id, 'unknown', { error: unknown });
     let binding: Binding | undefined;
     let turn: Turn | undefined;
-    let selection: (ModelSelection & { topicId: string }) | undefined;
+    let selection: ((ModelSelection | { effort: ReasoningEffort | null }) & { topicId: string }) | undefined;
     try {
       if (!profileName.test(profile_ref)) {
         receipt = result(command_id, 'error', { error: 'Hermes 配置档案无效' });
@@ -282,6 +374,11 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
         }
       } else if (!bound) {
         receipt = result(command_id, 'error', { error: 'Hermes 会话与话题的绑定不匹配' });
+      } else if (command.kind === 'summarize_title') {
+        const reply = await json(profile_ref, '/api/hermes-mobile/title', {
+          input: command.body.input, instructions: titleInstructions,
+        }, undefined, titleTimeout).catch(() => undefined);
+        receipt = titleResult(command_id, reply?.response.ok ? reply.data?.text : undefined);
       } else if (command.kind === 'model_options' || command.kind === 'select_model') {
         receipt = result(command_id, 'error', { error: 'Hermes 无法加载模型目录' });
         const { response, data } = await json(profile_ref, '/api/model/options?include_unconfigured=false');
@@ -303,9 +400,18 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
             }
           }
         }
+      } else if (command.kind === 'select_reasoning') {
+        receipt = result(command_id, 'error', { error: '无法访问 Hermes 会话，请检查连接后重试。' });
+        const { response, data } = await json(profile_ref, `/api/sessions/${encodeURIComponent(bound.sessionId)}`);
+        if (response.ok && object(data?.session)?.id === bound.sessionId && current() && !shutdown.signal.aborted) {
+          selection = { topicId: topic_id, effort: command.body.effort };
+          receipt = result(command_id, 'ok');
+        }
       } else if (command.kind === 'submit') {
+        const effort = spool.reasoningEffort(topic_id);
         const { response, data } = await json(profile_ref, '/v1/runs', {
-          session_id: bound.sessionId, input: command.body.text, ...spool.modelSelection(topic_id),
+          session_id: bound.sessionId, input: input ?? command.body.text, ...spool.modelSelection(topic_id),
+          ...(effort && { model_options: { reasoning_effort: effort } }),
         }, command_id);
         const id = string(data?.run_id);
         if (response.status === 202 && id && runId.test(id)) {

@@ -13,18 +13,64 @@ export interface Topic {
   profile_id: string;
   title: string;
   status: "creating" | "ready" | "error";
+  // 旧版服务端和移动端缓存可能缺少这些字段。
+  created_at?: string;
+  updated_at?: string;
+  archived?: boolean;
   error?: string;
+  reasoning_effort?: ReasoningEffort;
+  reasoning_status?: "pending" | "unknown";
+}
+
+export const DEFAULT_TOPIC_TITLE = "新会话";
+export const MAX_TOPIC_TITLE_BYTES = 256;
+export const MAX_TITLE_INPUT_BYTES = 32 * 1024;
+
+export function topicTitlePreview(text: string): string {
+  const characters = Array.from(text.replace(/[\s\p{Cc}]+/gu, " ").trim());
+  return characters.length > 64 ? characters.slice(0, 63).join("").trimEnd() + "…"
+    : characters.join("") || DEFAULT_TOPIC_TITLE;
 }
 
 export type MessageStatus = "accepted" | "queued" | "streaming" | "final" | "failed" | "unknown" | "cancelled";
+
+export const MAX_ATTACHMENTS = 10;
+export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+export const MAX_ATTACHMENT_TOTAL_BYTES = 6 * 1024 * 1024;
+
+export interface Attachment {
+  name: string;
+  mime: string;
+  size: number;
+}
+
+export type AttachmentUpload = Attachment & { content_base64: string };
+export type AttachmentReference = Attachment & { sha256: string };
+
+export function isAttachmentName(name: string): boolean {
+  return !!name.trim() && name !== "." && name !== ".." && !/[\\/\p{Cc}]/u.test(name);
+}
+
+export function isAttachmentMime(value: string): boolean {
+  return value.length <= 127 && /^[a-z0-9][a-z0-9.+_-]*\/[a-z0-9][a-z0-9.+_-]*$/u.test(value);
+}
+
+export const MAX_MESSAGE_PROCESS_STEPS = 64;
+export const MAX_MESSAGE_PROCESS_TEXT_BYTES = 4096;
+
+export type MessageProcessStep =
+  | { kind: "reasoning" | "commentary"; text: string }
+  | { kind: "tool"; id: string; name: string; status: "running" | "succeeded" | "failed" | "unknown" };
 
 export interface Message {
   message_id: string;
   role: "user" | "assistant";
   text: string;
+  attachments?: Attachment[];
   status: MessageStatus;
   submission_id?: string;
   error?: string;
+  process?: MessageProcessStep[];
 }
 
 export interface Control {
@@ -59,6 +105,18 @@ export type ModelResult =
 export type ModelRequest =
   | { status: "pending" }
   | { status: "ok"; model_result: ModelResult }
+  | { status: "error" | "unknown"; error: string };
+
+export const reasoningEfforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
+export type ReasoningEffort = (typeof reasoningEfforts)[number];
+
+export function isReasoningEffort(value: unknown): value is ReasoningEffort {
+  return reasoningEfforts.some((effort) => effort === value);
+}
+
+export type ReasoningRequest =
+  | { status: "pending" }
+  | { status: "ok" }
   | { status: "error" | "unknown"; error: string };
 
 export interface TopicDetail {
@@ -119,11 +177,13 @@ interface CommandEnvelope {
 
 export type Command = CommandEnvelope & (
   | { kind: "create"; body: { request_id: string } }
-  | { kind: "submit"; body: { submission_id: string; text: string } }
+  | { kind: "submit"; body: { submission_id: string; text: string; attachments?: AttachmentReference[] } }
   | { kind: "interrupt"; body: { submission_id: string } }
   | { kind: "respond"; body: { control_id: string; response_id: string; answer: string } }
   | { kind: "model_options"; body: Record<string, never> }
   | { kind: "select_model"; body: ModelSelection & { confirm?: string } }
+  | { kind: "select_reasoning"; body: { effort: ReasoningEffort | null } }
+  | { kind: "summarize_title"; body: { input: string } }
   | { kind: "watch"; body: Record<string, never> }
 );
 
@@ -136,6 +196,7 @@ export interface CommandResult {
   error?: string;
   control_status?: Control["status"];
   model_result?: ModelResult;
+  title?: string;
 }
 
 interface EventEnvelope {
@@ -152,7 +213,7 @@ export interface DeliveryFrame {
 }
 
 export type ConnectorEvent =
-  | (EventEnvelope & { type: "message"; message_id: string; submission_id?: string; text: string; status: "streaming" | "final" })
+  | (EventEnvelope & Pick<Message, "message_id" | "submission_id" | "text" | "process"> & { type: "message"; status: "streaming" | "final" })
   | (EventEnvelope & { type: "submission"; submission_id: string; status: Exclude<MessageStatus, "accepted">; error?: string })
   | (EventEnvelope & Omit<Control, "answer" | "error"> & { type: "control" });
 

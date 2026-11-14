@@ -25,6 +25,12 @@ export function openStore(connectionString: string) {
           UNIQUE (profile_ref, session_id),
           created_at timestamptz NOT NULL DEFAULT now()
         );
+        ALTER TABLE topics ADD COLUMN IF NOT EXISTS reasoning_effort text;
+        ALTER TABLE topics ADD COLUMN IF NOT EXISTS reasoning_status text;
+        ALTER TABLE topics ADD COLUMN IF NOT EXISTS auto_title boolean NOT NULL DEFAULT false;
+        ALTER TABLE topics ADD COLUMN IF NOT EXISTS title_revision bigint NOT NULL DEFAULT 0;
+        ALTER TABLE topics ADD COLUMN IF NOT EXISTS archived boolean NOT NULL DEFAULT false;
+        ALTER TABLE topics ADD COLUMN IF NOT EXISTS updated_at timestamptz;
         CREATE TABLE IF NOT EXISTS messages (
           id uuid PRIMARY KEY,
           topic_id uuid NOT NULL REFERENCES topics(id),
@@ -37,6 +43,12 @@ export function openStore(connectionString: string) {
           topic_id uuid NOT NULL REFERENCES topics(id),
           message_id uuid NOT NULL REFERENCES messages(id),
           data jsonb NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS submission_attachments (
+          submission_id uuid NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
+          position smallint NOT NULL,
+          content bytea NOT NULL,
+          PRIMARY KEY (submission_id, position)
         );
         CREATE TABLE IF NOT EXISTS controls (
           id uuid PRIMARY KEY,
@@ -55,6 +67,16 @@ export function openStore(connectionString: string) {
           created_at timestamptz NOT NULL DEFAULT now()
         );
         CREATE INDEX IF NOT EXISTS commands_pending_idx ON commands (position) WHERE result IS NULL;
+        -- shortcut: 旧消息没有时间戳，按最近命令推算历史活动，有消息时间戳时再从消息回填。
+        UPDATE topics AS t SET updated_at = GREATEST(t.created_at, activity.last_command_at)
+        FROM (
+          SELECT old.id, max(c.created_at) AS last_command_at
+          FROM topics AS old LEFT JOIN commands AS c ON c.topic_id = old.id
+            AND c.payload->>'kind' IN ('submit', 'respond', 'select_model', 'select_reasoning', 'summarize_title')
+          WHERE old.updated_at IS NULL
+          GROUP BY old.id
+        ) AS activity WHERE t.id = activity.id AND t.updated_at IS NULL;
+        ALTER TABLE topics ALTER COLUMN updated_at SET DEFAULT now(), ALTER COLUMN updated_at SET NOT NULL;
         CREATE TABLE IF NOT EXISTS inbox (
           id uuid PRIMARY KEY,
           profile_ref text NOT NULL,

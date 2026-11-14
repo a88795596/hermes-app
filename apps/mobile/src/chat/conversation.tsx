@@ -2,11 +2,13 @@ import { randomUUID } from "expo-crypto";
 import { useEffect, useRef, useState, type ComponentRef } from "react";
 import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import Animated from "react-native-reanimated";
-import type { Control, Message, SessionStatus, Skill, Topic } from "@hermes-mobile/protocol";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { MAX_ATTACHMENTS, type Attachment, type AttachmentUpload, type Control, type Message, type MessageProcessStep, type SessionStatus, type Skill, type Topic } from "@hermes-mobile/protocol";
 import type { useWorkspace } from "../sync/use-workspace";
 import { motion, useReduceMotion } from "../ui/motion";
 import { Action, Card, EmptyState, Field, Icon, Notice, useTheme } from "../ui/theme";
-import { ComposerMenu, type ComposerCommand } from "./composer-menu";
+import { pickAttachments } from "./attachments";
+import { AttachmentMenu, ComposerMenu, ReasoningMenu, reasoningLabels, type ComposerCommand } from "./composer-menu";
 import { ModelPicker } from "./model-picker";
 
 const messageStatus: Record<Message["status"], string> = {
@@ -17,6 +19,13 @@ const messageStatus: Record<Message["status"], string> = {
   failed: "失败",
   unknown: "执行状态待确认",
   cancelled: "已停止",
+};
+
+const toolStatus: Record<Extract<MessageProcessStep, { kind: "tool" }>["status"], string> = {
+  running: "执行中…",
+  succeeded: "已完成",
+  failed: "失败",
+  unknown: "结果未确认",
 };
 
 const approvalLabels = new Map([
@@ -147,19 +156,34 @@ function ControlCard({
   );
 }
 
+function MessageAttachments({ items, tint }: { items: Attachment[]; tint: string }) {
+  const { styles } = useTheme();
+  return items.map((item, index) => (
+    <View key={index} style={chat.attachmentLine}>
+      <Icon name={item.mime.startsWith("image/") ? "photo" : "attachment"} size={15} color={tint} />
+      <Text numberOfLines={2} style={[styles.text, chat.attachmentName, { color: tint }]}>{item.name}</Text>
+    </View>
+  ));
+}
+
 export function Conversation({
-  id, topic, workspace, draft, onDraftChange, onNewTopic,
+  id, topic, newProfileId, workspace, draft, onDraftChange, attachments, onAttachmentsChange, onNewTopic, showProcess,
 }: {
   id: string;
   topic?: Topic;
+  newProfileId?: string;
   workspace: ReturnType<typeof useWorkspace>;
   draft: string;
+  attachments: AttachmentUpload[];
+  showProcess: boolean;
   onDraftChange: (value: string) => void;
+  onAttachmentsChange: (value: AttachmentUpload[]) => void;
   onNewTopic: () => void;
 }) {
   const { colors, styles } = useTheme();
   const reduced = useReduceMotion();
   const { width } = useWindowDimensions();
+  const { top: safeAreaTop } = useSafeAreaInsets();
   const messageWidth = Math.min(560, (width - transcriptGutter * 2) * 0.86);
   const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
   const pinned = useRef(true);
@@ -167,10 +191,13 @@ export function Conversation({
   const [stopping, setStopping] = useState(false);
   const [draftFocused, setDraftFocused] = useState(false);
   const [sendFocused, setSendFocused] = useState(false);
-  const [menu, setMenu] = useState<"commands" | "skills">();
+  const [menu, setMenu] = useState<"commands" | "skills" | "reasoning" | "attachments">();
+  const [picking, setPicking] = useState(false);
+  const choosingAttachment = useRef(false);
   const [error, setError] = useState<string>();
   const [modelPicker, setModelPicker] = useState(false);
   const [commandNotice, setCommandNotice] = useState<string>();
+  const [openingSkills, setOpeningSkills] = useState(false);
   const queryPending = useRef(false);
   const interruptId = useRef<string>(undefined);
   const messages = workspace.detail?.messages ?? [];
@@ -191,14 +218,28 @@ export function Conversation({
   const pending = workspace.pending
     .filter((item) => item.topic_id === id && !messages.some((message) => message.submission_id === item.submission_id))
     .sort((a, b) => a.created_at - b.created_at);
-  const canSend = topic?.status === "ready" && workspace.ready && !sending;
+  const canWrite = topic?.status === "ready" || (!!newProfileId && topic?.status !== "error");
+  const canSend = canWrite && workspace.ready && !sending && !picking;
   const canControl = workspace.network === "online" && workspace.connector_online === true;
-  const isModelCommand = draft.trim().toLowerCase() === "/model";
-  const sendDisabled = !canSend || !draft.trim() || (isModelCommand && !canControl);
+  const isModelCommand = !attachments.length && draft.trim().toLowerCase() === "/model";
   const activeSubmission = messages.find((message) => message.role === "user" && message.status === "streaming")?.submission_id;
   const running = Boolean(activeSubmission);
-  const modelBusy = pending.length > 0 || messages.some((message) => message.role === "user" &&
+  const topicBusy = sending || pending.some((item) => !item.error) || messages.some((message) => message.role === "user" &&
     ["accepted", "queued", "streaming"].includes(message.status));
+  const reasoning = topic?.reasoning_effort ?? null;
+  const reasoningStatus = topic?.reasoning_status;
+  const reasoningLegacy = canControl && workspace.reasoning_supported !== true;
+  const reasoningBlocked = reasoningLegacy && (reasoningStatus !== undefined || reasoning !== null);
+  const attachmentsBlocked = canControl && workspace.attachments_supported !== true;
+  const sendDisabled = !canSend || (!draft.trim() && !attachments.length) || (!!attachments.length && attachmentsBlocked)
+    || (isModelCommand ? !canControl : reasoningBlocked);
+  const attachmentDisabled = !canWrite || picking || sending || attachments.length >= MAX_ATTACHMENTS;
+  const reasoningUnavailable = !canControl ? "重新连接 Hermes 后即可切换思考强度。"
+    : reasoningLegacy ? "更新服务端和连接器后即可切换思考强度。"
+    : topicBusy ? "请等待当前消息处理完成，再切换思考强度。" : undefined;
+  const reasoningLabel = reasoningBlocked ? "不可用"
+    : reasoningStatus === "pending" ? "切换中" : reasoningStatus === "unknown" ? "待确认"
+    : reasoning === null ? "跟随配置档案" : reasoningLabels[reasoning];
 
   function keepLatestVisible() {
     if (pinned.current) scroll.current?.scrollToEnd({ animated: false });
@@ -208,11 +249,29 @@ export function Conversation({
     interruptId.current = undefined;
   }, [activeSubmission]);
 
+  async function addAttachments(kind: "image" | "file") {
+    if (choosingAttachment.current) return;
+    choosingAttachment.current = true;
+    setError(undefined);
+    setPicking(true);
+    try {
+      // Keep the sheet mounted while iOS presents its system picker.
+      const selected = await pickAttachments(kind, attachments);
+      setMenu(undefined);
+      if (selected.length) onAttachmentsChange([...attachments, ...selected]);
+    } catch (failure) {
+      setMenu(undefined);
+      setError(failure instanceof Error ? failure.message : "无法读取所选附件。");
+    } finally {
+      choosingAttachment.current = false;
+      setPicking(false);
+    }
+  }
+
   async function send() {
     const text = draft.trim();
-    if (!text || !canSend) return;
+    if (sendDisabled) return;
     if (isModelCommand) {
-      if (!canControl) return;
       Keyboard.dismiss();
       setError(undefined);
       setCommandNotice(undefined);
@@ -223,8 +282,11 @@ export function Conversation({
     setSending(true);
     setError(undefined);
     try {
-      await workspace.enqueue({ submission_id: randomUUID(), topic_id: id, text, created_at: Date.now() });
+      await workspace.enqueue({ submission_id: randomUUID(), topic_id: id, text, created_at: Date.now(),
+        ...(attachments.length && { attachments }),
+        ...(newProfileId && { profile_id: newProfileId }) });
       onDraftChange("");
+      if (attachments.length) onAttachmentsChange([]);
       setCommandNotice(undefined);
       pinned.current = true;
       scroll.current?.scrollToEnd({ animated: true });
@@ -262,7 +324,7 @@ export function Conversation({
 
   async function runCommand(command: ComposerCommand) {
     if (command === "skills") {
-      setMenu("skills");
+      await openSkills();
       return;
     }
     setMenu(undefined);
@@ -277,9 +339,11 @@ export function Conversation({
     } else if (command === "new") {
       onNewTopic();
     } else {
+      if (!canControl) return;
       queryPending.current = true;
       setCommandNotice(command === "version" ? "正在查询 Hermes 版本…" : "正在查询会话状态…");
       try {
+        if (newProfileId && topic?.status !== "ready") await workspace.prepareTopic(id, newProfileId);
         if (command === "version") {
           setCommandNotice(`Hermes ${await workspace.call<string>(`/topics/${id}/version`)}`);
         } else {
@@ -297,16 +361,42 @@ export function Conversation({
     }
   }
 
+  async function openSkills() {
+    if (openingSkills) return;
+    setOpeningSkills(true);
+    setMenu(undefined);
+    setError(undefined);
+    try {
+      if (newProfileId && topic?.status !== "ready") await workspace.prepareTopic(id, newProfileId);
+      setMenu("skills");
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "无法加载技能。");
+    } finally {
+      setOpeningSkills(false);
+    }
+  }
+
   function selectSkill(skill: Skill) {
     setMenu(undefined);
     onDraftChange(`请先用 skill_view 加载技能 ${JSON.stringify(skill.name)}，再处理以下任务。\n\n${draft}`);
   }
 
   return (
-    <KeyboardAvoidingView style={styles.frame} behavior={Platform.OS === "web" ? undefined : "padding"}>
-      {menu && (
+    <KeyboardAvoidingView style={styles.frame} behavior={Platform.OS === "web" ? undefined : "padding"}
+      keyboardVerticalOffset={safeAreaTop}>
+      {menu === "attachments" ? (
+        <AttachmentMenu busy={picking} onClose={() => setMenu(undefined)} onPick={(kind) => void addAttachments(kind)} />
+      ) : menu === "reasoning" ? (
+        <ReasoningMenu effort={reasoningStatus || reasoningBlocked ? undefined : reasoning}
+          status={reasoningStatus} unavailable={reasoningUnavailable}
+          onClose={() => setMenu(undefined)}
+          onRequest={async (requestId, effort, signal) => {
+            if (newProfileId && topic?.status !== "ready") await workspace.prepareTopic(id, newProfileId, signal);
+            return workspace.requestReasoning(id, requestId, effort, signal);
+          }} />
+      ) : menu && (
         <ComposerMenu kind={menu} id={id} call={workspace.call}
-          profile={workspace.profiles.find((item) => item.profile_id === topic?.profile_id)?.label}
+          profile={workspace.profiles.find((item) => item.profile_id === (topic?.profile_id ?? newProfileId))?.label}
           connected={canControl}
           canStop={running && canControl && !stopping}
           onClose={() => setMenu(undefined)}
@@ -341,31 +431,50 @@ export function Conversation({
           </View>
         )}
         {topic?.status === "error" && <Notice>{topic.error ?? "Hermes 无法创建此会话。"}</Notice>}
-        {topic?.status === "ready" && messages.length === 0 && pending.length === 0 && controls.length === 0 && (
+        {(topic?.status === "ready" || (!topic && newProfileId)) && messages.length === 0 && pending.length === 0 && controls.length === 0 && (
           <View style={chat.empty}>
             <EmptyState icon="chat" title="开始对话" description="给 Hermes 发送一条消息。" />
           </View>
         )}
         {messages.map((message, index) => {
           const outgoing = message.role === "user";
+          const process = !outgoing && showProcess ? message.process : undefined;
+          if (!outgoing && !message.text && !process?.length && message.status === "final") return null;
           const startGroup = messages[index - 1]?.role !== message.role;
           const attachedControls = outgoing && message.submission_id ? historyControls.get(message.submission_id) : undefined;
           return (
             <View key={message.message_id} style={chat.messageGroup}>
               <View style={[chat.message, { maxWidth: messageWidth }, outgoing && chat.outgoing, startGroup && chat.startGroup]}>
-                {!!message.text && (
+                {!!process?.length && (
+                  <View style={[chat.process, { borderStartColor: colors.edge }]}>
+                    {process.map((step, stepIndex) => {
+                      if (step.kind === "tool") {
+                        const status = step.status === "running" && message.status === "final" ? "unknown" : step.status;
+                        return <Text key={stepIndex} style={styles.muted}>{step.name} · {toolStatus[status]}</Text>;
+                      }
+                      return (
+                        <Text key={stepIndex} selectable style={styles.muted}>
+                          {step.kind === "reasoning" && <Text style={styles.label}>思考{"\n"}</Text>}
+                          {step.text}
+                        </Text>
+                      );
+                    })}
+                  </View>
+                )}
+                {(!!message.text || !!message.attachments?.length) && (
                   <View style={[
                     chat.bubble,
                     outgoing ? chat.outgoingBubble : chat.incomingBubble,
                     { backgroundColor: outgoing ? colors.accentFill : colors.secondary },
                   ]}>
-                    <Text
+                    {!!message.attachments?.length && <MessageAttachments items={message.attachments} tint={colors.onAccent} />}
+                    {!!message.text && <Text
                       selectable
                       accessibilityLabel={`${outgoing ? "你" : "Hermes"}：${message.text}`}
                       style={[styles.text, chat.messageText, outgoing && { color: colors.onAccent }]}
                     >
                       {message.text}
-                    </Text>
+                    </Text>}
                   </View>
                 )}
                 {messageStatus[message.status] ? (
@@ -384,9 +493,10 @@ export function Conversation({
         {pending.map((item) => (
           <Animated.View key={item.submission_id} style={[chat.message, chat.outgoing, { maxWidth: messageWidth }, !reduced && motion.reveal]}>
             <View style={[chat.bubble, chat.outgoingBubble, { backgroundColor: colors.tint }]}>
-              <Text selectable accessibilityLabel={`你：${item.text}`} style={[styles.text, chat.messageText]}>
+              {!!item.attachments?.length && <MessageAttachments items={item.attachments} tint={colors.foreground} />}
+              {!!item.text && <Text selectable accessibilityLabel={`你：${item.text}`} style={[styles.text, chat.messageText]}>
                 {item.text}
-              </Text>
+              </Text>}
             </View>
             {item.error ? (
               <>
@@ -399,7 +509,9 @@ export function Conversation({
                   })}
                 />
               </>
-            ) : <Text style={[styles.caption, chat.outgoingStatus]}>等待发送</Text>}
+            ) : <Text style={[styles.caption, chat.outgoingStatus]}>
+              {item.attachments?.length && attachmentsBlocked ? "更新连接器后发送" : "等待发送"}
+            </Text>}
           </Animated.View>
         ))}
         {trailingControls.map((control) => (
@@ -412,21 +524,51 @@ export function Conversation({
         {error && <Notice>{error}</Notice>}
         {commandNotice && <Text accessibilityLiveRegion="polite" style={styles.muted}>{commandNotice}</Text>}
         {isModelCommand && !canControl && <Text style={styles.muted}>连接 Hermes 后即可选择模型。</Text>}
-        <View style={styles.row}>
-          <Action title="命令" disabled={topic?.status !== "ready"} onPress={() => { Keyboard.dismiss(); setMenu("commands"); }} />
-          <Action title="技能" disabled={topic?.status !== "ready"} onPress={() => { Keyboard.dismiss(); setMenu("skills"); }} />
+        {reasoningBlocked && <Text accessibilityLiveRegion="polite" style={styles.muted}>更新 Hermes 连接器后可继续发送。</Text>}
+        {!!attachments.length && attachmentsBlocked && <Notice>更新服务端和连接器后可发送附件。</Notice>}
+        <View style={[styles.row, chat.toolbar]}>
+          <Action compact title="命令" disabled={!canWrite} onPress={() => { Keyboard.dismiss(); setMenu("commands"); }} />
+          <Action compact title={openingSkills ? "正在加载技能…" : "技能"}
+            disabled={!canWrite || openingSkills || (topic?.status !== "ready" && !canControl)}
+            onPress={() => { Keyboard.dismiss(); void openSkills(); }} />
+          <Action compact disclosure title={reasoningLabel === "跟随配置档案" ? "思考强度" : `思考 · ${reasoningLabel}`}
+            accessibilityLabel={`思考强度：${reasoningLabel}`} selected={reasoning !== null && !reasoningLegacy} disabled={!canWrite}
+            onPress={() => { Keyboard.dismiss(); setMenu("reasoning"); }} />
           {running && (
-            <Action title={stopping ? "正在请求停止…" : "停止回复"} icon="stop"
-              disabled={!canControl || stopping} onPress={() => void stop()} />
+            <Action compact title={stopping ? "停止中…" : "停止回复"} icon="stop"
+              accessibilityLabel={stopping ? "正在请求停止回复" : undefined} disabled={!canControl || stopping} onPress={() => void stop()} />
           )}
         </View>
+        {!!attachments.length && (
+          <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={chat.attachmentTray}>
+            {attachments.map((item, index) => (
+              <View key={index} style={[chat.attachmentChip, { backgroundColor: colors.tint, borderColor: colors.edge }]}>
+                <Icon name={item.mime.startsWith("image/") ? "photo" : "attachment"} size={16} color={colors.accent} />
+                <Text numberOfLines={1} style={[styles.text, chat.attachmentName, chat.chipName]}>{item.name}</Text>
+                <Pressable accessibilityRole="button" accessibilityLabel={`移除附件 ${item.name}`} disabled={sending || picking}
+                  onPress={() => {
+                    onAttachmentsChange(attachments.filter((_item, itemIndex) => itemIndex !== index));
+                    setError(undefined);
+                  }} style={({ pressed }) => [chat.iconButton, pressed && styles.faded]}>
+                  <Icon name="close" size={14} color={colors.muted} />
+                </Pressable>
+              </View>
+            ))}
+          </ScrollView>
+        )}
         <View style={[chat.composerRow, { backgroundColor: colors.field, borderColor: draftFocused ? colors.accent : colors.edge }]}>
+          <Pressable accessibilityRole="button" accessibilityLabel="添加附件"
+            accessibilityState={{ disabled: attachmentDisabled, busy: picking, expanded: menu === "attachments" }}
+            disabled={attachmentDisabled} onPress={() => { Keyboard.dismiss(); setMenu("attachments"); }}
+            style={({ pressed }) => [chat.iconButton, (pressed || attachmentDisabled) && styles.faded]}>
+            {picking ? <ActivityIndicator size="small" color={colors.accent} /> : <Icon name="attachment" size={20} color={colors.accent} />}
+          </Pressable>
           <Field
             accessibilityLabel="消息"
-            placeholder="发消息给 Hermes"
+            placeholder={attachments.length ? "添加描述…" : "发消息给 Hermes"}
             style={chat.draft}
             multiline
-            editable={topic?.status === "ready" && !sending}
+            editable={canWrite && !sending}
             value={draft}
             onChangeText={onDraftChange}
             onFocus={() => setDraftFocused(true)}
@@ -458,11 +600,14 @@ export function Conversation({
       </View>
       {modelPicker && (
         <ModelPicker
-          enabled={canControl && !modelBusy}
-          unavailable={modelBusy ? "请等待当前回复结束，再切换模型。"
+          enabled={canControl && !topicBusy}
+          unavailable={topicBusy ? "请等待当前回复结束，再切换模型。"
             : !canControl ? "重新连接 Hermes 后即可选择模型。" : undefined}
           onClose={() => setModelPicker(false)}
-          onRequest={(requestId, selection, signal) => workspace.requestModel(id, requestId, selection, signal)}
+          onRequest={async (requestId, selection, signal) => {
+            if (newProfileId && topic?.status !== "ready") await workspace.prepareTopic(id, newProfileId, signal);
+            return workspace.requestModel(id, requestId, selection, signal);
+          }}
           onSelected={({ selection, type }) => {
             setModelPicker(false);
             setCommandNotice(type === "deferred" ? `模型切换已排队 · ${selection.model}` : `已选择模型 · ${selection.model}`);
@@ -479,14 +624,22 @@ const chat = StyleSheet.create({
   progress: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, marginVertical: 12 },
   message: { alignSelf: "flex-start", alignItems: "flex-start", gap: 3 },
   messageGroup: { gap: 6 },
+  process: { borderStartWidth: 1, paddingStart: 10, paddingVertical: 4, gap: 6, alignSelf: "stretch" },
   outgoing: { alignSelf: "flex-end", alignItems: "flex-end" },
   startGroup: { marginTop: 5 },
-  bubble: { borderRadius: 16, paddingHorizontal: 11, paddingVertical: 7 },
+  bubble: { borderRadius: 16, paddingHorizontal: 11, paddingVertical: 7, gap: 4 },
   incomingBubble: { borderBottomStartRadius: 5 },
   outgoingBubble: { borderBottomEndRadius: 5 },
   messageText: { fontSize: 14, lineHeight: 20 },
   outgoingStatus: { textAlign: "right", marginEnd: 3 },
-  composer: { paddingHorizontal: 10, paddingVertical: 6, borderTopWidth: StyleSheet.hairlineWidth, gap: 6 },
+  composer: { paddingHorizontal: 10, paddingBottom: 6, borderTopWidth: StyleSheet.hairlineWidth, gap: 2 },
+  toolbar: { gap: 8 },
+  attachmentLine: { flexDirection: "row", alignItems: "center", gap: 6 },
+  attachmentName: { flexShrink: 1, fontSize: 13 },
+  attachmentTray: { gap: 6, paddingVertical: 3 },
+  attachmentChip: { flexDirection: "row", gap: 6, alignItems: "center", paddingStart: 10, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth },
+  chipName: { maxWidth: 140 },
+  iconButton: { minWidth: 44, height: 44, alignItems: "center", justifyContent: "center" },
   composerRow: {
     flexDirection: "row",
     alignItems: "flex-end",

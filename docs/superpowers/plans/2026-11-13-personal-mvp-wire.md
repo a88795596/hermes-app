@@ -14,13 +14,16 @@
 | DELETE /auth/session | 撤销自己的凭据，204 |
 | GET /profiles | `Profile[]`，通过 BFF 的 `HERMES_PROFILES` 配置。值为逗号分隔的真实配置档案名称，默认为 `default` |
 | GET /status | `{connector_online:boolean}` |
-| GET /topics | `Topic[]` |
-| POST /topics | `{request_id,profile_id,title}` → `Topic`，幂等 202 |
+| GET /topics | `Topic[]` 按 `updated_at` 倒序。默认仅返回未归档话题，`?include_archived=true` 返回全部。 |
+| POST /topics | `{request_id,profile_id,title?}` → `Topic`，幂等 202。省略标题时，首条发送的消息成为默认标题。 |
 | GET /topics/:id | `{topic:Topic,messages:Message[],controls:Control[]}` |
-| POST /topics/:id/submissions | `{submission_id,text}` → `Message` 用户气泡，幂等 202 |
+| PUT /topics/:id/archive | `{archived:boolean}` → `Topic`。重复设置同一状态安全，保留原会话和消息。 |
+| POST /topics/:id/submissions | `{submission_id,text,attachments?:{name,mime,size,content_base64}[]}` → `Message` 用户气泡，幂等 202。有附件时可传空正文。 |
 | POST /topics/:id/interrupt | `{request_id,submission_id}` → `{status:"accepted"}`，幂等 202 |
 | POST /topics/:id/model-requests | `{request_id}` 请求目录，`{request_id,provider,model,confirm?}` 选择模型。幂等 202 |
 | GET /topics/:id/model-requests/:requestId | 查询模型请求的 `pending`、`ok`、`error` 或 `unknown` 状态。成功时返回目录、选择结果或 Hermes 确认提示 |
+| POST /topics/:id/reasoning-requests | `{request_id,effort}` 切换思考强度；`effort:null` 恢复默认。幂等 202 |
+| GET /topics/:id/reasoning-requests/:requestId | 查询切换的 `pending`、`ok`、`error` 或 `unknown` 状态 |
 | POST /controls/:id/responses | `{response_id,answer}` → `{status:"responding"}`，幂等 202 |
 | GET /inbox | `InboxItem[]` |
 | PUT/DELETE /devices/current/push-registration | PUT 提交 `{token}` 注册 Expo 推送令牌，DELETE 移除，均返回 204 |
@@ -29,15 +32,21 @@
 
 话题 `Topic` 的结构为 `{topic_id,profile_id,title,status:"creating"|"ready"|"error",error?:string}`。配置档案 `Profile` 的结构为 `{profile_id,label}`。消息 `Message` 的结构为 `{message_id,role:"user"|"assistant",text,status:"accepted"|"queued"|"streaming"|"final"|"failed"|"unknown"|"cancelled",submission_id?:string,error?:string}`。交互 `Control` 的结构为 `{control_id,kind:"approval"|"clarify",prompt,choices:string[],status:"pending"|"responding"|"closed"|"unknown",submission_id?,multi_select?,answer?,error?}`。收件箱条目 `InboxItem` 的结构为 `{inbox_id,text,created_at}`。
 
+话题包含 ISO 8601 格式的 `created_at`、`updated_at` 与布尔值 `archived`，旧缓存可能缺少这些字段。归档状态的变化不计入 `updated_at`。话题可附带已确认的 `reasoning_effort`（缺省时使用 Hermes 的默认设置），或 `reasoning_status:"pending"|"unknown"`。
+
+`GET /status` 同时返回当前连接器是否声明 `reasoning_supported` 和 `attachments_supported`。消息的 `attachments` 仅含 `{name,mime,size}` 元数据。
+
 ## BFF 与连接器
 
 连接器发起 WebSocket `/internal/connector/v1/events`，握手使用 `Authorization: Bearer <CONNECTOR_TOKEN>`。云端发送的命令结构为 `{type:"command",command_id,topic_id,profile_ref,session_id?,kind,body}`，其中 `session_id` 是绑定的 Hermes 会话 ID。所有使用已绑定会话的命令均须传入该字段。
 
 - `create` 的请求体为 `{request_id}`。
-- `submit` 的请求体为 `{submission_id,text}`。
+- `submit` 的请求体为 `{submission_id,text,attachments?:{name,mime,size,sha256}[]}`。含附件的命令只发给声明 `X-Hermes-Mobile-Attachments: 1` 的连接器。连接器通过机器令牌调用 `GET /internal/connector/v1/submissions/:id/attachments/:position`（序号从 1 开始）获取原始字节并校验摘要。BFF 保存连接器命令结果后清理暂存字节。
 - `interrupt` 的请求体为 `{submission_id}`。连接器核对该提交仍在运行后，按当前已验证的活动代次调用。
 - `respond` 的请求体为 `{control_id,response_id,answer}`。澄清支持文本、复选标签数组的 JSON 字符串和空字符串跳过。连接器按上游请求类型转换。
 - `model_options` 的请求体为 `{}`。`select_model` 的请求体为 `{provider,model,confirm?}`。两者的成功回执携带 `model_result`。
+- `select_reasoning` 的请求体为 `{effort}`，仅发给声明 `X-Hermes-Mobile-Reasoning: 1` 的连接器。
+- `summarize_title` 的请求体为 `{input}`，由 BFF 在自动命名的会话收到成功终态后排队。连接器握手携带 `X-Hermes-Mobile-Topic-Title: 1` 时接收该命令，成功回执携带 `title`。
 - `watch` 的请求体为 `{}`，使用独立的临时 `command_id`。重连时同步每个已绑定话题。连接器先登记作用域，再恢复上游。BFF 忽略 `watch` 的结果，且不将临时命令写入命令表。
 
 连接器返回 `{type:"command_result",command_id,status:"ok"|"error"|"unknown",session_id?,admission_id?,error?,control_status?}`。创建成功带 `session_id`，提交已接纳带 `admission_id`，确认交互关闭时带 `control_status`。BFF 持久化普通写命令的结果后，返回 `{type:"ack",id:command_id}`。重复命令只返回既有结果或 `unknown`，并沿用原 ID。无法确认交互响应时使用 `unknown`。连接关闭后，BFF 重派仍未结的原命令。

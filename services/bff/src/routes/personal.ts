@@ -1,12 +1,13 @@
 import { randomBytes } from "node:crypto";
 import type { InboxItem, MobileNotice, TopicQuery } from "@hermes-mobile/protocol";
-import { isManagementOperation, MAX_CONTROL_ANSWER_BYTES } from "@hermes-mobile/protocol";
+import { isManagementOperation, isReasoningEffort, MAX_ATTACHMENT_TOTAL_BYTES, MAX_CONTROL_ANSWER_BYTES, MAX_TOPIC_TITLE_BYTES } from "@hermes-mobile/protocol";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
+import { submissionAttachments } from "../attachments.js";
 import { deviceAuth, matchesToken } from "../auth.js";
 import { registerBridge } from "../bridge.js";
-import { createTopic, findProfile, interrupt, requestModel, respond, submit } from "../mutations.js";
-import { detail, modelRequest, profiles, topicRow, topics } from "../projections.js";
+import { createTopic, findProfile, interrupt, requestModel, requestReasoning, respond, setTopicArchived, submit } from "../mutations.js";
+import { detail, modelRequest, profiles, reasoningRequest, topicRow, topics } from "../projections.js";
 import { registerPushRoutes } from "../push.js";
 import type { Store } from "../store.js";
 import { ApiError, invalid, record, string, uuid } from "../validation.js";
@@ -44,7 +45,8 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
     if (!deviceId) throw new ApiError(401, "UNAUTHORIZED", "设备凭证无效。");
     return deviceId;
   };
-  const requireDevice = { preValidation: async (request: FastifyRequest) => { await authenticate(request); } };
+  const verifyDevice = async (request: FastifyRequest) => { await authenticate(request); };
+  const requireDevice = { preValidation: verifyDevice };
   const changed = (topicId?: string) => {
     const notice: MobileNotice = { type: "changed", ...(topicId ? { topic_id: topicId } : {}) };
     const raw = JSON.stringify(notice);
@@ -62,6 +64,9 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
       return reply.code(error.statusCode).send({ error: { code: error.code, message: error.message, retryable: false }, request_id: request.id });
     }
     const status = error instanceof Error && "statusCode" in error ? Number(error.statusCode) : 500;
+    if (status === 413) return reply.code(413).send({ error: {
+      code: "BODY_TOO_LARGE", message: "发送内容超出服务器大小限制。", retryable: false,
+    }, request_id: request.id });
     const rejected = status >= 400 && status < 500;
     if (!rejected) api.log.error({ request_id: request.id }, "处理请求失败");
     return reply.code(rejected ? status : 500).send({ error: {
@@ -96,9 +101,25 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
     const { input } = record(request.body ?? {}, ["input"]);
     return success(request, await bridge.manage({ profile_ref, operation, input: input === undefined ? {} : record(input) }));
   });
-  api.get(`${prefix}/status`, requireDevice, (request) => success(request, { connector_online: bridge.online() }));
-  api.get(`${prefix}/topics`, requireDevice, async (request) => success(request, await topics(store, refs)));
+  api.get(`${prefix}/status`, requireDevice, (request) => success(request, {
+    connector_online: bridge.online(), reasoning_supported: bridge.reasoningSupported(), attachments_supported: bridge.attachmentsSupported(),
+  }));
+  api.get(`${prefix}/topics`, requireDevice, async (request) => {
+    const { include_archived } = record(request.query);
+    if (include_archived !== undefined && include_archived !== "true" && include_archived !== "false") {
+      invalid("include_archived 必须为 true 或 false。");
+    }
+    return success(request, await topics(store, refs, include_archived === "true"));
+  });
   api.get(`${prefix}/topics/:id`, requireDevice, async (request) => success(request, await detail(store, pathId(request), refs)));
+  api.put(`${prefix}/topics/:id/archive`, requireDevice, async (request) => {
+    const id = pathId(request);
+    const { archived } = record(request.body, ["archived"]);
+    if (typeof archived !== "boolean") invalid("必须指定是否归档。");
+    const topic = await store.transaction((db) => setTopicArchived(db, refs, id, archived));
+    changed();
+    return success(request, topic);
+  });
   for (const kind of ["skills", "status", "version"] satisfies TopicQuery["kind"][]) {
     api.get(`${prefix}/topics/:id/${kind}`, requireDevice, async (request) => {
       const topic = await topicRow(store, pathId(request), refs);
@@ -124,19 +145,23 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
     const body = record(request.body, ["request_id", "profile_id", "title"]);
     const id = uuid(body.request_id, "请求 ID");
     const profile = findProfile(refs, uuid(body.profile_id, "配置档案 ID"));
-    const title = string(body.title, "话题标题", 256);
+    const title = body.title === undefined ? undefined : string(body.title, "话题标题", MAX_TOPIC_TITLE_BYTES);
     const topic = await store.transaction((db) => createTopic(db, id, profile, title));
     changed(topic.topic_id);
     bridge.pump();
     return accepted(request, reply, topic);
   });
 
-  api.post(`${prefix}/topics/:id/submissions`, requireDevice, async (request, reply) => {
+  api.post(`${prefix}/topics/:id/submissions`, {
+    onRequest: verifyDevice, bodyLimit: Math.ceil(MAX_ATTACHMENT_TOTAL_BYTES / 3) * 4 + 512 * 1024,
+  }, async (request, reply) => {
     const topicId = pathId(request);
-    const body = record(request.body, ["submission_id", "text"]);
+    const body = record(request.body, ["submission_id", "text", "attachments"]);
     const id = uuid(body.submission_id, "提交 ID");
-    const text = string(body.text, "消息正文", 64 * 1024);
-    const message = await store.transaction((db) => submit(db, refs, topicId, id, text));
+    const attachments = submissionAttachments(body.attachments);
+    const text = string(body.text, "消息正文", 64 * 1024, attachments.length > 0);
+    const supported = !bridge.online() || bridge.attachmentsSupported();
+    const message = await store.transaction((db) => submit(db, refs, topicId, id, text, attachments, supported));
     changed(topicId);
     bridge.pump();
     return accepted(request, reply, message);
@@ -170,6 +195,23 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
   api.get(`${prefix}/topics/:id/model-requests/:requestId`, requireDevice, async (request) => {
     const requestId = uuid(record(request.params).requestId, "请求 ID");
     return success(request, await modelRequest(store, refs, pathId(request), requestId));
+  });
+
+  api.post(`${prefix}/topics/:id/reasoning-requests`, requireDevice, async (request, reply) => {
+    const topicId = pathId(request);
+    const { request_id, effort } = record(request.body, ["request_id", "effort"]);
+    const id = uuid(request_id, "请求 ID");
+    if (effort !== null && !isReasoningEffort(effort)) invalid("思考强度无效。");
+    const result = await store.transaction((db) => requestReasoning(db, refs, topicId, id, effort,
+      !bridge.online() ? "offline" : bridge.reasoningSupported() ? "ready" : "legacy"));
+    changed(topicId);
+    bridge.pump();
+    return accepted(request, reply, result);
+  });
+
+  api.get(`${prefix}/topics/:id/reasoning-requests/:requestId`, requireDevice, async (request) => {
+    const requestId = uuid(record(request.params).requestId, "请求 ID");
+    return success(request, await reasoningRequest(store, refs, pathId(request), requestId));
   });
 
   api.post(`${prefix}/controls/:id/responses`, requireDevice, async (request, reply) => {
