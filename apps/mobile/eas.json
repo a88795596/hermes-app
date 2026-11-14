@@ -6,7 +6,7 @@
   "build": {
     "preview": {
       "distribution": "internal",
-      "node": "24.9.0",
+      "node": "24.22.1",
       "pnpm": "10.14.0",
       "ios": {
         "autoIncrement": true

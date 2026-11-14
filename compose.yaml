@@ -26,6 +26,28 @@ services:
     volumes:
       - connector-data:/var/lib/hermes-mobile
 
+  updates:
+    profiles: [updates]
+    build:
+      context: .
+      dockerfile: services/updates/Dockerfile
+    init: true
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      HOST: 127.0.0.1
+      PORT: ${HOT_UPDATER_PORT:-4318}
+      HOT_UPDATER_DATABASE_URL: postgresql://hermes_mobile@127.0.0.1:${POSTGRES_PORT:-55433}/hermes_mobile
+      PGPASSWORD: ${POSTGRES_PASSWORD:?请设置 POSTGRES_PASSWORD}
+      HOT_UPDATER_ADMIN_TOKEN: ${HOT_UPDATER_ADMIN_TOKEN:-}
+      HOT_UPDATER_BASE_URL: ${HOT_UPDATER_BASE_URL:-}
+      HOT_UPDATER_DATA_DIR: /var/lib/hermes-updates
+    volumes:
+      - updates-data:/var/lib/hermes-updates
+
   db:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -47,3 +69,4 @@ services:
 volumes:
   connector-data:
   postgres-data:
+  updates-data:

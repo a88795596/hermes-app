@@ -1,0 +1,844 @@
+{
+  "ios": {
+    "engine": "hot-updater/interface@1",
+    "hash": "3819a2e940e974310cbad7ae5a6cac782d8a19fb95d1a404d37b1feb3eb41881",
+    "sources": [
+      {
+        "type": "contents",
+        "id": "dependency:@expo/dom-webview",
+        "contents": "@expo/dom-webview@58.0.2",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "676d724f3edb56e9621dddf9562882406efc13c1cccf8287997516d7af6179bc"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:@expo/log-box",
+        "contents": "@expo/log-box@58.0.15",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "1c9d398e481d4126f6eeab5e1ce23be5edbe9ae070513ee3a8a860ff71e0d047"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:@expo/ui",
+        "contents": "@expo/ui@58.0.28",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "bdd84c6a73c0e31abf353cdbafadf539afcba3c2b08067be948445e2a2996e31"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:@hot-updater/react-native",
+        "contents": "@hot-updater/react-native@1.1.15",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "5752cadffc70847af3c2f40d443895b97ceb49776fb8aa8bad175164d8545d3d"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:@react-native-masked-view/masked-view",
+        "contents": "@react-native-masked-view/masked-view@0.3.2",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "7e13cc992f97d1911e24fb215d06cf0feb6e87c32567872369ed43b66a2c353c"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo",
+        "contents": "expo@58.0.25",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "af2a21c433288526fbb3b526dfc4aa830f07db0b18df76d2e5e60bdd6afc83a5"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-application",
+        "contents": "expo-application@58.1.2",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "152cdb08f00fa6cb69598e725c1403366d353753e4e92ead763001e6cde68f60"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-asset",
+        "contents": "expo-asset@58.0.21",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "d6b71c6875217143a35f689d18328bdc63ba0fd864e87a9b2306a7649de1f911"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-constants",
+        "contents": "expo-constants@58.0.16",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "eb965784de71bb0b86b290920909371dfa0beb1b904e60ad75d93417377bb31f"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-crypto",
+        "contents": "expo-crypto@58.0.8",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "da94a55dbcfcb27213abaf1443c30832678f79253825927ce4823a0e63af264b"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-dev-client",
+        "contents": "expo-dev-client@58.0.20",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "c20f480e2524db25c0e22c3953e112a27c922990a6c016465418a3222f07cda9"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-dev-launcher",
+        "contents": "expo-dev-launcher@58.0.20",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "ba35a09a6ab0750092ab95b4455cd63d121a6b0d2dd5fca0f020f4970393db84"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-dev-menu",
+        "contents": "expo-dev-menu@58.0.13",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "a7a24186194d083691a629cb34a033e9ed8b16860571a2b2d1265c3066b0a679"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-dev-menu-interface",
+        "contents": "expo-dev-menu-interface@58.0.2",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "15964e71acd646c89af9b9f1703d5c7b7e6ed1f2b94853ba05e25f15dc71bc19"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-device",
+        "contents": "expo-device@58.0.5",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "a4b917359b97f16464179c7a1c3fb15c76695260a63afe4fc63c7e57f425eaf0"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-document-picker",
+        "contents": "expo-document-picker@58.0.5",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "d8bb83c559b9f219960c43f549a8b4002a78ac990390d79279505b35dca8a1c1"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-file-system",
+        "contents": "expo-file-system@58.0.13",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "93744b553262fe9c74ec06375dc2e6e6bfe0d47c6b8c22c9173e1d6eeb4852d4"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-font",
+        "contents": "expo-font@58.0.12",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "e0faf37f712fcaf7f63edb614d0a5ff8e26f4d0d2827089b4df43a81e49b3d57"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-glass-effect",
+        "contents": "expo-glass-effect@58.0.5",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "ae981a12f91a2bfb9b874ca79fb95505f887ee579b907f8aaa1e01dd69a0803e"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-image",
+        "contents": "expo-image@58.0.18",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "fe19a9c3b268bd901550adacbfa385fa635de68416920fa29c1b7e9e00cd13d7"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-image-picker",
+        "contents": "expo-image-picker@58.0.10",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "722b539910524940658602b36f695aba0c3fdfe985aad8cd79012c39149014ee"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-json-utils",
+        "contents": "expo-json-utils@58.0.1",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "637797e43b557188ebfd41231f2dc39ffd7da68de4cdfa9fdc05fdb27b5fa575"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-keep-awake",
+        "contents": "expo-keep-awake@58.0.4",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "5f4b89596cd40dab11f881c3e4f10d5ea9f8c2b4e9e89613d4cd18dcb26a0b21"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-linking",
+        "contents": "expo-linking@58.0.17",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "7503d96ac148678fca8537197ef4eea729cb6feb271863ceb08fe0a07bcc6378"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-manifests",
+        "contents": "expo-manifests@58.0.1",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "261e2d8f42c2406e51f2fdcbf5a0fd3aadb367741c535848a01ae2bb63596c2a"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-modules-core",
+        "contents": "expo-modules-core@58.1.0",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "d690b1ff20534f03aba0b032cd9f4321a1eb87e3e4e8bf84a58ce6819ff39a63"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-modules-jsi",
+        "contents": "expo-modules-jsi@58.0.23",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "24b524de3328228e8a77f4953e92ee56184390f696f76f818e692eee2cb50821"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-notifications",
+        "contents": "expo-notifications@58.1.9",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "78037a9bbc3ec47613afb8fd6af1dc871aa126abbd553e3e7518b1fd68b1de0e"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-router",
+        "contents": "expo-router@58.0.31",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "c923cb6ecb9d5f7b64af51db86cdaa5f325cfd874991be9d870ef7339344f97d"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-secure-store",
+        "contents": "expo-secure-store@58.0.3",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "e022a4070c3eda27e4d41f827daaa49bf2788e51f69c25b8bc94dd3764e42c6c"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-splash-screen",
+        "contents": "expo-splash-screen@58.0.14",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "dbcdd96f4e59bd3694f7511c7c32c193f3dec81a161180f2c5163cdbadecd889"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-sqlite",
+        "contents": "expo-sqlite@58.0.17",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "918a1dd2276989a59437c6a8b6caf08a88bdb83a11881d5d6f557aae1ee91cc9"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-status-bar",
+        "contents": "expo-status-bar@58.0.5",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "e1d5aad59a573a44f1fa6f9bef10b7a53fa8a5c1b6fe3c80bbda07f0f09242f9"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-symbols",
+        "contents": "expo-symbols@58.0.5",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "161d3e48483455a250505b7d9c025f50dece727dcfa21f93168cdae3f7d8d7cc"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-system-ui",
+        "contents": "expo-system-ui@58.0.7",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "ab78374b14bcc88afe7ed80a037958e3513b5b4a10d5949e6a37c5857b2f80b6"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-updates-interface",
+        "contents": "expo-updates-interface@58.0.1",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "48006c85d3feaa45675e44203647d38aa1c9b3daa5bad3a7ad075ca22a514415"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-web-browser",
+        "contents": "expo-web-browser@58.0.8",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "619e154361bd8b52bfb51909e5d82cdb03755864a18795714b6f1f08b594931e"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:react-native-gesture-handler",
+        "contents": "react-native-gesture-handler@3.3.0",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "bfeac06f1d3fa2496991fba69820c3b7d9e11291ed352341560234497635673e"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:react-native-reanimated",
+        "contents": "react-native-reanimated@4.7.1",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "627b02d676cd4e3b4ff7cbcf4d3b959fb01e7c03368ba3a1e5bff75f0677109f"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:react-native-safe-area-context",
+        "contents": "react-native-safe-area-context@5.11.1",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "ff1e5ab14fb87e9b84d9d46f803a18403f0923cf78951885244deaae9ecfe2bf"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:react-native-screens",
+        "contents": "react-native-screens@4.30.1",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "d934a18d4e486aa6fed14d78303981c535086ff98471dce18eee236aa45c224b"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:react-native-worklets",
+        "contents": "react-native-worklets@0.13.0",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "2c15fee1dc2024b563f81fedccd66bce660c24a279f3fd12bdb0ee607657d97b"
+      },
+      {
+        "type": "contents",
+        "id": "runtime",
+        "contents": "react-native@0.88.1",
+        "reasons": [
+          "runtime"
+        ],
+        "hash": "55a0061e2451c8481cd4dc06b8068f51fb770df714098b161a33eb0637219666"
+      },
+      {
+        "type": "contents",
+        "id": "setting:expo.jsEngine",
+        "contents": "hermes",
+        "reasons": [
+          "native-setting"
+        ],
+        "hash": "8cfde6efdfc4ed5ab1f6acbbd1ba49bf31932f84d0a4c090eb41c7d151e8b180"
+      },
+      {
+        "type": "file",
+        "filePath": "app.config.js",
+        "reasons": [
+          "extra-source"
+        ],
+        "hash": "e11530a0126ff75ecd53934a6bd410be3858dc650f64d2082f2c78385dcaec18"
+      },
+      {
+        "type": "file",
+        "filePath": "app.json",
+        "reasons": [
+          "extra-source"
+        ],
+        "hash": "5439d6903b01016d8cb9cc4d63bbbaa6e5b6afa541a407a1e9c8538433c9099e"
+      },
+      {
+        "type": "file",
+        "filePath": "eas.json",
+        "reasons": [
+          "extra-source"
+        ],
+        "hash": "67822767f44d008dcb569f6a99c2d5f5bb53411149752a9f0cb8c6c3d0cc2194"
+      }
+    ]
+  },
+  "android": {
+    "engine": "hot-updater/interface@1",
+    "hash": "2b0c6327bfb6957cd18b41e0ef80142132c49eb9801e381195543d4cf8ca5798",
+    "sources": [
+      {
+        "type": "contents",
+        "id": "dependency:@expo/dom-webview",
+        "contents": "@expo/dom-webview@58.0.2",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "676d724f3edb56e9621dddf9562882406efc13c1cccf8287997516d7af6179bc"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:@expo/log-box",
+        "contents": "@expo/log-box@58.0.15",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "1c9d398e481d4126f6eeab5e1ce23be5edbe9ae070513ee3a8a860ff71e0d047"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:@expo/ui",
+        "contents": "@expo/ui@58.0.28",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "bdd84c6a73c0e31abf353cdbafadf539afcba3c2b08067be948445e2a2996e31"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:@hot-updater/react-native",
+        "contents": "@hot-updater/react-native@1.1.15",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "5752cadffc70847af3c2f40d443895b97ceb49776fb8aa8bad175164d8545d3d"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:@react-native-masked-view/masked-view",
+        "contents": "@react-native-masked-view/masked-view@0.3.2",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "7e13cc992f97d1911e24fb215d06cf0feb6e87c32567872369ed43b66a2c353c"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo",
+        "contents": "expo@58.0.25",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "af2a21c433288526fbb3b526dfc4aa830f07db0b18df76d2e5e60bdd6afc83a5"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-application",
+        "contents": "expo-application@58.1.2",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "152cdb08f00fa6cb69598e725c1403366d353753e4e92ead763001e6cde68f60"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-asset",
+        "contents": "expo-asset@58.0.21",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "d6b71c6875217143a35f689d18328bdc63ba0fd864e87a9b2306a7649de1f911"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-constants",
+        "contents": "expo-constants@58.0.16",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "eb965784de71bb0b86b290920909371dfa0beb1b904e60ad75d93417377bb31f"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-crypto",
+        "contents": "expo-crypto@58.0.8",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "da94a55dbcfcb27213abaf1443c30832678f79253825927ce4823a0e63af264b"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-dev-client",
+        "contents": "expo-dev-client@58.0.20",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "c20f480e2524db25c0e22c3953e112a27c922990a6c016465418a3222f07cda9"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-dev-launcher",
+        "contents": "expo-dev-launcher@58.0.20",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "ba35a09a6ab0750092ab95b4455cd63d121a6b0d2dd5fca0f020f4970393db84"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-dev-menu",
+        "contents": "expo-dev-menu@58.0.13",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "a7a24186194d083691a629cb34a033e9ed8b16860571a2b2d1265c3066b0a679"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-dev-menu-interface",
+        "contents": "expo-dev-menu-interface@58.0.2",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "15964e71acd646c89af9b9f1703d5c7b7e6ed1f2b94853ba05e25f15dc71bc19"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-device",
+        "contents": "expo-device@58.0.5",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "a4b917359b97f16464179c7a1c3fb15c76695260a63afe4fc63c7e57f425eaf0"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-document-picker",
+        "contents": "expo-document-picker@58.0.5",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "d8bb83c559b9f219960c43f549a8b4002a78ac990390d79279505b35dca8a1c1"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-file-system",
+        "contents": "expo-file-system@58.0.13",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "93744b553262fe9c74ec06375dc2e6e6bfe0d47c6b8c22c9173e1d6eeb4852d4"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-font",
+        "contents": "expo-font@58.0.12",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "e0faf37f712fcaf7f63edb614d0a5ff8e26f4d0d2827089b4df43a81e49b3d57"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-image",
+        "contents": "expo-image@58.0.18",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "fe19a9c3b268bd901550adacbfa385fa635de68416920fa29c1b7e9e00cd13d7"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-image-loader",
+        "contents": "expo-image-loader@58.0.3",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "fbe5c67ebdbb384d6893be26d84937d100635542f4a17372222613440dd669f7"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-image-picker",
+        "contents": "expo-image-picker@58.0.10",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "722b539910524940658602b36f695aba0c3fdfe985aad8cd79012c39149014ee"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-json-utils",
+        "contents": "expo-json-utils@58.0.1",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "637797e43b557188ebfd41231f2dc39ffd7da68de4cdfa9fdc05fdb27b5fa575"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-keep-awake",
+        "contents": "expo-keep-awake@58.0.4",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "5f4b89596cd40dab11f881c3e4f10d5ea9f8c2b4e9e89613d4cd18dcb26a0b21"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-linking",
+        "contents": "expo-linking@58.0.17",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "7503d96ac148678fca8537197ef4eea729cb6feb271863ceb08fe0a07bcc6378"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-manifests",
+        "contents": "expo-manifests@58.0.1",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "261e2d8f42c2406e51f2fdcbf5a0fd3aadb367741c535848a01ae2bb63596c2a"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-modules-core",
+        "contents": "expo-modules-core@58.1.0",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "d690b1ff20534f03aba0b032cd9f4321a1eb87e3e4e8bf84a58ce6819ff39a63"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-notifications",
+        "contents": "expo-notifications@58.1.9",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "78037a9bbc3ec47613afb8fd6af1dc871aa126abbd553e3e7518b1fd68b1de0e"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-router",
+        "contents": "expo-router@58.0.31",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "c923cb6ecb9d5f7b64af51db86cdaa5f325cfd874991be9d870ef7339344f97d"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-secure-store",
+        "contents": "expo-secure-store@58.0.3",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "e022a4070c3eda27e4d41f827daaa49bf2788e51f69c25b8bc94dd3764e42c6c"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-splash-screen",
+        "contents": "expo-splash-screen@58.0.14",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "dbcdd96f4e59bd3694f7511c7c32c193f3dec81a161180f2c5163cdbadecd889"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-sqlite",
+        "contents": "expo-sqlite@58.0.17",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "918a1dd2276989a59437c6a8b6caf08a88bdb83a11881d5d6f557aae1ee91cc9"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-status-bar",
+        "contents": "expo-status-bar@58.0.5",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "e1d5aad59a573a44f1fa6f9bef10b7a53fa8a5c1b6fe3c80bbda07f0f09242f9"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-system-ui",
+        "contents": "expo-system-ui@58.0.7",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "ab78374b14bcc88afe7ed80a037958e3513b5b4a10d5949e6a37c5857b2f80b6"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-updates-interface",
+        "contents": "expo-updates-interface@58.0.1",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "48006c85d3feaa45675e44203647d38aa1c9b3daa5bad3a7ad075ca22a514415"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-web-browser",
+        "contents": "expo-web-browser@58.0.8",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "619e154361bd8b52bfb51909e5d82cdb03755864a18795714b6f1f08b594931e"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:react-native-gesture-handler",
+        "contents": "react-native-gesture-handler@3.3.0",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "bfeac06f1d3fa2496991fba69820c3b7d9e11291ed352341560234497635673e"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:react-native-reanimated",
+        "contents": "react-native-reanimated@4.7.1",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "627b02d676cd4e3b4ff7cbcf4d3b959fb01e7c03368ba3a1e5bff75f0677109f"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:react-native-safe-area-context",
+        "contents": "react-native-safe-area-context@5.11.1",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "ff1e5ab14fb87e9b84d9d46f803a18403f0923cf78951885244deaae9ecfe2bf"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:react-native-screens",
+        "contents": "react-native-screens@4.30.1",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "d934a18d4e486aa6fed14d78303981c535086ff98471dce18eee236aa45c224b"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:react-native-worklets",
+        "contents": "react-native-worklets@0.13.0",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "2c15fee1dc2024b563f81fedccd66bce660c24a279f3fd12bdb0ee607657d97b"
+      },
+      {
+        "type": "contents",
+        "id": "runtime",
+        "contents": "react-native@0.88.1",
+        "reasons": [
+          "runtime"
+        ],
+        "hash": "55a0061e2451c8481cd4dc06b8068f51fb770df714098b161a33eb0637219666"
+      },
+      {
+        "type": "contents",
+        "id": "setting:expo.jsEngine",
+        "contents": "hermes",
+        "reasons": [
+          "native-setting"
+        ],
+        "hash": "8cfde6efdfc4ed5ab1f6acbbd1ba49bf31932f84d0a4c090eb41c7d151e8b180"
+      },
+      {
+        "type": "file",
+        "filePath": "app.config.js",
+        "reasons": [
+          "extra-source"
+        ],
+        "hash": "e11530a0126ff75ecd53934a6bd410be3858dc650f64d2082f2c78385dcaec18"
+      },
+      {
+        "type": "file",
+        "filePath": "app.json",
+        "reasons": [
+          "extra-source"
+        ],
+        "hash": "5439d6903b01016d8cb9cc4d63bbbaa6e5b6afa541a407a1e9c8538433c9099e"
+      },
+      {
+        "type": "file",
+        "filePath": "eas.json",
+        "reasons": [
+          "extra-source"
+        ],
+        "hash": "67822767f44d008dcb569f6a99c2d5f5bb53411149752a9f0cb8c6c3d0cc2194"
+      }
+    ]
+  },
+  "inputs": {
+    "adapter": "expo",
+    "extraSources": [
+      "app.json",
+      "app.config.js",
+      "eas.json"
+    ]
+  }
+}
