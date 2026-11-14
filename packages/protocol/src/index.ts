@@ -16,6 +16,16 @@ export interface Topic {
   error?: string;
 }
 
+export const DEFAULT_TOPIC_TITLE = "新会话";
+export const MAX_TOPIC_TITLE_BYTES = 256;
+export const MAX_TITLE_INPUT_BYTES = 32 * 1024;
+
+export function topicTitlePreview(text: string): string {
+  const characters = Array.from(text.replace(/[\s\p{Cc}]+/gu, " ").trim());
+  return characters.length > 64 ? characters.slice(0, 63).join("").trimEnd() + "…"
+    : characters.join("") || DEFAULT_TOPIC_TITLE;
+}
+
 export type MessageStatus = "accepted" | "queued" | "streaming" | "final" | "failed" | "unknown" | "cancelled";
 
 export interface Message {
@@ -124,6 +134,7 @@ export type Command = CommandEnvelope & (
   | { kind: "respond"; body: { control_id: string; response_id: string; answer: string } }
   | { kind: "model_options"; body: Record<string, never> }
   | { kind: "select_model"; body: ModelSelection & { confirm?: string } }
+  | { kind: "summarize_title"; body: { input: string } }
   | { kind: "watch"; body: Record<string, never> }
 );
 
@@ -136,6 +147,7 @@ export interface CommandResult {
   error?: string;
   control_status?: Control["status"];
   model_result?: ModelResult;
+  title?: string;
 }
 
 interface EventEnvelope {

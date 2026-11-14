@@ -6,6 +6,7 @@ import type { JsonObject } from './gateway.js';
 import { hasModel, modelCatalog } from './models.js';
 import type { Binding, Spool, Turn } from './spool.js';
 import { QueryUnavailable, queryTimeout, runtimeVersion, sessionStatus, skillList } from './topic-query.js';
+import { titleInstructions, titleResult, titleTimeout } from './topic-title.js';
 import { boundedText, commandDigest, result, stableId, text } from './wire.js';
 
 const unknown = 'Hermes 无法确认执行结果';
@@ -64,21 +65,21 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
   const watchers = new Map<string, AbortController>();
   const commands = new Set<string>();
 
-  function request(profile: string, path: string, options: RequestInit = {}): Promise<Response> {
+  function request(profile: string, path: string, options: RequestInit = {}, timeoutMs = 15_000): Promise<Response> {
     return fetch(new URL(`/p/${encodeURIComponent(profile)}${path}`, origin), {
       ...options,
       redirect: 'error',
       headers: { authorization: `Bearer ${token}`, ...options.headers },
-      signal: AbortSignal.any([shutdown.signal, AbortSignal.timeout(15_000), ...(options.signal ? [options.signal] : [])]),
+      signal: AbortSignal.any([shutdown.signal, AbortSignal.timeout(timeoutMs), ...(options.signal ? [options.signal] : [])]),
     });
   }
 
-  async function json(profile: string, path: string, body?: JsonObject, idempotencyKey?: string) {
+  async function json(profile: string, path: string, body?: JsonObject, idempotencyKey?: string, timeoutMs?: number) {
     const response = await request(profile, path, body && {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}) },
       body: JSON.stringify(body),
-    });
+    }, timeoutMs);
     return { response, data: object(await response.json().catch(() => undefined)) };
   }
 
@@ -217,11 +218,11 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
             const finalText = terminal ? (state === 'final' && typeof data?.output === 'string'
               ? boundedText(data.output, 256 * 1024) : saved.text) : undefined;
             const updated = { ...turn, status: state, text: JSON.stringify({ text: finalText ?? saved.text, prompts: next }) };
+            if (finalText) frames.push(message(updated, 'final', finalText));
             if (state !== turn.status) {
               const error = state === 'unknown' ? unknown : state === 'failed' ? 'Hermes 报告执行失败' : undefined;
               frames.push({ type: 'submission', submission_id: turn.submissionId, status: state, ...(error ? { error } : {}) });
             }
-            if (finalText) frames.push(message(updated, 'final', finalText));
             if (frames.length) record(updated, frames);
             if (terminal || missingRun || status === 'interrupted') return;
           }
@@ -282,6 +283,11 @@ export function createHttpConnector({ url, token, send, spool }: Options) {
         }
       } else if (!bound) {
         receipt = result(command_id, 'error', { error: 'Hermes 会话与话题的绑定不匹配' });
+      } else if (command.kind === 'summarize_title') {
+        const reply = await json(profile_ref, '/api/hermes-mobile/title', {
+          input: command.body.input, instructions: titleInstructions,
+        }, undefined, titleTimeout).catch(() => undefined);
+        receipt = titleResult(command_id, reply?.response.ok ? reply.data?.text : undefined);
       } else if (command.kind === 'model_options' || command.kind === 'select_model') {
         receipt = result(command_id, 'error', { error: 'Hermes 无法加载模型目录' });
         const { response, data } = await json(profile_ref, '/api/model/options?include_unconfigured=false');

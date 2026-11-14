@@ -9,6 +9,7 @@ import type { Command } from '@hermes-mobile/protocol';
 import type { JsonObject } from '../src/gateway.js';
 import { createHttpConnector } from '../src/http-mode.js';
 import { Spool } from '../src/spool.js';
+import { bridgeFrame } from '../src/wire.js';
 
 async function harness(t: TestContext, replyStatus = 'resolved') {
   const calls: { path: string; body: JsonObject }[] = [];
@@ -24,7 +25,9 @@ async function harness(t: TestContext, replyStatus = 'resolved') {
     const path = req.url!.replace('/p/default', '');
     calls.push({ path, body });
     res.setHeader('content-type', 'application/json');
-    if (path === '/api/model/options?include_unconfigured=false') {
+    if (path === '/api/hermes-mobile/title') {
+      res.end(JSON.stringify({ text: '「移动端   同步排查」' }));
+    } else if (path === '/api/model/options?include_unconfigured=false') {
       res.end(JSON.stringify({
         provider: 'nous', model: 'default-model',
         providers: [
@@ -75,9 +78,11 @@ async function harness(t: TestContext, replyStatus = 'resolved') {
     connector = createHttpConnector({ ...options, spool });
   }
   async function command(payload: Pick<Command, 'kind' | 'body'>, id = randomUUID() as string) {
-    await connector.command({
+    const frame = bridgeFrame(JSON.stringify({
       ...payload, type: 'command', command_id: id, topic_id: topicId, profile_ref: 'default', session_id: sessionId,
-    } as Command, () => true);
+    }));
+    assert(frame.type === 'command');
+    await connector.command(frame, () => true);
     return frames.find((frame) => frame.type === 'command_result' && frame.command_id === id);
   }
   return { calls, frames, restart, command };
@@ -101,6 +106,18 @@ async function waitForQuestion(frames: JsonObject[]) {
   assert(typeof control_id === 'string');
   return { control_id, choices, multi_select };
 }
+
+test('HTTP 模式使用单次模型调用生成标题，重放命令沿用已保存的结果', async (t) => {
+  const { command, calls, restart } = await harness(t);
+  const id = randomUUID();
+  const input = '{"turns":[{"user":"排查同步延迟","assistant":"已检查重试"}]}';
+  const payload = { kind: 'summarize_title', body: { input } } as const;
+  assert.equal((await command(payload, id))?.title, '移动端 同步排查');
+  restart();
+  assert.equal((await command(payload, id))?.title, '移动端 同步排查');
+  assert.deepEqual(calls.map(({ path }) => path), ['/api/hermes-mobile/title']);
+  assert.equal(calls[0].body.input, input);
+});
 
 test('HTTP 模式的模型选择器返回已配置的服务商目录，并在重启后保留选择', async (t) => {
   const { command, calls, restart } = await harness(t);

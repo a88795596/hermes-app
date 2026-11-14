@@ -15,7 +15,7 @@
 | GET /profiles | `Profile[]`，通过 BFF 的 `HERMES_PROFILES` 配置。值为逗号分隔的真实配置档案名称，默认为 `default` |
 | GET /status | `{connector_online:boolean}` |
 | GET /topics | `Topic[]` |
-| POST /topics | `{request_id,profile_id,title}` → `Topic`，幂等 202 |
+| POST /topics | `{request_id,profile_id,title?}` → `Topic`，幂等 202。省略标题时，首条发送的消息成为默认标题。 |
 | GET /topics/:id | `{topic:Topic,messages:Message[],controls:Control[]}` |
 | POST /topics/:id/submissions | `{submission_id,text}` → `Message` 用户气泡，幂等 202 |
 | POST /topics/:id/interrupt | `{request_id,submission_id}` → `{status:"accepted"}`，幂等 202 |
@@ -38,6 +38,7 @@
 - `interrupt` 的请求体为 `{submission_id}`。连接器核对该提交仍在运行后，按当前已验证的活动代次调用。
 - `respond` 的请求体为 `{control_id,response_id,answer}`。澄清支持文本、复选标签数组的 JSON 字符串和空字符串跳过。连接器按上游请求类型转换。
 - `model_options` 的请求体为 `{}`。`select_model` 的请求体为 `{provider,model,confirm?}`。两者的成功回执携带 `model_result`。
+- `summarize_title` 的请求体为 `{input}`，由 BFF 在自动命名的会话收到成功终态后排队。连接器握手携带 `X-Hermes-Mobile-Topic-Title: 1` 时接收该命令，成功回执携带 `title`。
 - `watch` 的请求体为 `{}`，使用独立的临时 `command_id`。重连时同步每个已绑定话题。连接器先登记作用域，再恢复上游。BFF 忽略 `watch` 的结果，且不将临时命令写入命令表。
 
 连接器返回 `{type:"command_result",command_id,status:"ok"|"error"|"unknown",session_id?,admission_id?,error?,control_status?}`。创建成功带 `session_id`，提交已接纳带 `admission_id`，确认交互关闭时带 `control_status`。BFF 持久化普通写命令的结果后，返回 `{type:"ack",id:command_id}`。重复命令只返回既有结果或 `unknown`，并沿用原 ID。无法确认交互响应时使用 `unknown`。连接关闭后，BFF 重派仍未结的原命令。

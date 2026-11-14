@@ -146,10 +146,11 @@ function ControlCard({
 }
 
 export function Conversation({
-  id, topic, workspace, draft, onDraftChange, onNewTopic,
+  id, topic, newProfileId, workspace, draft, onDraftChange, onNewTopic,
 }: {
   id: string;
   topic?: Topic;
+  newProfileId?: string;
   workspace: ReturnType<typeof useWorkspace>;
   draft: string;
   onDraftChange: (value: string) => void;
@@ -168,6 +169,7 @@ export function Conversation({
   const [error, setError] = useState<string>();
   const [modelPicker, setModelPicker] = useState(false);
   const [commandNotice, setCommandNotice] = useState<string>();
+  const [openingSkills, setOpeningSkills] = useState(false);
   const queryPending = useRef(false);
   const interruptId = useRef<string>(undefined);
   const messages = workspace.detail?.messages ?? [];
@@ -188,7 +190,8 @@ export function Conversation({
   const pending = workspace.pending
     .filter((item) => item.topic_id === id && !messages.some((message) => message.submission_id === item.submission_id))
     .sort((a, b) => a.created_at - b.created_at);
-  const canSend = topic?.status === "ready" && workspace.ready && !sending;
+  const canWrite = topic?.status === "ready" || (!!newProfileId && topic?.status !== "error");
+  const canSend = canWrite && workspace.ready && !sending;
   const canControl = workspace.network === "online" && workspace.connector_online === true;
   const isModelCommand = draft.trim().toLowerCase() === "/model";
   const sendDisabled = !canSend || !draft.trim() || (isModelCommand && !canControl);
@@ -220,7 +223,8 @@ export function Conversation({
     setSending(true);
     setError(undefined);
     try {
-      await workspace.enqueue({ submission_id: randomUUID(), topic_id: id, text, created_at: Date.now() });
+      await workspace.enqueue({ submission_id: randomUUID(), topic_id: id, text, created_at: Date.now(),
+        ...(newProfileId && { profile_id: newProfileId }) });
       onDraftChange("");
       setCommandNotice(undefined);
       pinned.current = true;
@@ -259,7 +263,7 @@ export function Conversation({
 
   async function runCommand(command: ComposerCommand) {
     if (command === "skills") {
-      setMenu("skills");
+      await openSkills();
       return;
     }
     setMenu(undefined);
@@ -274,9 +278,11 @@ export function Conversation({
     } else if (command === "new") {
       onNewTopic();
     } else {
+      if (!canControl) return;
       queryPending.current = true;
       setCommandNotice(command === "version" ? "正在查询 Hermes 版本…" : "正在查询会话状态…");
       try {
+        if (newProfileId && topic?.status !== "ready") await workspace.prepareTopic(id, newProfileId);
         if (command === "version") {
           setCommandNotice(`Hermes ${await workspace.call<string>(`/topics/${id}/version`)}`);
         } else {
@@ -294,6 +300,21 @@ export function Conversation({
     }
   }
 
+  async function openSkills() {
+    if (openingSkills) return;
+    setOpeningSkills(true);
+    setMenu(undefined);
+    setError(undefined);
+    try {
+      if (newProfileId && topic?.status !== "ready") await workspace.prepareTopic(id, newProfileId);
+      setMenu("skills");
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "无法加载技能。");
+    } finally {
+      setOpeningSkills(false);
+    }
+  }
+
   function selectSkill(skill: Skill) {
     setMenu(undefined);
     onDraftChange(`请先用 skill_view 加载技能 ${JSON.stringify(skill.name)}，再处理以下任务。\n\n${draft}`);
@@ -303,7 +324,7 @@ export function Conversation({
     <KeyboardAvoidingView style={styles.frame} behavior={Platform.OS === "web" ? undefined : "padding"}>
       {menu && (
         <ComposerMenu kind={menu} id={id} call={workspace.call}
-          profile={workspace.profiles.find((item) => item.profile_id === topic?.profile_id)?.label}
+          profile={workspace.profiles.find((item) => item.profile_id === (topic?.profile_id ?? newProfileId))?.label}
           connected={canControl}
           canStop={running && canControl && !stopping}
           onClose={() => setMenu(undefined)}
@@ -338,7 +359,7 @@ export function Conversation({
           </View>
         )}
         {topic?.status === "error" && <Notice>{topic.error ?? "Hermes 无法创建此会话。"}</Notice>}
-        {topic?.status === "ready" && messages.length === 0 && pending.length === 0 && controls.length === 0 && (
+        {(topic?.status === "ready" || (!topic && newProfileId)) && messages.length === 0 && pending.length === 0 && controls.length === 0 && (
           <View style={chat.empty}>
             <EmptyState icon="chat" title="开始对话" description="给 Hermes 发送一条消息。" />
           </View>
@@ -408,8 +429,10 @@ export function Conversation({
         {commandNotice && <Text accessibilityLiveRegion="polite" style={styles.muted}>{commandNotice}</Text>}
         {isModelCommand && !canControl && <Text style={styles.muted}>连接 Hermes 后即可选择模型。</Text>}
         <View style={styles.row}>
-          <Action title="命令" disabled={topic?.status !== "ready"} onPress={() => { Keyboard.dismiss(); setMenu("commands"); }} />
-          <Action title="技能" disabled={topic?.status !== "ready"} onPress={() => { Keyboard.dismiss(); setMenu("skills"); }} />
+          <Action title="命令" disabled={!canWrite} onPress={() => { Keyboard.dismiss(); setMenu("commands"); }} />
+          <Action title={openingSkills ? "正在加载技能…" : "技能"}
+            disabled={!canWrite || openingSkills || (topic?.status !== "ready" && !canControl)}
+            onPress={() => { Keyboard.dismiss(); void openSkills(); }} />
           {running && (
             <Action title={stopping ? "正在请求停止…" : "停止回复"} icon="stop"
               disabled={!canControl || stopping} onPress={() => void stop()} />
@@ -421,7 +444,7 @@ export function Conversation({
             placeholder="发消息给 Hermes"
             style={chat.draft}
             multiline
-            editable={topic?.status === "ready" && !sending}
+            editable={canWrite && !sending}
             value={draft}
             onChangeText={onDraftChange}
             onFocus={() => setDraftFocused(true)}
@@ -457,7 +480,10 @@ export function Conversation({
           unavailable={modelBusy ? "请等待当前回复结束，再切换模型。"
             : !canControl ? "重新连接 Hermes 后即可选择模型。" : undefined}
           onClose={() => setModelPicker(false)}
-          onRequest={(requestId, selection, signal) => workspace.requestModel(id, requestId, selection, signal)}
+          onRequest={async (requestId, selection, signal) => {
+            if (newProfileId && topic?.status !== "ready") await workspace.prepareTopic(id, newProfileId, signal);
+            return workspace.requestModel(id, requestId, selection, signal);
+          }}
           onSelected={({ selection, type }) => {
             setModelPicker(false);
             setCommandNotice(type === "deferred" ? `模型切换已排队 · ${selection.model}` : `已选择模型 · ${selection.model}`);

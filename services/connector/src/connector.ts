@@ -11,6 +11,7 @@ import { hasModel, modelCatalog } from './models.js';
 import { Spool } from './spool.js';
 import type { Binding, Cursor, Turn } from './spool.js';
 import { QueryUnavailable, queryTimeout, runtimeVersion, sessionStatus, skillList } from './topic-query.js';
+import { titleInstructions, titleResult, titleTimeout } from './topic-title.js';
 import { boundedText, commandDigest, result, stableId, text } from './wire.js';
 
 type Target =
@@ -200,6 +201,15 @@ export class CanonicalConnector {
       return;
     }
     if (!current() || !session.gateway.connected) return;
+    if (command.kind === 'summarize_title') {
+      if (!this.spool.begin(id, digest)) return;
+      const reply = await session.gateway.rpc('llm.oneshot', {
+        session_id: binding.sessionId, task: 'title_generation', instructions: titleInstructions,
+        input: command.body.input, max_tokens: 128,
+      }, id, titleTimeout).catch(() => undefined);
+      if (!this.#closed) this.spool.finish(id, { ...titleResult(id, reply?.text) });
+      return;
+    }
     if (command.kind === 'model_options' || command.kind === 'select_model') {
       if (!this.spool.begin(id, digest)) return;
       try {

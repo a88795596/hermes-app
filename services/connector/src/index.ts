@@ -47,6 +47,7 @@ async function main(): Promise<void> {
   let socket: WebSocket | undefined;
   const shutdown = new AbortController();
   let serial = Promise.resolve();
+  const titleTasks = new Set<Promise<void>>();
   let flush: () => void = () => {};
   const stop = () => {
     shutdown.abort();
@@ -67,7 +68,7 @@ async function main(): Promise<void> {
     while (!shutdown.signal.aborted) {
       const started = Date.now();
       const peer = new WebSocket(url, {
-        headers: { Authorization: `Bearer ${token}`, 'X-Hermes-Mobile-Topic-Query': '1',
+        headers: { Authorization: `Bearer ${token}`, 'X-Hermes-Mobile-Topic-Query': '1', 'X-Hermes-Mobile-Topic-Title': '1',
           ...(manage && { 'X-Hermes-Mobile-Management': '1' }) },
         handshakeTimeout: 10_000, maxPayload: 1024 * 1024, perMessageDeflate: false,
       });
@@ -197,6 +198,12 @@ async function main(): Promise<void> {
           void manage(frame).then((reply) => { send(reply); }).catch(() => peer.terminate()).finally(() => { managementPending -= 1; });
           return;
         }
+        if (frame.kind === 'summarize_title') {
+          const task = mode.command(frame, current).then(flush, () => peer.terminate())
+            .finally(() => { titleTasks.delete(task); });
+          titleTasks.add(task);
+          return;
+        }
         if (queued >= 256) {
           peer.terminate();
           return;
@@ -229,7 +236,7 @@ async function main(): Promise<void> {
     }
   } finally {
     mode.close();
-    await serial;
+    await Promise.all([serial, ...titleTasks]);
     spool.close();
     process.removeListener('SIGINT', stop);
     process.removeListener('SIGTERM', stop);

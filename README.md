@@ -61,7 +61,7 @@ pnpm typecheck
 
    HTTP 适配器使用 Hermes API 管理的会话。如果安装了较新版本的 Hermes，可将 `HERMES_API_URL` 留空，以网关所用的账户在同一台主机上运行连接器，并将 `HERMES_BIN` 指向支持 `gateway attach --json` 的命令行程序。连接器与 BFF 的数据库应配套使用，绑定同一个 Hermes 后端和传输方式。试用其他后端时请使用独立的数据库。
 
-   在 HTTP 模式下，聊天中的「技能」菜单读取 `GET /p/<profile>/v1/skills`。如果该接口因 `include_editorial` 错误返回 500，运行 `docker build -t hermes-mobile-runtime - < services/connector/Dockerfile.hermes`，然后使用 `hermes-mobile-runtime` 作为 Hermes 容器镜像。 [上游修复](https://github.com/NousResearch/hermes-agent/pull/108968)
+   HTTP Runs 模式的自动标题使用仓库提供的 Hermes 镜像。运行 `docker build -t hermes-mobile-runtime -f services/connector/Dockerfile.hermes services/connector`，用该镜像更新 Hermes 容器并复用原有配置和数据卷。这个镜像也修复了「技能」接口的 `include_editorial` 兼容问题。Canonical Gateway 模式使用 Hermes 自带的 `llm.oneshot`。 [Hermes 单次模型调用](https://github.com/NousResearch/hermes-agent/blob/main/gateway/session_llm_oneshot.py)
 
    如果聊天运行失败，且容器日志显示 `no_provider_configured`，运行 `docker exec -it -u hermes hermes-dev hermes model`，为容器中的 Hermes 用户配置模型服务商。API 服务密钥用于验证连接器，模型服务商使用自己的凭据。
 
@@ -79,6 +79,8 @@ pnpm typecheck
 <a name="interactive-chat"></a>
 
 ## 聊天交互
+
+点击「新建会话」直接打开聊天。首条发送的消息会成为默认标题。每轮成功完成后，Hermes 使用当前标题和最近四轮已完成的对话生成标题，聊天顶部和话题列表会同步更新。
 
 在话题中发送 `/model`，先选择服务商，再选择模型。菜单会显示当前 Hermes 配置档案下可用的服务商，并标记当前选项。等本轮回复完成后即可切换模型，新选择对当前话题的后续对话生效。
 
