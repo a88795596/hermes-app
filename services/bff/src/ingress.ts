@@ -1,8 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
 import type { Command, CommandResult, ConnectorEvent, Control, DeliveryFrame, InboxDelivery, InboxItem, Message } from "@hermes-mobile/protocol";
+import { inboxTitle } from "@hermes-mobile/protocol";
 import type { PoolClient } from "pg";
 import { touchTopic } from "./mutations.js";
-import { topicRow } from "./projections.js";
+import { profileId, topicRow } from "./projections.js";
 import { queueInboxPush } from "./push.js";
 import { conflict, invalid, missing } from "./validation.js";
 
@@ -155,10 +156,11 @@ export async function applyDelivery(db: PoolClient, frame: DeliveryFrame, refs: 
   return applied;
 }
 
-export async function applyInboxDelivery(db: PoolClient, { delivery_id, profile_ref, text }: InboxDelivery, refs: Set<string>) {
+export async function applyInboxDelivery(db: PoolClient, { delivery_id, profile_ref, title, text }: InboxDelivery, refs: Set<string>) {
   if (!refs.has(profile_ref)) missing("配置档案");
-  if (!await recordEvent(db, "delivery", delivery_id, { profile_ref, text })) return false;
-  const item: InboxItem = { inbox_id: delivery_id, text, created_at: new Date().toISOString() };
+  if (!await recordEvent(db, "delivery", delivery_id, { profile_ref, text, ...(title === undefined ? {} : { title }) })) return false;
+  const item: InboxItem = { inbox_id: delivery_id, profile_id: profileId(profile_ref), title: title ?? inboxTitle(text),
+    text, created_at: new Date().toISOString() };
   await db.query("INSERT INTO inbox (id, profile_ref, data) VALUES ($1, $2, $3)", [item.inbox_id, profile_ref, item]);
   await queueInboxPush(db, item.inbox_id);
   return true;

@@ -157,15 +157,25 @@ export type TopicQueryResult = { type: "topic_query_result"; request_id: string 
 
 export interface InboxItem {
   inbox_id: string;
+  // 旧版服务端和移动端缓存可能缺少标题与配置档案。
+  profile_id?: string;
+  title?: string;
   text: string;
   created_at: string;
 }
 
 export const MAX_INBOX_TEXT_BYTES = 128 * 1024;
+export const MAX_INBOX_TITLE_BYTES = 256;
+
+export function inboxTitle(text: string): string {
+  const firstLine = text.split(/\r\n?|\n/u).find((line) => line.trim())?.trim().replace(/^#{1,6}(?:\s+|$)/u, "").trim();
+  return firstLine ? topicTitlePreview(firstLine) : "新消息";
+}
 
 export interface InboxDelivery {
   delivery_id: string;
   profile_ref: string;
+  title?: string;
   text: string;
 }
 

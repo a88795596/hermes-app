@@ -4,18 +4,19 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, BackHandler, Keyboard, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import Animated from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { DEFAULT_TOPIC_TITLE, topicTitlePreview, type AttachmentUpload } from "@hermes-mobile/protocol";
+import { DEFAULT_TOPIC_TITLE, topicTitlePreview, type AttachmentUpload, type InboxItem } from "@hermes-mobile/protocol";
 import { Pairing } from "../auth/pairing";
 import { loadSession, saveSession, type Session } from "../auth/session";
 import { Conversation } from "../chat/conversation";
 import { TopicList, type TopicListRow } from "../chat/topic-list";
+import { InboxDetail, InboxList } from "../inbox/inbox";
 import { ManagementMenu, ManagementScreen, type ManagementPage } from "../manage";
 import { Group, Row } from "../manage/shared";
 import { enablePushNotifications, pushAvailable } from "../notifications";
 import { pairDevice } from "../sync/api";
 import { useWorkspace, type Pending } from "../sync/use-workspace";
 import { motion, useReduceMotion } from "../ui/motion";
-import { formatDateTime, profileLabel } from "../ui/text";
+import { profileLabel } from "../ui/text";
 import { Action, Card, EmptyState, Icon, Notice, useTheme, type IconName } from "../ui/theme";
 
 const sections = {
@@ -53,6 +54,8 @@ function Workspace({
   const [{ page, transition, fromTopics }, setNavigation] = useState<Navigation>({ page: "topics", transition: "fade" });
   const [chat, setChat] = useState<Pick<TopicListRow, "id" | "newProfileId">>();
   const [profileId, setProfileId] = useState<string>();
+  const [inboxProfileId, setInboxProfileId] = useState<string>();
+  const [inboxItem, setInboxItem] = useState<InboxItem>();
   const [signingOut, setSigningOut] = useState(false);
   const [push, setPush] = useState<"idle" | "enabling" | "enabled">("idle");
   const [error, setError] = useState<string>();
@@ -119,11 +122,20 @@ function Workspace({
     setChat(undefined);
   }, []);
 
+  const closeInboxItem = useCallback(() => {
+    setNavigation((current) => ({ ...current, transition: "pop" }));
+    setInboxItem(undefined);
+  }, []);
+
   useEffect(() => {
     if (Platform.OS !== "android") return;
     const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
       if (topicId) {
         closeTopic();
+        return true;
+      }
+      if (inboxItem) {
+        closeInboxItem();
         return true;
       }
       if (settingsPage) {
@@ -137,7 +149,7 @@ function Workspace({
       return false;
     });
     return () => subscription.remove();
-  }, [closeTopic, page, settingsPage, settingsParent, showPage, topicId]);
+  }, [closeInboxItem, closeTopic, inboxItem, page, settingsPage, settingsParent, showPage, topicId]);
 
   async function enablePush() {
     setPush("enabling");
@@ -242,6 +254,14 @@ function Workspace({
     );
   }
 
+  if (inboxItem) {
+    return (
+      <Animated.View key={inboxItem.inbox_id} style={[styles.frame, !reduced && motion.push]}>
+        <InboxDetail item={inboxItem} profiles={workspace.profiles} onBack={closeInboxItem} />
+      </Animated.View>
+    );
+  }
+
   const content = managementPage && profile ? (
     <ManagementScreen key={`${profile.profile_id}:${managementPage}`} page={managementPage} profile={profile} request={workspace.call} />
   ) : (
@@ -284,19 +304,8 @@ function Workspace({
           <EmptyState icon={archived ? "archive" : "topics"} title={archived ? "暂无已归档会话" : "暂无话题"}
             description={archived ? undefined : "点击新建按钮开始对话。"} />
         ) : null)}
-        {page === "inbox" && (workspace.inbox.length > 0 ? (
-          <View style={[layout.group, { backgroundColor: colors.surface }]}>
-            {workspace.inbox.map((item, index) => (
-              <View key={item.inbox_id} style={[styles.listItem, layout.inboxRow, index > 0 && layout.divided, { borderColor: colors.edge }]}>
-                <View style={[layout.rowIcon, { backgroundColor: colors.tint }]}><Icon name="inbox" size={17} color={colors.accent} /></View>
-                <View style={layout.grow}>
-                  <Text selectable style={styles.text}>{item.text}</Text>
-                  <Text style={[styles.caption, layout.date]}>{formatDateTime(item.created_at)}</Text>
-                </View>
-              </View>
-            ))}
-          </View>
-        ) : workspace.ready ? <EmptyState icon="inbox" title="暂无消息" description="这里会显示定时任务结果和 Hermes 主动发送的消息。" /> : null)}
+        {page === "inbox" && <InboxList items={workspace.inbox} profiles={workspace.profiles} profileId={inboxProfileId}
+          ready={workspace.ready} onProfile={setInboxProfileId} onOpen={setInboxItem} />}
         {page === "settings" && (
           <Group>
             <Row title="管理" subtitle="定时任务、模型、日志、技能和 MCP" icon="manage" onPress={() => showPage("manage", "push")} />
@@ -434,8 +443,6 @@ const layout = StyleSheet.create({
   divided: { borderTopWidth: StyleSheet.hairlineWidth },
   rowIcon: { width: 29, height: 29, borderRadius: 8, alignItems: "center", justifyContent: "center" },
   value: { flexShrink: 1, maxWidth: "46%", textAlign: "right" },
-  inboxRow: { alignItems: "flex-start" },
-  date: { marginTop: 3 },
   chatHeader: { borderBottomWidth: StyleSheet.hairlineWidth, minHeight: 48, paddingHorizontal: 12, paddingVertical: 2 },
   backBar: { alignItems: "flex-start", borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12 },
   back: { flexDirection: "row", gap: 2, minHeight: 44, minWidth: 65, alignItems: "center" },

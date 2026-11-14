@@ -1,5 +1,5 @@
 import type { ConnectorFrame, MessageProcessStep, ModelResult } from "@hermes-mobile/protocol";
-import { MAX_CLARIFY_CHOICE_BYTES, MAX_MESSAGE_PROCESS_STEPS, MAX_MESSAGE_PROCESS_TEXT_BYTES, MAX_TOPIC_TITLE_BYTES } from "@hermes-mobile/protocol";
+import { MAX_CLARIFY_CHOICE_BYTES, MAX_INBOX_TITLE_BYTES, MAX_MESSAGE_PROCESS_STEPS, MAX_MESSAGE_PROCESS_TEXT_BYTES, MAX_TOPIC_TITLE_BYTES } from "@hermes-mobile/protocol";
 import { invalid, record, string, uuid } from "./validation.js";
 
 const controlStatuses = ["pending", "responding", "closed", "unknown"] as const;
@@ -110,8 +110,9 @@ export function connectorFrame(value: unknown): ConnectorFrame {
       } } };
     }
     case "delivery": {
-      const body = record(value, ["type", "event_id", "delivery_id", "profile_ref", "text"]);
+      const body = record(value, ["type", "event_id", "delivery_id", "profile_ref", "title", "text"]);
       return { type, event_id: uuid(body.event_id, "事件 ID"), delivery_id: uuid(body.delivery_id, "投递 ID"),
+        ...(body.title === undefined ? {} : { title: string(body.title, "消息标题", MAX_INBOX_TITLE_BYTES) }),
         profile_ref: string(body.profile_ref, "配置档案名称", 256), text: string(body.text, "消息正文", 256 * 1024) };
     }
     case "topic_title": {
