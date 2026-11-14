@@ -14,7 +14,7 @@ function run(t, platform, args = [], env = {}) {
   const source = new URL("../mobile-release.mjs", import.meta.url);
   if (existsSync(source)) copyFileSync(source, join(root, "scripts/mobile-release.mjs"));
   writeFileSync(join(root, "apps/mobile/.env.local"), "EXPO_PUBLIC_HOT_UPDATER_BASE_URL=https://updates.example.com\nEXPO_PUBLIC_HOT_UPDATER_API_KEY=private-client-fixture\n");
-  writeFileSync(join(root, "apps/mobile/app.json"), JSON.stringify({ expo: { ios: { bundleIdentifier: "hermes.cashcat.cn" } } }));
+  writeFileSync(join(root, "apps/mobile/app.json"), JSON.stringify({ expo: { android: { package: "com.hermesmobile.app" }, ios: { bundleIdentifier: "hermes.cashcat.cn" } } }));
   const log = join(root, "calls.jsonl");
   // Only native tools and build subprocesses are replaced; run the actual command script.
   const tool = `#!${process.execPath}
@@ -25,7 +25,8 @@ const args = process.argv.slice(2);
 appendFileSync(process.env.CALLS, JSON.stringify({name,args,cwd:process.cwd(),clientKey:process.env.EXPO_PUBLIC_HOT_UPDATER_API_KEY})+'\\n');
 if (process.env.FAIL_STEP && args.includes(process.env.FAIL_STEP)) process.exit(9);
 if (name === 'pnpm' && args.some(arg => arg.startsWith('--registry'))) process.exit(8);
-if (name === 'adb') console.log('List of devices attached\\n'+(process.env.ANDROID_DEVICES ?? 'phone-one device usb:1 model:Phone')+'\\n');
+if (name === 'adb' && args.includes('devices')) console.log('List of devices attached\\n'+(process.env.ANDROID_DEVICES ?? 'phone-one device usb:1 model:Phone')+'\\n');
+if (name === 'adb' && args.includes('start')) console.log(process.env.ANDROID_LAUNCH ?? 'Status: ok\\nActivity: com.hermesmobile.app/.MainActivity');
 if (name === 'xcrun' && args.includes('list')) console.log(JSON.stringify({result:{devices:[
  {identifier:'simulator',hardwareProperties:{reality:'simulated',platform:'iOS',udid:'simulator'},connectionProperties:{tunnelState:'connected'}},
  {identifier:'offline',hardwareProperties:{reality:'physical',platform:'iOS',udid:'offline'},connectionProperties:{tunnelState:'unavailable'}},
@@ -57,7 +58,14 @@ test("Android 从项目目录生成原生工程，再对唯一真机执行 Relea
   ]);
   assert.ok(builds.every(call => call.cwd === join(result.root, "apps/mobile")));
   assert.ok(builds.every(call => call.clientKey === "private-client-fixture"));
+  assert.deepEqual(result.calls.at(-1).args, ["-s", "phone-one", "shell", "am", "start", "-W", "-S", "-n", "com.hermesmobile.app/.MainActivity"]);
   assert.doesNotMatch(result.stdout + result.stderr, /private-client-fixture/);
+});
+
+test("Android 启动失败时不因 adb 退出码为零而报告成功", (t) => {
+  const result = run(t, "android", [], { ANDROID_LAUNCH: "Error: Activity not started, unable to resolve Intent" });
+  assert.notEqual(result.status, 0);
+  assert.doesNotMatch(result.stdout, /安装和启动完成/);
 });
 
 test("Android 多设备时要求明确选择，不会静默安装到错误手机或模拟器", (t) => {
