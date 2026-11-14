@@ -1,7 +1,7 @@
 import { randomUUID } from "expo-crypto";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback } from "react";
-import { BackHandler, Keyboard, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useCallback, useRef, useState } from "react";
+import { Alert, BackHandler, Keyboard, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import Animated from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { DEFAULT_TOPIC_TITLE, topicTitlePreview } from "@hermes-mobile/protocol";
@@ -15,7 +15,7 @@ import type { Pending } from "./sync/use-workspace";
 import { motion, useReduceMotion } from "./ui/motion";
 import { formatDateTime, profileLabel } from "./ui/text";
 import { Action, Card, EmptyState, Icon, Notice, useTheme, type IconName } from "./ui/theme";
-import { currentUpdate } from "./updates";
+import { checkUpdateManually, currentUpdate } from "./updates";
 import { useWorkspaceContext, type Section } from "./workspace-context";
 
 const sections = {
@@ -42,6 +42,9 @@ function Workspace() {
   const { colors, styles } = useTheme();
   const reduced = useReduceMotion();
   const router = useRouter();
+  const updateInFlight = useRef(false);
+  const [updateStatus, setUpdateStatus] = useState<string>();
+  const updateDisabled = Platform.OS === "web" || !!updateStatus;
   const params = useLocalSearchParams<{ page?: Page | "conversation" | "inbox-item"; topicId?: string; newProfileId?: string; archived?: string }>();
   const { session, onSignOut, workspace, section: rootSection, setSection,
     profileId, setProfileId, inboxProfileId, setInboxProfileId, inboxItem: selectedInboxItem, setInboxItem,
@@ -130,6 +133,30 @@ function Workspace() {
     } catch (failure) {
       setPush("idle");
       setError(failure instanceof Error ? failure.message : "无法启用通知。");
+    }
+  }
+
+  async function checkUpdate() {
+    if (updateInFlight.current) return;
+    updateInFlight.current = true;
+    setUpdateStatus("检查中…");
+    try {
+      const message = await checkUpdateManually((update) => new Promise<boolean>((resolve) => {
+        setUpdateStatus("等待确认…");
+        Alert.alert("发现热更新", [update.message?.trim(),
+          `时间：${update.publishedAt === undefined ? "未知" : formatDateTime(update.publishedAt)}`,
+          `ID：${update.id}`,
+        ].filter(Boolean).join("\n\n"), [
+          { text: "取消", style: "cancel", onPress: () => resolve(false) },
+          { text: "下载", onPress: () => { setUpdateStatus("下载中…"); resolve(true); } },
+        ], { cancelable: true, onDismiss: () => resolve(false) });
+      }));
+      if (message) Alert.alert("热更新", message);
+    } catch (failure) {
+      Alert.alert("热更新失败", failure instanceof Error ? failure.message : "请稍后重试。");
+    } finally {
+      updateInFlight.current = false;
+      setUpdateStatus(undefined);
     }
   }
 
@@ -288,10 +315,13 @@ function Workspace() {
               <Row divided title="已归档会话" icon="archive" onPress={() => showPage("archive")} />
             </Group>
             <Group>
-              <View style={styles.listItem}>
-                <Text style={styles.text}>热更新版本</Text>
-                <Text selectable style={[styles.caption, layout.updateValue]}>{currentUpdate.id}</Text>
-              </View>
+              <Pressable accessibilityRole="button" accessibilityLabel={`热更新版本，${currentUpdate.id}，检查更新`}
+                accessibilityState={{ busy: !!updateStatus, disabled: updateDisabled }} disabled={updateDisabled}
+                onPress={() => void checkUpdate()} style={({ pressed }) => [styles.listItem, pressed && styles.faded]}>
+                <Text style={styles.text}>{updateStatus ?? "热更新版本"}</Text>
+                <Text style={[styles.caption, layout.updateValue]}>{currentUpdate.id}</Text>
+                {Platform.OS !== "web" && <Icon name="chevron" size={13} color={colors.muted} />}
+              </Pressable>
               <View style={[styles.listItem, layout.divided, { borderColor: colors.edge }]}>
                 <Text style={styles.text}>构建时间</Text>
                 <Text selectable style={[styles.caption, layout.updateValue]}>
