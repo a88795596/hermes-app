@@ -1,9 +1,9 @@
 import { useCallback } from "react";
-import { Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
 import { managementTimeout, type ManagementOperation, type Profile } from "@hermes-mobile/protocol";
 import type { useWorkspace } from "../sync/use-workspace";
 import { profileLabel } from "../ui/text";
-import { Action, EmptyState, Icon, useTheme, type IconName } from "../ui/theme";
+import { Action, EmptyState, useTheme, type IconName } from "../ui/theme";
 import { ScheduledTasks } from "./cron";
 import { Models } from "./models";
 import { Logs } from "./logs";
@@ -39,10 +39,10 @@ export function ManagementMenu({ profiles, profile, onProfile, onOpen }: {
   </>;
 }
 
-export function ManagementScreen({ page, profile, request, onBack }: {
-  page: ManagementPage; profile: Profile; request: ReturnType<typeof useWorkspace>["call"]; onBack: () => void;
+export function ManagementScreen({ page, profile, request }: {
+  page: ManagementPage; profile: Profile; request: ReturnType<typeof useWorkspace>["call"];
 }) {
-  const { colors, styles } = useTheme();
+  const { styles } = useTheme();
   const { Screen, title } = pages[page];
   const call = useCallback(<T,>(operation: ManagementOperation, input?: object, signal?: AbortSignal) =>
     request<T>(`/profiles/${profile.profile_id}/manage/${operation}`, {
@@ -51,13 +51,6 @@ export function ManagementScreen({ page, profile, request, onBack }: {
   [profile.profile_id, request]);
 
   return <KeyboardAvoidingView style={layout.frame} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-    <View style={[layout.bar, { backgroundColor: colors.surface, borderColor: colors.edge }]}>
-      <Pressable accessibilityRole="button" accessibilityLabel="返回管理" onPress={() => { Keyboard.dismiss(); onBack(); }}
-        style={({ pressed }) => [layout.back, pressed && styles.faded]}>
-        <Icon name="back" size={16} color={colors.accent} />
-        <Text style={[styles.text, { color: colors.accent }]}>管理</Text>
-      </Pressable>
-    </View>
     <ScrollView contentContainerStyle={[styles.content, layout.page]} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
       <View style={layout.heading}>
         <Text accessibilityRole="header" style={styles.title}>{title}</Text>
@@ -70,8 +63,6 @@ export function ManagementScreen({ page, profile, request, onBack }: {
 
 const layout = StyleSheet.create({
   frame: { flex: 1 },
-  bar: { borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12 },
-  back: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 4, minHeight: 48, paddingHorizontal: 3 },
   page: { width: "100%", maxWidth: 680, alignSelf: "center", paddingTop: 16 },
   heading: { gap: 4 },
 });

@@ -1,8 +1,10 @@
 import { randomUUID } from "expo-crypto";
 import { useEffect, useRef, useState, type ComponentRef } from "react";
 import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import Animated from "react-native-reanimated";
 import type { Control, Message, SessionStatus, Skill, Topic } from "@hermes-mobile/protocol";
 import type { useWorkspace } from "../sync/use-workspace";
+import { motion, useReduceMotion } from "../ui/motion";
 import { Action, Card, EmptyState, Field, Icon, Notice, useTheme } from "../ui/theme";
 import { ComposerMenu, type ComposerCommand } from "./composer-menu";
 import { ModelPicker } from "./model-picker";
@@ -156,6 +158,7 @@ export function Conversation({
   onNewTopic: () => void;
 }) {
   const { colors, styles } = useTheme();
+  const reduced = useReduceMotion();
   const { width } = useWindowDimensions();
   const messageWidth = Math.min(560, (width - transcriptGutter * 2) * 0.86);
   const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
@@ -379,7 +382,7 @@ export function Conversation({
           );
         })}
         {pending.map((item) => (
-          <View key={item.submission_id} style={[chat.message, chat.outgoing, { maxWidth: messageWidth }]}>
+          <Animated.View key={item.submission_id} style={[chat.message, chat.outgoing, { maxWidth: messageWidth }, !reduced && motion.reveal]}>
             <View style={[chat.bubble, chat.outgoingBubble, { backgroundColor: colors.tint }]}>
               <Text selectable accessibilityLabel={`你：${item.text}`} style={[styles.text, chat.messageText]}>
                 {item.text}
@@ -397,10 +400,12 @@ export function Conversation({
                 />
               </>
             ) : <Text style={[styles.caption, chat.outgoingStatus]}>等待发送</Text>}
-          </View>
+          </Animated.View>
         ))}
         {trailingControls.map((control) => (
-          <ControlCard key={control.control_id} control={control} enabled={canControl} onAnswer={workspace.answer} />
+          <Animated.View key={control.control_id} style={!reduced && motion.reveal}>
+            <ControlCard control={control} enabled={canControl} onAnswer={workspace.answer} />
+          </Animated.View>
         ))}
       </ScrollView>
       <View style={[chat.composer, { borderTopColor: colors.edge }]}>

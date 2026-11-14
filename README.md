@@ -72,7 +72,7 @@ pnpm typecheck
    pnpm --filter @hermes-mobile/mobile exec expo run:android
    ```
 
-   安装开发客户端后，运行 `pnpm dev:mobile` 重新启动 Metro。使用 `APP_PAIRING_TOKEN` 和 BFF 地址配对。在 iOS 模拟器中使用 `http://127.0.0.1:4317`，在 Android 模拟器中使用 `http://10.0.2.2:4317`，在真机上使用 BFF 受信任的 HTTPS 反向代理。原生应用通过 SecureStore 保存设备令牌，并在应用私有的 SQLite 数据库中保存历史记录和待发文本。开发构建配置 Expo 项目 ID 和 APNs／FCM 凭据后，可在「连接」页开启收件箱通知。
+   安装开发客户端后，运行 `pnpm dev:mobile` 重新启动 Metro。使用 `APP_PAIRING_TOKEN` 和 BFF 地址配对。在 iOS 模拟器中使用 `http://127.0.0.1:4317`，在 Android 模拟器中使用 `http://10.0.2.2:4317`，在真机上使用 BFF 受信任的 HTTPS 反向代理。原生应用通过 SecureStore 保存设备令牌，并在应用私有的 SQLite 数据库中保存历史记录和待发文本。开发构建配置 Expo 项目 ID 和 APNs／FCM 凭据后，可在「设置」的「连接」中开启收件箱通知。
 
 4. 如需在本地通过 npm 安装连接器，运行 `pnpm --filter @hermes-mobile/connector pack` 并安装生成的压缩包。定时投递与 `hermes send` 需要在 Hermes 主机安装插件，并让连接器访问插件的本地投递队列。 [Hermes 投递插件](plugins/hermes-mobile-delivery/README.md)
 
@@ -110,4 +110,4 @@ pnpm dev:connector
 
 继续使用连接器已有的环境变量，包括 `BFF_URL`、`CONNECTOR_TOKEN` 和 HTTP Runs API 相关配置。Hermes 在容器中运行时，将支持管理的连接器放在同一容器或网络命名空间中，使它可以访问环回地址上的控制台。复用已有的控制台进程时，为连接器配置对应的环回地址和已发放的会话令牌。如果 BFF 使用反向代理，管理请求的响应超时时间至少设为 60 秒。
 
-重启更新后的 BFF 和连接器，在已配对的应用中打开「管理」。选择 `HERMES_PROFILES` 中的配置档案，即可查看其定时任务、模型、日志、技能和 MCP 服务器。变更由 Hermes 保存。定时任务依赖 Hermes 调度器，投递到 `hermes_mobile` 依赖现有收件箱插件。日志级别在相应的 Hermes 进程重启后生效。需要 OAuth 的 MCP 服务器须在 Hermes 控制台中登录。引用环境变量作为凭据的 MCP 服务器由对应配置档案的控制台进程执行连接测试。
+重启更新后的 BFF 和连接器，在已配对的应用中打开「设置」的「管理」。选择 `HERMES_PROFILES` 中的配置档案，即可查看其定时任务、模型、日志、技能和 MCP 服务器。变更由 Hermes 保存。定时任务依赖 Hermes 调度器，投递到 `hermes_mobile` 依赖现有收件箱插件。日志级别在相应的 Hermes 进程重启后生效。需要 OAuth 的 MCP 服务器须在 Hermes 控制台中登录。引用环境变量作为凭据的 MCP 服务器由对应配置档案的控制台进程执行连接测试。

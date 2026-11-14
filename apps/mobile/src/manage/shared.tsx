@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, Platform, Pressable, StyleSheet, Switch, Text, View, type TextInputProps } from "react-native";
+import Animated from "react-native-reanimated";
 import type { ManagementOperation } from "@hermes-mobile/protocol";
 import { ApiError } from "../sync/api";
+import { motion, useReduceMotion } from "../ui/motion";
 import { Action, Field, Icon, Notice, useTheme, type IconName } from "../ui/theme";
 
 export type ManageCall = <T>(operation: ManagementOperation, input?: object, signal?: AbortSignal) => Promise<T>;
@@ -69,9 +71,10 @@ export function DataState({ loading, error }: { loading: boolean; error?: string
 
 export function ActionState({ error, message }: { error?: string; message?: string }) {
   const { styles } = useTheme();
+  const reduced = useReduceMotion();
   return <>
     {error && <Notice>{error}</Notice>}
-    {message && <Text accessibilityLiveRegion="polite" style={styles.text}>{message}</Text>}
+    {message && <Animated.Text accessibilityLiveRegion="polite" style={[styles.text, !reduced && motion.fade]}>{message}</Animated.Text>}
   </>;
 }
 
@@ -125,14 +128,15 @@ export function Confirm({ title, description, onConfirm, disabled }: {
   title: string; description: string; onConfirm: () => void; disabled?: boolean;
 }) {
   const { styles } = useTheme();
+  const reduced = useReduceMotion();
   const [asking, setAsking] = useState(false);
-  return asking ? <View style={layout.field}>
+  return asking ? <Animated.View style={[layout.field, !reduced && motion.reveal]}>
     <Text style={styles.text}>{description}</Text>
     <View style={styles.row}>
       <Action destructive title={`确认${title}`} disabled={disabled} onPress={() => { setAsking(false); onConfirm(); }} />
       <Action title="取消" disabled={disabled} onPress={() => setAsking(false)} />
     </View>
-  </View> : <Action destructive title={title} disabled={disabled} onPress={() => setAsking(true)} />;
+  </Animated.View> : <Action destructive title={title} disabled={disabled} onPress={() => setAsking(true)} />;
 }
 
 export function InstallProgress({ call, name, onDone }: { call: ManageCall; name: string; onDone: (message: string, failed?: boolean) => void }) {

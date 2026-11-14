@@ -2,6 +2,7 @@ import { randomUUID } from "expo-crypto";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Modal, ScrollView, StyleSheet, Text, View } from "react-native";
 import type { ModelCatalog, ModelRequest, ModelResult, ModelSelection } from "@hermes-mobile/protocol";
+import { useReduceMotion } from "../ui/motion";
 import { Action, Notice, useTheme } from "../ui/theme";
 
 type Request = ModelSelection & { confirm?: string };
@@ -16,6 +17,7 @@ export function ModelPicker({
   onSelected: (result: Extract<ModelResult, { selection: ModelSelection }>) => void;
 }) {
   const { colors, styles } = useTheme();
+  const reduced = useReduceMotion();
   const [catalog, setCatalog] = useState<ModelCatalog>();
   const [providerId, setProviderId] = useState<string>();
   const [confirmation, setConfirmation] = useState<{ selection: Request; message: string }>();
@@ -76,7 +78,7 @@ export function ModelPicker({
     }));
 
   return (
-    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+    <Modal visible transparent animationType={reduced ? "none" : "fade"} onRequestClose={onClose}>
       <View style={picker.overlay}>
         <View accessibilityViewIsModal style={[styles.card, picker.panel, { borderColor: colors.edge }]}>
           <View style={picker.header}>

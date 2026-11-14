@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
+import Animated from "react-native-reanimated";
+import { motion, useReduceMotion } from "../ui/motion";
 import { Action, Field, Icon, Notice, useTheme } from "../ui/theme";
 import { parseOrigin } from "./session";
 
@@ -10,6 +12,7 @@ export function Pairing({
   initialError?: string;
 }) {
   const { colors, styles } = useTheme();
+  const reduced = useReduceMotion();
   const [address, setAddress] = useState("");
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
@@ -31,7 +34,7 @@ export function Pairing({
   return (
     <KeyboardAvoidingView style={styles.frame} behavior={Platform.OS === "ios" ? "padding" : undefined}>
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={[styles.pairContent, local.scroll]}>
-        <View style={local.content}>
+        <Animated.View style={[local.content, !reduced && motion.fade]}>
           <View style={local.intro}>
             <View style={[local.icon, { backgroundColor: colors.tint }]}>
               <Icon name="lock" size={18} color={colors.accent} />
@@ -79,7 +82,7 @@ export function Pairing({
             disabled={busy || !address.trim() || !token.trim()}
             onPress={() => void submit()}
           />
-        </View>
+        </Animated.View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
