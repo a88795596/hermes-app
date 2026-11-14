@@ -2,7 +2,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import WebSocket from 'ws';
-import type { Command, TopicQuery, TopicQueryData, TopicQueryResult } from '@hermes-mobile/protocol';
+import type { TopicQueryResult } from '@hermes-mobile/protocol';
 import { attachmentDownloader } from './attachments.js';
 import { CanonicalConnector } from './connector.js';
 import { createDeliverySpool } from './delivery.js';
@@ -11,13 +11,7 @@ import { createHttpConnector } from './http-mode.js';
 import { createDashboardManagement } from './management.js';
 import { Spool } from './spool.js';
 import { QueryUnavailable } from './topic-query.js';
-import { bridgeFrame, result } from './wire.js';
-
-type Mode = {
-  command(command: Command, current: () => boolean): Promise<void>;
-  query(query: TopicQuery): Promise<TopicQueryData>;
-  close(): void;
-};
+import { bridgeFrame, commandDigest, result } from './wire.js';
 
 function bridgeUrl(input: string | undefined): URL {
   if (!input) throw new Error('请设置 BFF_URL');
@@ -41,6 +35,15 @@ async function main(): Promise<void> {
   const dashboardUrl = process.env.HERMES_DASHBOARD_URL;
   const dashboardToken = process.env.HERMES_DASHBOARD_SESSION_TOKEN;
   const manage = dashboardUrl ? createDashboardManagement(dashboardUrl, dashboardToken ?? '') : undefined;
+  const webappUrl = process.env.HERMES_WEBAPP_URL;
+  const webappAddress = webappUrl ? URL.parse(webappUrl) : undefined;
+  if (webappUrl && (!webappAddress || !['http:', 'https:'].includes(webappAddress.protocol)
+    || !['127.0.0.1', '[::1]', 'localhost'].includes(webappAddress.hostname)
+    || webappAddress.username || webappAddress.password || webappAddress.pathname !== '/' || webappAddress.search
+    || webappAddress.hash || !dashboardToken || !/^[\x21-\x7e]+$/u.test(dashboardToken))) {
+    throw new Error('Hermes Webapp 需要回环地址和会话令牌');
+  }
+  const webapp = webappAddress && dashboardToken ? { origin: webappAddress.origin, token: dashboardToken } : undefined;
   const path = process.env.CONNECTOR_DB_PATH ?? join(homedir(), '.hermes-mobile', 'connector.sqlite');
   const spool = new Spool(path);
   const deliveryPath = process.env.HERMES_MOBILE_SPOOL_PATH;
@@ -48,7 +51,6 @@ async function main(): Promise<void> {
   let socket: WebSocket | undefined;
   const shutdown = new AbortController();
   let serial = Promise.resolve();
-  const titleTasks = new Set<Promise<void>>();
   let flush: () => void = () => {};
   const stop = () => {
     shutdown.abort();
@@ -58,9 +60,11 @@ async function main(): Promise<void> {
   process.once('SIGTERM', stop);
 
   const downloadAttachment = attachmentDownloader(url, token, shutdown.signal);
-  const mode: Mode = httpUrl && httpKey ? createHttpConnector({
-    url: httpUrl, token: httpKey, spool, send: () => flush(), downloadAttachment,
-  }) : new CanonicalConnector(process.env.HERMES_BIN ?? 'hermes', spool, () => socket?.terminate(), downloadAttachment);
+  const canonical = new CanonicalConnector(webapp ?? process.env.HERMES_BIN ?? 'hermes',
+    spool, () => socket?.terminate(), downloadAttachment);
+  const legacy = httpUrl && httpKey ? createHttpConnector({
+    url: httpUrl, token: httpKey, spool, send: () => flush(), downloadAttachment, webapp,
+  }) : undefined;
   for (const id of spool.unfinished()) {
     spool.finish(id, { ...result(id, 'unknown', { error: 'Hermes 无法确认执行结果' }) });
   }
@@ -71,7 +75,7 @@ async function main(): Promise<void> {
       const started = Date.now();
       const peer = new WebSocket(url, {
         headers: { Authorization: `Bearer ${token}`, 'X-Hermes-Mobile-Topic-Query': '1', 'X-Hermes-Mobile-Reasoning': '1',
-          'X-Hermes-Mobile-Topic-Title': '1', 'X-Hermes-Mobile-Attachments': '1',
+          'X-Hermes-Mobile-Attachments': '1',
           ...(manage && { 'X-Hermes-Mobile-Management': '1' }) },
         handshakeTimeout: 10_000, maxPayload: 1024 * 1024, perMessageDeflate: false,
       });
@@ -182,7 +186,9 @@ async function main(): Promise<void> {
             return;
           }
           querying += 1;
-          void mode.query(frame).then((data) => {
+          const backend = frame.session_id.startsWith('mobile_') ? legacy : canonical;
+          const query = backend ? backend.query(frame) : Promise.reject(new QueryUnavailable());
+          void query.then((data) => {
             const response: TopicQueryResult = { ...base, data };
             send(Buffer.byteLength(JSON.stringify(response)) <= 1024 * 1024
               ? response : { ...base, error: 'too_large' });
@@ -201,12 +207,6 @@ async function main(): Promise<void> {
           void manage(frame).then((reply) => { send(reply); }).catch(() => peer.terminate()).finally(() => { managementPending -= 1; });
           return;
         }
-        if (frame.kind === 'summarize_title') {
-          const task = mode.command(frame, current).then(flush, () => peer.terminate())
-            .finally(() => { titleTasks.delete(task); });
-          titleTasks.add(task);
-          return;
-        }
         if (queued >= 256) {
           peer.terminate();
           return;
@@ -218,7 +218,14 @@ async function main(): Promise<void> {
         queued += 1;
         serial = serial.then(async () => {
           if (current()) {
-            await mode.command(frame, current);
+            const backend = frame.session_id?.startsWith('mobile_') ? legacy : canonical;
+            if (backend) {
+              await backend.command(frame, current);
+            } else if (frame.kind !== 'watch' && spool.begin(frame.command_id, commandDigest(frame))) {
+              spool.finish(frame.command_id, { ...result(frame.command_id, 'error', {
+                error: '旧会话需要配置 Hermes HTTP Runs 才能继续。请新建会话或恢复旧配置。',
+              }) });
+            }
             flush();
           }
         }).catch(() => {
@@ -238,8 +245,9 @@ async function main(): Promise<void> {
       }
     }
   } finally {
-    mode.close();
-    await Promise.all([serial, ...titleTasks]);
+    canonical.close();
+    legacy?.close();
+    await serial;
     spool.close();
     process.removeListener('SIGINT', stop);
     process.removeListener('SIGTERM', stop);
@@ -247,6 +255,6 @@ async function main(): Promise<void> {
 }
 
 void main().catch(() => {
-  process.stderr.write('连接器启动失败。请检查 BFF_URL、CONNECTOR_TOKEN、本地队列路径以及 Hermes 和控制台配置。\n');
+  process.stderr.write('连接器启动失败。请检查 BFF_URL、CONNECTOR_TOKEN、本地队列路径以及 Hermes Webapp 或控制台配置。\n');
   process.exitCode = 1;
 });

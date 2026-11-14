@@ -3,8 +3,8 @@ set -euo pipefail
 
 : "${DATABASE_URL:?请配置 DATABASE_URL}"
 : "${APP_PAIRING_TOKEN:?请配置 APP_PAIRING_TOKEN}"
-: "${HERMES_API_URL:?请配置 HERMES_API_URL}"
-: "${HERMES_API_KEY:?请配置 HERMES_API_KEY}"
+: "${HERMES_WEBAPP_URL:?请配置 HERMES_WEBAPP_URL}"
+: "${HERMES_DASHBOARD_SESSION_TOKEN:?请配置 HERMES_DASHBOARD_SESSION_TOKEN}"
 export BFF_URL="http://127.0.0.1:${PORT}"
 CONNECTOR_TOKEN="${CONNECTOR_TOKEN:-$(node -p 'require("node:crypto").randomBytes(32).toString("hex")')}"
 export CONNECTOR_TOKEN

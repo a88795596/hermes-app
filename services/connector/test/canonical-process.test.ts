@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -50,6 +51,10 @@ test('Canonical Gateway 在提交返回终态回执时仍保存已缓冲的过�
       if (method === 'session.create') reply({ session_id: sessionId, stored_session_id: sessionId, authority_epoch: 1,
         replay_epoch: 'epoch', last_sequence: 0, subscription_id: 'subscription', execution_generation: 0,
         revision: 0, running: false, prompts: [], pending: [] });
+      if (method === 'session.events.since') reply({ events: [], snapshot_required: true });
+      if (method === 'session.resume') reply({ session_id: sessionId, stored_session_id: sessionId, authority_epoch: 1,
+        replay_epoch: 'new-epoch', last_sequence: 0, subscription_id: 'subscription', execution_generation: 0,
+        revision: 0, running: false, prompts: [], pending: [], info: { title: '断线期间的原生标题' } });
       if (method === 'config.get') reply({ value: '0' });
       if (method === 'config.set') reply({ value: '1' });
       if (method === 'image.attach_bytes') {
@@ -63,9 +68,17 @@ test('Canonical Gateway 在提交返回终态回执时仍保存已缓冲的过�
       if (method === 'prompt.submit') {
         submitted = params;
         const events: [string, JsonObject][] = [
-          ['reasoning.delta', { text: '先检查。' }],
+          ['session.info', { title: 'Hermes 原生标题' }],
+          ['reasoning.delta', { text: '先检查。 Authorization: Bearer abc123' }],
+          ['reasoning.delta', { text: '456789012345678901' }],
+          ['message.interim', { text: '正在读取附件。', already_streamed: false }],
           ['tool.start', { tool_id: 'call-1', name: 'read_file', args: { path: 'private-path' } }],
           ['tool.complete', { tool_id: 'call-1', name: 'read_file', is_error: true }],
+          ['message.delta', { text: '正在重新', segment: 1, offset: 0 }],
+          ['message.delta', { text: '读取附件。', segment: 1, offset: 4 }],
+          ['message.delta', { text: null }],
+          ['tool.start', { tool_id: 'call-2', name: 'read_file' }],
+          ['tool.complete', { tool_id: 'call-2', name: 'read_file', is_error: false }],
           ['message.complete', { text: '', outcome: 'completed' }],
         ];
         events.forEach(([type, payload], index) => send({ method: 'event', params: {
@@ -92,11 +105,47 @@ test('Canonical Gateway 在提交返回终态回执时仍保存已缓冲的过�
   assert.match(String(submitted?.text), /检查/);
   assert.match(String(submitted?.text), /@file:\/hermes\/attachments\/report.txt/);
   assert.deepEqual(submitted?.attachments, [{ path: '/hermes/cache/images/upload.png', mime: 'image/png' }]);
-  const replies = spool.events(new Set([topicId]), new Set(), 50).map(({ body }) => body).filter(({ type }) => type === 'message');
-  assert.equal(replies[0]?.text, '');
+  const frames = spool.events(new Set([topicId]), new Set(), 50).map(({ body }) => body);
+  assert(!JSON.stringify(frames).includes('abc123'));
+  assert.deepEqual(frames.filter(({ type }) => type === 'topic_title').map(({ session_id, title }) => ({ session_id, title })),
+    [{ session_id: sessionId, title: 'Hermes 原生标题' }]);
+  const replies = frames.filter(({ type }) => type === 'message');
   assert.equal(replies.at(-1)?.status, 'final');
   assert.equal(replies.at(-1)?.text, '已检查。');
   assert.deepEqual(replies.at(-1)?.process, [
-    { kind: 'reasoning', text: '先检查。' }, { kind: 'tool', id: 'call-1', name: 'read_file', status: 'failed' },
+    { kind: 'reasoning', text: '先检查。 Authorization: Bearer [已隐藏]' }, { kind: 'commentary', text: '正在读取附件。' },
+    { kind: 'tool', id: 'call-1', name: 'read_file', status: 'failed' },
+    { kind: 'commentary', text: '正在重新读取附件。' },
+    { kind: 'tool', id: 'call-2', name: 'read_file', status: 'succeeded' },
   ]);
+  const resumed = new CanonicalConnector(binary, spool, () => {}, async () => { throw new Error('意外的附件下载'); });
+  t.after(() => resumed.close());
+  await resumed.command({ ...base, command_id: randomUUID(), session_id: sessionId, kind: 'watch', body: {} }, () => true);
+  const titles = spool.events(new Set([topicId]), new Set(), 50).map(({ body }) => body).filter(({ type }) => type === 'topic_title');
+  assert.equal(titles.at(-1)?.title, '断线期间的原生标题');
+  const webapp = createServer((req, res) => {
+    assert.equal(req.headers.authorization, 'Bearer dashboard-key');
+    if (req.method === 'POST' && req.url === '/api/webapp/socket-ticket?socket=gateway&profile=default') {
+      res.end(JSON.stringify({ ticket: attach.ticket }));
+    } else if (req.method === 'GET' && req.url === '/api/skills?profile=default') {
+      res.end(JSON.stringify([
+        { name: 'report', description: '处理报告', category: 'work', enabled: true },
+        { name: 'disabled', enabled: false },
+      ]));
+    } else {
+      res.writeHead(404).end();
+    }
+  });
+  webapp.on('upgrade', (req, socket, head) => {
+    server.handleUpgrade(req, socket, head, (peer) => server.emit('connection', peer, req));
+  });
+  await new Promise<void>((resolve) => webapp.listen(0, '127.0.0.1', resolve));
+  const webappAddress = webapp.address();
+  assert(webappAddress && typeof webappAddress !== 'string');
+  const remote = new CanonicalConnector({ origin: 'http://127.0.0.1:' + webappAddress.port, token: 'dashboard-key' },
+    spool, () => {}, async () => { throw new Error('意外的附件下载'); });
+  t.after(() => { remote.close(); webapp.close(); webapp.closeAllConnections(); });
+  assert.deepEqual(await remote.query({ type: 'topic_query', kind: 'skills', topic_id: topicId,
+    session_id: sessionId, profile_ref: 'default', request_id: randomUUID() }),
+  { kind: 'skills', skills: [{ name: 'report', description: '处理报告', category: 'work' }] });
 });

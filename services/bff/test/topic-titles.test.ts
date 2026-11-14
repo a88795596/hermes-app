@@ -8,7 +8,7 @@ import { buildApp } from "../src/app.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 
-test("自动标题取首条消息，并只采用最新成功完成轮次的摘要", { skip: !databaseUrl, timeout: 10_000 }, async () => {
+test("自动命名采用绑定会话的原生标题，手工命名优先", { skip: !databaseUrl, timeout: 10_000 }, async () => {
   const schema = `topic_titles_${randomUUID().replaceAll("-", "")}`;
   const database = new pg.Pool({ connectionString: databaseUrl });
   await database.query(`CREATE SCHEMA ${schema}`);
@@ -68,49 +68,25 @@ test("自动标题取首条消息，并只采用最新成功完成轮次的摘�
     assert.equal((await post("/topics", create)).statusCode, 202);
     assert.equal((await post("/topics", { ...create, title: "手工命名" })).statusCode, 409);
 
-    await event("message", { message_id: randomUUID(), submission_id: first, status: "final", text: "发现轮询频率过低" });
     await event("submission", { submission_id: first, status: "final" });
-    const firstSummary = await next();
-    assert.equal(firstSummary.kind, "summarize_title");
-    assert.equal(firstSummary.session_id, "mobile_title_test");
-    assert.equal(JSON.parse(firstSummary.body.input).title, undefined);
-    assert.match(firstSummary.body.input, /发现轮询频率过低/);
-    assert.doesNotMatch(firstSummary.body.input, /修复移动端的重试逻辑/);
-
-    await event("message", { message_id: randomUUID(), submission_id: second, status: "final", text: "已补上退避重试" });
+    await event("topic_title", { session_id: "mobile_title_test", title: "排查同步延迟" });
     await event("submission", { submission_id: second, status: "final" });
-    const secondSummary = await next();
-    assert.equal(secondSummary.kind, "summarize_title");
-    assert.equal(JSON.parse(secondSummary.body.input).title, undefined);
-    assert.match(secondSummary.body.input, /发现轮询频率过低/);
-    assert.match(secondSummary.body.input, /已补上退避重试/);
-    await result(firstSummary.command_id, { title: "排查同步延迟" });
-    assert.equal(await title(), "排查 同步 延迟");
-    await result(secondSummary.command_id, { title: "修复同步重试" });
-    assert.equal(await title(), "修复同步重试");
-    assert.equal((await get("/topics")).json().data[0].title, "修复同步重试");
-
-    const third = await submit("继续检查连接状态");
-    await event("submission", { submission_id: third, status: "final" });
-    const thirdSummary = await next();
-    assert.equal(JSON.parse(thirdSummary.body.input).title, "修复同步重试");
-    await result(thirdSummary.command_id, { status: "error" });
-    assert.equal(await title(), "修复同步重试");
-    const fourth = await submit("中断这轮");
-    await event("submission", { submission_id: fourth, status: "cancelled" });
+    assert.equal(await title(), "排查同步延迟");
+    assert.equal((await get("/topics")).json().data[0].title, "排查同步延迟");
     const commands = await database.query(`SELECT count(*)::int AS count FROM ${schema}.commands WHERE payload->>'kind' = 'summarize_title'`);
-    assert.equal(commands.rows[0].count, 3);
+    assert.equal(commands.rows[0].count, 0);
 
     const manualId = randomUUID();
     const manual = await post("/topics", { request_id: manualId, profile_id, title: "手工命名" });
     assert.equal(manual.json().data.title, "手工命名");
     assert.equal((await next()).command_id, manualId);
     await result(manualId, { session_id: "mobile_manual_test" });
-    const submission_id = randomUUID();
-    assert.equal((await post(`/topics/${manualId}/submissions`, { submission_id, text: "保留旧标题" })).statusCode, 202);
-    assert.equal((await next()).command_id, submission_id);
-    await result(submission_id, { admission_id: "run-manual" });
+    await event("topic_title", { topic_id: manualId, session_id: "mobile_manual_test", title: "Hermes 生成的标题" });
     assert.equal((await get(`/topics/${manualId}`)).json().data.topic.title, "手工命名");
+
+    send({ type: "topic_title", event_id: randomUUID(), topic_id: topicId, session_id: "mobile_manual_test", title: "串话标题" });
+    assert.equal((await once(connector, "close"))[0], 1008);
+    assert.equal(await title(), "排查同步延迟");
   } finally {
     connector?.terminate();
     await app.close();

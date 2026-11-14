@@ -1,14 +1,14 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import type { Command, ConnectorEvent, Control, ModelSelection, ReasoningEffort, TopicQuery, TopicQueryData } from '@hermes-mobile/protocol';
 import { MAX_CLARIFY_CHOICE_BYTES } from '@hermes-mobile/protocol';
-import { attachmentBase64, attachmentFilename, type DownloadAttachment } from './attachments.js';
+import { attachmentBytes, attachmentFilename, type DownloadAttachment } from './attachments.js';
 import { integer, object, string } from './gateway.js';
-import type { JsonObject } from './gateway.js';
+import type { JsonObject, WebappAccess } from './gateway.js';
 import { addProcessText, removeStreamedCommentary, updateProcessTool } from './message-process.js';
 import { hasModel, modelCatalog } from './models.js';
 import type { Binding, Spool, Turn } from './spool.js';
-import { QueryUnavailable, queryTimeout, runtimeVersion, sessionStatus, skillList } from './topic-query.js';
-import { titleInstructions, titleResult, titleTimeout } from './topic-title.js';
+import { QueryUnavailable, queryTimeout, runtimeVersion, sessionStatus, skillList, webappSkills } from './topic-query.js';
+import { topicTitleEvent } from './topic-title.js';
 import { boundedText, commandDigest, result, stableId, text } from './wire.js';
 
 const unknown = 'Hermes 无法确认执行结果';
@@ -62,9 +62,16 @@ function pendingPrompts(id: string, run: JsonObject): Prompt[] {
   });
 }
 
-type Options = { url: string; token: string; send: (frame: JsonObject) => void; spool: Spool; downloadAttachment: DownloadAttachment };
+type Options = {
+  url: string;
+  token: string;
+  send: (frame: JsonObject) => void;
+  spool: Spool;
+  downloadAttachment: DownloadAttachment;
+  webapp?: WebappAccess;
+};
 
-export function createHttpConnector({ url, token, send, spool, downloadAttachment }: Options) {
+export function createHttpConnector({ url, token, send, spool, downloadAttachment, webapp }: Options) {
   const endpoint = URL.parse(url);
   if (!endpoint || !['http:', 'https:'].includes(endpoint.protocol) ||
       !['127.0.0.1', '[::1]'].includes(endpoint.hostname) || endpoint.username || endpoint.password ||
@@ -95,23 +102,31 @@ export function createHttpConnector({ url, token, send, spool, downloadAttachmen
   }
 
   async function prepareInput(command: Extract<Command, { kind: 'submit' }>) {
-    const { text, attachments } = command.body;
+    const { text: description, attachments } = command.body;
     const documents: string[] = [];
     const images: JsonObject[] = [];
     for (const [index, attachment] of (attachments ?? []).entries()) {
-      const content_base64 = await attachmentBase64(downloadAttachment, command.command_id, index + 1, attachment);
+      const content = await attachmentBytes(downloadAttachment, command.command_id, index + 1, attachment);
       if (attachment.mime.startsWith('image/')) {
-        images.push({ type: 'image_url', image_url: { url: `data:${attachment.mime};base64,${content_base64}` } });
+        images.push({ type: 'image_url', image_url: { url: `data:${attachment.mime};base64,${content.toString('base64')}` } });
       } else {
-        const { response, data } = await json(command.profile_ref, '/api/hermes-mobile/attachment', {
-          name: attachmentFilename(attachment.name), content_base64,
-        });
+        if (!webapp) throw new QueryUnavailable();
+        const form = new FormData();
+        const bytes = Uint8Array.from(content);
+        form.set('file', new Blob([bytes], { type: attachment.mime }), attachmentFilename(attachment.name));
+        const url = new URL('/api/chat/file-upload', webapp.origin);
+        url.searchParams.set('profile', command.profile_ref);
+        const response = await fetch(url, { method: 'POST', body: form, redirect: 'error',
+          headers: { authorization: 'Bearer ' + webapp.token },
+          signal: AbortSignal.any([shutdown.signal, AbortSignal.timeout(20_000)]) });
+        const data = object(await response.json().catch(() => undefined));
         const path = data?.path;
-        if (!response.ok || typeof path !== 'string' || !path || /[\p{Cc}]/u.test(path)) throw new Error('无法暂存文件');
+        if (!response.ok || data?.ok !== true || data.size !== attachment.size ||
+          !text(path, 4096) || /[\p{Cc}]/u.test(path)) throw new Error('无法暂存文件');
         documents.push(`用户附上了文件 ${JSON.stringify(attachment.name)}，保存在 ${JSON.stringify(path)}。请使用文件工具读取或提取其内容。`);
       }
     }
-    const prompt = [text, ...documents].filter((part) => part.trim()).join('\n\n') || '请查看上传的图片。';
+    const prompt = [description, ...documents].filter((part) => part.trim()).join('\n\n') || '请查看上传的图片。';
     return images.length ? [{ role: 'user', content: [{ type: 'text', text: prompt }, ...images] }] : prompt;
   }
 
@@ -126,6 +141,9 @@ export function createHttpConnector({ url, token, send, spool, downloadAttachmen
     const response = await request(profile_ref, path, { signal: AbortSignal.timeout(queryTimeout) });
     if (!response.ok) {
       await response.body?.cancel();
+      if (kind === 'skills' && webapp && [404, 500, 501].includes(response.status)) {
+        return { kind, skills: await webappSkills(webapp, profile_ref, shutdown.signal) };
+      }
       if (response.status === 404 || response.status === 501) throw new QueryUnavailable();
       throw new Error('Hermes 拒绝了查询');
     }
@@ -135,6 +153,17 @@ export function createHttpConnector({ url, token, send, spool, downloadAttachmen
     const session = object(data?.session);
     if (session?.id !== session_id) throw new Error('Hermes 返回了意外的会话');
     return { kind, status: sessionStatus(session, spool.activeTurns(topic_id)) };
+  }
+
+  async function syncTitle(binding: Binding) {
+    const session = await json(binding.profileRef, `/api/sessions/${encodeURIComponent(binding.sessionId)}`)
+      .then(({ response, data }) => response.ok ? object(data?.session) : undefined, () => undefined);
+    if (session?.id !== binding.sessionId || shutdown.signal.aborted) return;
+    const event = topicTitleEvent(binding, session.title, [String(session.last_active ?? '')]);
+    if (event) {
+      spool.record(binding.topicId, [event]);
+      send(event.body);
+    }
   }
 
   function record(turn: Turn, bodies: JsonObject[], sequence?: number, gap = false) {
@@ -278,6 +307,7 @@ export function createHttpConnector({ url, token, send, spool, downloadAttachmen
             if (signal.aborted) return;
             const latest = spool.turn(binding.topicId, id);
             if (latest?.submissionId) finishRun(latest, finished, data?.output);
+            if (finished === 'final') await syncTitle(binding);
             return;
           }
           const next = pendingPrompts(id, data ?? {});
@@ -315,11 +345,14 @@ export function createHttpConnector({ url, token, send, spool, downloadAttachmen
   async function command(command: Command, current: () => boolean): Promise<void> {
     if (!current() || shutdown.signal.aborted) return;
     const { command_id, topic_id, profile_ref } = command;
-    const existing = spool.bindings().find(({ topicId }) => topicId === topic_id);
+    const existing = spool.binding(topic_id);
     const bound = existing?.profileRef === profile_ref && existing.sessionId === command.session_id &&
       existing.sessionId.startsWith('mobile_') ? existing : undefined;
     if (command.kind === 'watch') {
-      if (bound) for (const turn of spool.activeTurns(topic_id)) watch(bound, turn);
+      if (bound) {
+        for (const turn of spool.activeTurns(topic_id)) watch(bound, turn);
+        await syncTitle(bound);
+      }
       return;
     }
     const digest = commandDigest(command);
@@ -353,32 +386,13 @@ export function createHttpConnector({ url, token, send, spool, downloadAttachmen
 
     commands.add(command_id);
     let receipt = result(command_id, 'unknown', { error: unknown });
-    let binding: Binding | undefined;
     let turn: Turn | undefined;
     let selection: ((ModelSelection | { effort: ReasoningEffort | null }) & { topicId: string }) | undefined;
     try {
       if (!profileName.test(profile_ref)) {
         receipt = result(command_id, 'error', { error: 'Hermes 配置档案无效' });
-      } else if (command.kind === 'create') {
-        if (existing) {
-          receipt = result(command_id, 'error', { error: '此话题已绑定 Hermes 会话' });
-        } else {
-          const sessionId = `mobile_${httpId(profile_ref, topic_id, command_id)}`;
-          const { response, data } = await json(profile_ref, '/api/sessions', { id: sessionId });
-          if (response.status === 201 && object(data?.session)?.id === sessionId) {
-            binding = { topicId: topic_id, sessionId, profileRef: profile_ref, profileId: profile_ref };
-            receipt = result(command_id, 'ok', { session_id: sessionId });
-          } else if (response.status >= 400 && response.status < 500 && response.status !== 408) {
-            receipt = result(command_id, 'error', { error: 'Hermes 拒绝创建会话' });
-          }
-        }
       } else if (!bound) {
         receipt = result(command_id, 'error', { error: 'Hermes 会话与话题的绑定不匹配' });
-      } else if (command.kind === 'summarize_title') {
-        const reply = await json(profile_ref, '/api/hermes-mobile/title', {
-          input: command.body.input, instructions: titleInstructions,
-        }, undefined, titleTimeout).catch(() => undefined);
-        receipt = titleResult(command_id, reply?.response.ok ? reply.data?.text : undefined);
       } else if (command.kind === 'model_options' || command.kind === 'select_model') {
         receipt = result(command_id, 'error', { error: 'Hermes 无法加载模型目录' });
         const { response, data } = await json(profile_ref, '/api/model/options?include_unconfigured=false');
@@ -475,7 +489,7 @@ export function createHttpConnector({ url, token, send, spool, downloadAttachmen
       commands.delete(command_id);
     }
     if (shutdown.signal.aborted) return;
-    spool.finish(command_id, { ...receipt }, binding, turn, selection);
+    spool.finish(command_id, { ...receipt }, undefined, turn, selection);
     send({ ...receipt });
     if (turn && bound) watch(bound, turn);
   }

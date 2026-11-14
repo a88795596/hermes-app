@@ -1,5 +1,5 @@
 import type { SessionStatus, Skill } from '@hermes-mobile/protocol';
-import { integer, object, string } from './gateway.js';
+import { integer, object, string, type WebappAccess } from './gateway.js';
 import type { Turn } from './spool.js';
 import { boundedText } from './wire.js';
 
@@ -29,6 +29,24 @@ export function skillList(value: unknown): Skill[] {
       ...(category && { category: boundedText(category, 1024) }),
     };
   });
+}
+
+export async function webappSkills({ origin, token }: WebappAccess, profile: string, shutdown?: AbortSignal) {
+  const url = new URL('/api/skills', origin);
+  url.searchParams.set('profile', profile);
+  const timeout = AbortSignal.timeout(queryTimeout);
+  const response = await fetch(url, {
+    headers: { authorization: 'Bearer ' + token }, redirect: 'error',
+    signal: shutdown ? AbortSignal.any([shutdown, timeout]) : timeout,
+  });
+  if (!response.ok) {
+    await response.body?.cancel();
+    if (response.status === 404 || response.status === 501) throw new QueryUnavailable();
+    throw new Error('Hermes 拒绝了技能查询');
+  }
+  const skills = await response.json();
+  if (!Array.isArray(skills)) throw new Error('Hermes 技能列表无效');
+  return skillList(skills.filter((item: unknown) => object(item)?.enabled !== false));
 }
 
 export function sessionStatus(value: unknown, turns: Turn[]): SessionStatus {

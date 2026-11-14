@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { Command, CommandResult, ConnectorEvent, Control, DeliveryFrame, InboxItem, Message } from "@hermes-mobile/protocol";
 import type { PoolClient } from "pg";
-import { queueTopicTitle, touchTopic } from "./mutations.js";
+import { touchTopic } from "./mutations.js";
 import { topicRow } from "./projections.js";
 import { queueInboxPush } from "./push.js";
 import { conflict, invalid, missing } from "./validation.js";
@@ -24,11 +24,11 @@ async function applySubmission(db: PoolClient, topicId: string, id: string, stat
     status, ...(error ? { error } : {}),
   }]);
   await touchTopic(db, topicId);
-  return status === "final";
 }
 
 export async function applyResult(db: PoolClient, frame: CommandResult, refs: Set<string>) {
-  const { rows } = await db.query<{ payload: Command; result: CommandResult | null; receipt: { was_unconfirmed?: boolean; title_revision?: string } }>(
+  type RetiredTitleCommand = Pick<Command, "topic_id" | "profile_ref" | "session_id"> & { kind: "summarize_title" };
+  const { rows } = await db.query<{ payload: Command | RetiredTitleCommand; result: CommandResult | null; receipt: { was_unconfirmed?: boolean } }>(
     "SELECT payload, result, receipt FROM commands WHERE id = $1", [frame.command_id],
   );
   const command = rows[0];
@@ -38,6 +38,7 @@ export async function applyResult(db: PoolClient, frame: CommandResult, refs: Se
   if (payload.profile_ref !== topic.profile_ref || (payload.session_id && payload.session_id !== topic.session_id)) {
     invalid("命令绑定已不匹配。");
   }
+  if (payload.kind === "summarize_title") return topic;
   if (result) {
     if (!isDeepStrictEqual(result, frame)) conflict("命令结果与已保存的结果冲突。");
     return topic;
@@ -46,9 +47,7 @@ export async function applyResult(db: PoolClient, frame: CommandResult, refs: Se
   if ((frame.model_result !== undefined && (!isModel || frame.status !== "ok" ||
       (frame.model_result.type === "catalog") !== (payload.kind === "model_options"))) ||
       (isModel && frame.status === "ok" && !frame.model_result)) invalid("命令的模型结果无效。");
-  if ((frame.title !== undefined) !== (payload.kind === "summarize_title" && frame.status === "ok")) {
-    invalid("命令的标题结果无效。");
-  }
+  if (frame.title !== undefined) invalid("命令的标题结果无效。");
   if (payload.kind === "create") {
     if (frame.status === "ok" && !frame.session_id) invalid("创建结果缺少会话 ID。");
     const success = frame.status === "ok";
@@ -67,10 +66,6 @@ export async function applyResult(db: PoolClient, frame: CommandResult, refs: Se
     await db.query("UPDATE topics SET reasoning_effort = $2, reasoning_status = $3, updated_at = clock_timestamp() WHERE id = $1", [topic.id,
       frame.status === "ok" ? payload.body.effort : topic.reasoning_effort,
       frame.status === "unknown" || (frame.status === "error" && command.receipt.was_unconfirmed) ? "unknown" : null]);
-  } else if (payload.kind === "summarize_title" && frame.title) {
-    await db.query(`UPDATE topics SET title = $2, updated_at = clock_timestamp()
-      WHERE id = $1 AND auto_title AND title_revision = $3 AND title IS DISTINCT FROM $2`,
-      [topic.id, frame.title, command.receipt.title_revision]);
   } else if (frame.model_result?.type === "selected" || frame.model_result?.type === "deferred") {
     await touchTopic(db, topic.id);
   } else if (payload.kind === "respond") {
@@ -101,11 +96,16 @@ async function recordEvent(db: PoolClient, kind: string, id: string, payload: ob
 export async function applyEvent(db: PoolClient, frame: ConnectorEvent, refs: Set<string>, sessions: Map<string, string>) {
   const topic = await topicRow(db, frame.topic_id, refs);
   if (topic.status !== "ready" || sessions.get(topic.id) !== topic.session_id) invalid("连接器未绑定此话题对应的会话。");
+  if (frame.type === "topic_title" && frame.session_id !== topic.session_id) invalid("标题事件的 Hermes 会话不匹配。");
   if (!await recordEvent(db, "event", frame.event_id, frame)) return;
 
+  if (frame.type === "topic_title") {
+    await db.query("UPDATE topics SET title = $2 WHERE id = $1 AND auto_title AND title IS DISTINCT FROM $2",
+      [topic.id, frame.title]);
+    return;
+  }
   if (frame.type === "submission") {
-    const completed = await applySubmission(db, topic.id, frame.submission_id, frame.status, frame.error);
-    if (completed) return queueTopicTitle(db, topic);
+    await applySubmission(db, topic.id, frame.submission_id, frame.status, frame.error);
     return;
   }
   if (frame.type === "message") {

@@ -53,17 +53,18 @@ function identity(value: JsonObject | undefined): Identity | undefined {
   }
 }
 
-export type GatewayConfig = { binary: string; profile: string };
+export type WebappAccess = { origin: string; token: string };
+export type GatewayConfig = { profile: string } & ({ binary: string } | { webapp: WebappAccess });
 
 export class Gateway {
   clarifyBatch = false;
   readonly #pending = new Map<string, Pending>();
   readonly ready: Promise<JsonObject>;
   #ping: ReturnType<typeof setInterval> | undefined;
+  #identity!: Identity;
 
   private constructor(
     readonly socket: WebSocket,
-    readonly identity: Identity,
     onFrame: (frame: JsonObject, bytes: number) => void,
     onClose: () => void,
   ) {
@@ -132,53 +133,70 @@ export class Gateway {
     onFrame: (frame: JsonObject, bytes: number) => void,
     onClose: () => void,
   ): Promise<Gateway> {
-    let receipt: JsonObject | undefined;
-    try {
-      const env = { ...process.env };
-      delete env.CONNECTOR_TOKEN;
-      const { stdout } = await exec(config.binary, ['--profile', config.profile, 'gateway', 'attach', '--json'], {
-        env,
-        timeout: 10_000,
-        maxBuffer: 256 * 1024,
-      });
-      receipt = object(parseCanonicalJson(stdout));
-    } catch {
-      throw new Error('无法连接本机 Hermes 网关');
+    let owner: Identity | undefined;
+    let url: URL;
+    let ticket: string | undefined;
+    if ('webapp' in config) {
+      const { origin, token } = config.webapp;
+      const route = new URL('/api/webapp/socket-ticket', origin);
+      route.searchParams.set('socket', 'gateway');
+      route.searchParams.set('profile', config.profile);
+      const response = await fetch(route, { method: 'POST', headers: { authorization: `Bearer ${token}` },
+        redirect: 'error', signal: AbortSignal.timeout(10_000) });
+      if (!response.ok) {
+        await response.body?.cancel();
+        throw new Error('Hermes Webapp 拒绝签发连接票据');
+      }
+      ticket = string(object(await response.json())?.ticket);
+      url = new URL('/api/ws', origin.replace(/^http/u, 'ws'));
+    } else {
+      let receipt: JsonObject | undefined;
+      try {
+        const env = { ...process.env };
+        delete env.CONNECTOR_TOKEN;
+        const { stdout } = await exec(config.binary, ['--profile', config.profile, 'gateway', 'attach', '--json'], {
+          env, timeout: 10_000, maxBuffer: 256 * 1024,
+        });
+        receipt = object(parseCanonicalJson(stdout));
+      } catch {
+        throw new Error('无法连接本机 Hermes 网关');
+      }
+      owner = identity(object(receipt?.endpoint));
+      const address = string(receipt?.url);
+      ticket = string(receipt?.ticket);
+      if (!owner || !address || !ticket || receipt?.protocol !== protocol ||
+        !Array.isArray(receipt.protocols) || receipt.protocols.length !== 2 ||
+        receipt.protocols[0] !== protocol || receipt.protocols[1] !== `hermes-gateway-ticket.${ticket}`) {
+        throw new Error('Hermes 网关返回了不兼容的连接回执');
+      }
+      url = new URL(address);
+      if (!['ws:', 'wss:'].includes(url.protocol) ||
+        !['127.0.0.1', '[::1]', 'localhost'].includes(url.hostname) ||
+        url.username || url.password || url.pathname !== '/api/ws' || url.search || url.hash) {
+        throw new Error('Hermes 网关未返回本机套接字地址');
+      }
     }
-    const endpoint = object(receipt?.endpoint);
-    const owner = identity(endpoint);
-    const address = string(receipt?.url);
-    const ticket = string(receipt?.ticket);
-    if (!owner || !address || !ticket || receipt?.protocol !== protocol ||
-      !Array.isArray(receipt.protocols) || receipt.protocols.length !== 2 ||
-      receipt.protocols[0] !== protocol || receipt.protocols[1] !== `hermes-gateway-ticket.${ticket}`) {
-      throw new Error('Hermes 网关返回了不兼容的连接回执');
-    }
-    const url = new URL(address);
-    if (!['ws:', 'wss:'].includes(url.protocol) ||
-      !['127.0.0.1', '[::1]', 'localhost'].includes(url.hostname) ||
-      url.username || url.password || url.pathname !== '/api/ws' || url.search || url.hash) {
-      throw new Error('Hermes 网关未返回本机套接字地址');
-    }
-    const socket = new WebSocket(url, receipt.protocols, {
+    if (!ticket || !/^[a-zA-Z0-9_-]{1,512}$/u.test(ticket)) throw new Error('Hermes 连接票据无效');
+    const socket = new WebSocket(url, [protocol, `hermes-gateway-ticket.${ticket}`], {
       handshakeTimeout: 10_000,
       maxPayload: 16 * 1024 * 1024,
       perMessageDeflate: false,
     });
-    const gateway = new Gateway(socket, owner, onFrame, onClose);
+    const gateway = new Gateway(socket, onFrame, onClose);
     try {
       await gateway.ready;
       const description = await gateway.rpc('runtime.describe', {});
       const described = identity(description);
       const create = object(description.session_create);
-      if (described?.profileId !== owner.profileId || described.instanceId !== owner.instanceId ||
-        described.authorityEpoch !== owner.authorityEpoch || !Array.isArray(description.capabilities) ||
+      if (!described || (owner && (described.profileId !== owner.profileId || described.instanceId !== owner.instanceId ||
+        described.authorityEpoch !== owner.authorityEpoch)) || !Array.isArray(description.capabilities) ||
         !['durable-admission-v1', 'event-replay-v1'].every((item) => description.capabilities instanceof Array &&
           description.capabilities.includes(item)) ||
         !Array.isArray(create?.sources) || !create.sources.includes('tool') ||
         !Array.isArray(create.parameters) || !create.parameters.includes('source') || !create.parameters.includes('request_id')) {
         throw new Error('Hermes 运行时的身份或能力与会话协议要求不符');
       }
+      gateway.#identity = described;
       const capabilities = await gateway.rpc('client.capabilities', { server_requests: true });
       if (!Array.isArray(capabilities.server_requests)) {
         throw new Error('Hermes 未协商服务端主动请求能力');
@@ -190,6 +208,10 @@ export class Gateway {
       socket.terminate();
       throw error;
     }
+  }
+
+  get identity(): Identity {
+    return this.#identity;
   }
 
   #keepAlive(): void {

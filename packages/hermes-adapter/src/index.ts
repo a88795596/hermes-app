@@ -252,6 +252,7 @@ export interface SessionSnapshot {
   executionGeneration: string;
   revision: string;
   running: boolean;
+  title?: string;
   messages: { role: "user" | "assistant"; text: string; rowId?: string }[];
   prompts: CanonicalPrompt[];
   pending: PendingAdmission[];
@@ -268,6 +269,7 @@ function textWithoutMedia(text: string): string {
 export function parseSessionSnapshot(value: unknown): SessionSnapshot {
   const snapshot = record(value, "会话快照");
   const sessionId = id(snapshot.session_id, "session_id");
+  const info = isRecord(snapshot.info) ? snapshot.info : undefined;
   const messages: SessionSnapshot["messages"] = [];
   // 网关提供的界面消息已滤除仅供模型读取的记录及技能和系统辅助内容。
   for (const row of list(snapshot.display_messages ?? [], "界面消息列表")) {
@@ -289,6 +291,7 @@ export function parseSessionSnapshot(value: unknown): SessionSnapshot {
     executionGeneration: integer(snapshot.execution_generation, "execution_generation"),
     revision: integer(snapshot.revision, "revision"),
     running: boolean(snapshot.running, "会话运行标志"),
+    title: typeof info?.title === "string" ? info.title : undefined,
     messages,
     prompts: list(snapshot.prompts, "待处理提示列表").map((item) => parsePrompt(record(item, "提示"))),
     pending: parsePending(snapshot.pending),
@@ -335,7 +338,7 @@ export type CanonicalProjection =
   | ({ type: "approval.request" | "clarify.request" } & CanonicalPrompt)
   | { type: "approval.settled" | "clarify.settled"; promptId: string; executionGeneration: string }
   | { type: "request.cancel"; requestId: string; reason: string }
-  | { type: "session.info"; pending?: PendingAdmission[]; running?: boolean; executionGeneration?: string }
+  | { type: "session.info"; pending?: PendingAdmission[]; running?: boolean; executionGeneration?: string; title?: string }
   | { type: "session.replay_gap" };
 
 function turnIdentity(event: CanonicalEvent): TurnIdentity {
@@ -412,6 +415,7 @@ export function normalizeCanonicalEvent(event: CanonicalEvent): CanonicalProject
         type,
         pending: payload.pending == null ? undefined : parsePending(payload.pending),
         running: payload.running == null ? undefined : boolean(payload.running, "会话运行标志"),
+        title: typeof payload.title === "string" ? payload.title : undefined,
         executionGeneration: payload.execution_generation == null
           ? undefined
           : integer(payload.execution_generation, "execution_generation"),

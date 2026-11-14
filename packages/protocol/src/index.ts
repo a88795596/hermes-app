@@ -24,7 +24,6 @@ export interface Topic {
 
 export const DEFAULT_TOPIC_TITLE = "新会话";
 export const MAX_TOPIC_TITLE_BYTES = 256;
-export const MAX_TITLE_INPUT_BYTES = 32 * 1024;
 
 export function topicTitlePreview(text: string): string {
   const characters = Array.from(text.replace(/[\s\p{Cc}]+/gu, " ").trim());
@@ -183,7 +182,6 @@ export type Command = CommandEnvelope & (
   | { kind: "model_options"; body: Record<string, never> }
   | { kind: "select_model"; body: ModelSelection & { confirm?: string } }
   | { kind: "select_reasoning"; body: { effort: ReasoningEffort | null } }
-  | { kind: "summarize_title"; body: { input: string } }
   | { kind: "watch"; body: Record<string, never> }
 );
 
@@ -196,6 +194,7 @@ export interface CommandResult {
   error?: string;
   control_status?: Control["status"];
   model_result?: ModelResult;
+  /** 兼容升级前连接器队列中的标题回执。 */
   title?: string;
 }
 
@@ -213,6 +212,7 @@ export interface DeliveryFrame {
 }
 
 export type ConnectorEvent =
+  | (EventEnvelope & { type: "topic_title"; session_id: string; title: string })
   | (EventEnvelope & Pick<Message, "message_id" | "submission_id" | "text" | "process"> & { type: "message"; status: "streaming" | "final" })
   | (EventEnvelope & { type: "submission"; submission_id: string; status: Exclude<MessageStatus, "accepted">; error?: string })
   | (EventEnvelope & Omit<Control, "answer" | "error"> & { type: "control" });

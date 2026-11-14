@@ -94,32 +94,6 @@ export async function submit(db: PoolClient, refs: Set<string>, topicId: string,
   return message;
 }
 
-export async function queueTopicTitle(db: PoolClient, topic: Awaited<ReturnType<typeof topicRow>>) {
-  if (!topic.auto_title || !topic.session_id) return false;
-  const { rows: [revision] } = await db.query<{ title_revision: string }>(
-    "UPDATE topics SET title_revision = title_revision + 1 WHERE id = $1 RETURNING title_revision", [topic.id],
-  );
-  const { rows: [first] } = await db.query<{ text: string }>(`
-    SELECT data->>'text' AS text FROM messages WHERE topic_id = $1 AND data->>'role' = 'user'
-    ORDER BY position LIMIT 1`, [topic.id]);
-  const title = topic.title === topicTitlePreview(first?.text ?? "") ? undefined : topic.title;
-  // shortcut: 用现有标题和最近四轮控制提示长度，长会话需要覆盖更早内容时再加入滚动摘要。
-  const { rows } = await db.query<{ user: string; assistant: string | null }>(`
-    SELECT left(COALESCE(NULLIF(btrim(u.data->>'text'), ''), u.data#>>'{attachments,0,name}', ''), 600) AS "user", (
-      SELECT left(a.data->>'text', 600) FROM messages AS a
-      WHERE a.topic_id = s.topic_id AND a.data->>'submission_id' = s.id::text
-        AND a.data->>'role' = 'assistant' AND a.data->>'status' = 'final'
-      ORDER BY a.position DESC LIMIT 1
-    ) AS assistant
-    FROM submissions AS s JOIN messages AS u ON u.id = s.message_id
-    WHERE s.topic_id = $1 AND s.data->>'status' = 'final'
-    ORDER BY u.position DESC LIMIT 4`, [topic.id]);
-  const input = JSON.stringify({ title, turns: rows.reverse() });
-  await enqueue(db, { type: "command", command_id: randomUUID(), topic_id: topic.id, profile_ref: topic.profile_ref,
-    session_id: topic.session_id, kind: "summarize_title", body: { input } }, revision);
-  return true;
-}
-
 export async function interrupt(db: PoolClient, refs: Set<string>, topicId: string, requestId: string, submissionId: string) {
   const row = await topicRow(db, topicId, refs);
   const receipt = { status: "accepted" as const };

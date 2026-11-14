@@ -15,7 +15,7 @@
 | GET /profiles | `Profile[]`，通过 BFF 的 `HERMES_PROFILES` 配置。值为逗号分隔的真实配置档案名称，默认为 `default` |
 | GET /status | `{connector_online:boolean}` |
 | GET /topics | `Topic[]` 按 `updated_at` 倒序。默认仅返回未归档话题，`?include_archived=true` 返回全部。 |
-| POST /topics | `{request_id,profile_id,title?}` → `Topic`，幂等 202。省略标题时，首条发送的消息成为默认标题。 |
+| POST /topics | `{request_id,profile_id,title?}` → `Topic`，幂等 202。省略标题时先显示首条消息的预览，再同步 Hermes 原生标题。 |
 | GET /topics/:id | `{topic:Topic,messages:Message[],controls:Control[]}` |
 | PUT /topics/:id/archive | `{archived:boolean}` → `Topic`。重复设置同一状态安全，保留原会话和消息。 |
 | POST /topics/:id/submissions | `{submission_id,text,attachments?:{name,mime,size,content_base64}[]}` → `Message` 用户气泡，幂等 202。有附件时可传空正文。 |
@@ -46,16 +46,16 @@
 - `respond` 的请求体为 `{control_id,response_id,answer}`。澄清支持文本、复选标签数组的 JSON 字符串和空字符串跳过。连接器按上游请求类型转换。
 - `model_options` 的请求体为 `{}`。`select_model` 的请求体为 `{provider,model,confirm?}`。两者的成功回执携带 `model_result`。
 - `select_reasoning` 的请求体为 `{effort}`，仅发给声明 `X-Hermes-Mobile-Reasoning: 1` 的连接器。
-- `summarize_title` 的请求体为 `{input}`，由 BFF 在自动命名的会话收到成功终态后排队。连接器握手携带 `X-Hermes-Mobile-Topic-Title: 1` 时接收该命令，成功回执携带 `title`。
 - `watch` 的请求体为 `{}`，使用独立的临时 `command_id`。重连时同步每个已绑定话题。连接器先登记作用域，再恢复上游。BFF 忽略 `watch` 的结果，且不将临时命令写入命令表。
 
 连接器返回 `{type:"command_result",command_id,status:"ok"|"error"|"unknown",session_id?,admission_id?,error?,control_status?}`。创建成功带 `session_id`，提交已接纳带 `admission_id`，确认交互关闭时带 `control_status`。BFF 持久化普通写命令的结果后，返回 `{type:"ack",id:command_id}`。重复命令只返回既有结果或 `unknown`，并沿用原 ID。无法确认交互响应时使用 `unknown`。连接关闭后，BFF 重派仍未结的原命令。
 
 连接器异步帧含 `event_id`，话题相关的异步帧还含 `topic_id`。BFF 持久化后返回 `{type:"ack",id:event_id}`。
 
+- `{type:"topic_title",event_id,topic_id,session_id,title}` 同步绑定会话的原生标题。BFF 只更新自动命名的话题。
 - `{type:"message",event_id,topic_id,message_id,submission_id?,text,status:"streaming"|"final"}`，同一响应使用稳定的 `message_id`，`text` 为当前完整的累计文本。`final` 优先于迟到的 `streaming` 更新。
 - `{type:"submission",event_id,topic_id,submission_id,status:"queued"|"streaming"|"final"|"failed"|"cancelled"|"unknown",error?}`，更新原用户气泡执行状态，禁止复活已知终态。
 - `{type:"control",event_id,topic_id,control_id,kind,prompt,choices,status,submission_id?,multi_select?}`。连接器按话题映射上游请求 ID。BFF 收到明确的成功回执后才投影已提交的答案。
 - `{type:"delivery",event_id,delivery_id,profile_ref,text}` 投递到单账户收件箱，BFF 按 ID 去重。`delivery_id` 可直接用作 `event_id`。
 
-连接器使用环境变量 `BFF_URL` 和 `CONNECTOR_TOKEN`，可选 `HERMES_BIN` 和 `CONNECTOR_DB_PATH`。开发容器 `hermes-dev` 的 8642 端口使用 HTTP Runs。设置 `HERMES_API_URL=http://127.0.0.1:8642` 和 `HERMES_API_KEY` 启用该模式。BFF 使用环境变量 `DATABASE_URL`、`APP_PAIRING_TOKEN` 和 `CONNECTOR_TOKEN`，可选 `PORT`（3000）、`HOST`（127.0.0.1）、`HERMES_PROFILES`（`default`）和 `EXPO_ACCESS_TOKEN`。隔离开发可用本地 HTTP，远程连接使用 HTTPS／WSS。
+连接器使用环境变量 `BFF_URL` 和 `CONNECTOR_TOKEN`，可选 `HERMES_BIN` 和 `CONNECTOR_DB_PATH`。容器部署使用 `HERMES_WEBAPP_URL` 和 `HERMES_DASHBOARD_SESSION_TOKEN` 换取原版 WebSocket 票据。已有 HTTP Runs 会话通过 `HERMES_API_URL` 和 `HERMES_API_KEY` 继续使用。BFF 使用环境变量 `DATABASE_URL`、`APP_PAIRING_TOKEN` 和 `CONNECTOR_TOKEN`，可选 `PORT`（3000）、`HOST`（127.0.0.1）、`HERMES_PROFILES`（`default`）和 `EXPO_ACCESS_TOKEN`。隔离开发可用本地 HTTP，远程连接使用 HTTPS／WSS。

@@ -36,7 +36,7 @@ ENV NODE_ENV=production \
     HOST=127.0.0.1 \
     PORT=4317 \
     CONNECTOR_DB_PATH=/var/lib/hermes-mobile/connector.sqlite \
-    HERMES_API_URL=http://127.0.0.1:8642
+    HERMES_WEBAPP_URL=http://127.0.0.1:9120
 USER node
 EXPOSE 4317
 HEALTHCHECK --interval=5s --timeout=3s --start-period=15s \

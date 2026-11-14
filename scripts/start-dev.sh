@@ -19,7 +19,6 @@ done
 
 configure_dev_paths
 export HOST PORT CONNECTOR_DB_PATH BFF_URL="http://$HOST:$PORT"
-export HERMES_API_URL='http://127.0.0.1:8642'
 lock_dev_services
 
 start_container() {
@@ -41,6 +40,15 @@ healthy() {
   local response
   response=$(curl -q -fsS --noproxy '*' --max-time 2 "$1/health" 2>/dev/null) &&
     [[ "$response" =~ \"status\"[[:space:]]*:[[:space:]]*\"ok\" ]]
+}
+
+hermes_ready() {
+  node --input-type=module -e '
+    const url = new URL("/api/webapp/socket-ticket?socket=gateway&profile=default", process.env.HERMES_WEBAPP_URL);
+    const response = await fetch(url, { method: "POST", redirect: "error", signal: AbortSignal.timeout(2000),
+      headers: { authorization: "Bearer " + process.env.HERMES_DASHBOARD_SESSION_TOKEN } });
+    if (!response.ok || !(await response.json()).ticket) process.exitCode = 1;
+  ' >/dev/null 2>&1
 }
 
 launch() {
@@ -74,8 +82,14 @@ connector_started() {
 start_container hermes-mobile-postgres
 wait_until postgres_ready || fail 'PostgreSQL 未就绪，请查看 docker logs hermes-mobile-postgres。'
 
-start_container hermes-dev
-wait_until healthy "$HERMES_API_URL" || fail 'Hermes API 未就绪，请查看 docker logs hermes-dev。'
+if [[ -n "$HERMES_WEBAPP_URL" ]]; then
+  [[ -n "$HERMES_DASHBOARD_SESSION_TOKEN" ]] || fail '请设置 HERMES_DASHBOARD_SESSION_TOKEN。'
+  wait_until hermes_ready || fail 'Hermes Webapp 未就绪，请检查地址、令牌及网关配置。'
+else
+  command -v "${HERMES_BIN:-hermes}" >/dev/null || fail '请安装 Hermes 或设置 HERMES_BIN。'
+  wait_until "${HERMES_BIN:-hermes}" gateway attach --json >/dev/null 2>&1 ||
+    fail 'Hermes 网关未就绪，请先启动支持 gateway attach 的原版 Hermes。'
+fi
 
 if healthy "$BFF_URL"; then
   printf 'BFF 已在运行，跳过启动。\n'
@@ -96,9 +110,6 @@ if connector_pid=$(connector_pids); then
   # shortcut: 本地开发栈只有一个连接器，支持多连接器时改用 BFF 的连接状态查询。
   wait_until connector_ready "${connector_pid%%$'\n'*}" || fail '连接器正在运行，但未连上 BFF，请查看 .data/connector.log。'
 else
-  HERMES_API_KEY=$(docker exec hermes-dev printenv API_SERVER_KEY) || fail '无法从 hermes-dev 读取 API_SERVER_KEY。'
-  [[ -n "$HERMES_API_KEY" ]] || fail '请在 hermes-dev 中配置 API_SERVER_KEY。'
-  export HERMES_API_KEY
   printf '正在启动连接器。\n'
   launch connector index
   wait_until connector_started || fail "连接器未连上 BFF，请查看 ${log}。"

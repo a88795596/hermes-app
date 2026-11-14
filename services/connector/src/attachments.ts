@@ -26,12 +26,12 @@ export function attachmentDownloader(url: URL, token: string, signal: AbortSigna
   };
 }
 
-export async function attachmentBase64(download: DownloadAttachment, id: string, position: number, attachment: AttachmentReference) {
+export async function attachmentBytes(download: DownloadAttachment, id: string, position: number, attachment: AttachmentReference) {
   const content = await download(id, position, attachment.size);
   if (content.length !== attachment.size || createHash('sha256').update(content).digest('hex') !== attachment.sha256) {
     throw new Error('附件内容与提交记录不符');
   }
-  return content.toString('base64');
+  return content;
 }
 
 export function attachmentFilename(name: string) {

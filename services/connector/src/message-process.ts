@@ -2,6 +2,15 @@ import { MAX_MESSAGE_PROCESS_STEPS, MAX_MESSAGE_PROCESS_TEXT_BYTES } from '@herm
 import type { MessageProcessStep } from '@hermes-mobile/protocol';
 import { boundedText, text } from './wire.js';
 
+export function redactProcessText(value: string): string {
+  // shortcut: 覆盖常见凭据格式，能复用统一脱敏器时改用统一规则。
+  return boundedText(value, 2 * MAX_MESSAGE_PROCESS_TEXT_BYTES)
+    .replace(/((?:"|')?\b(?:[\w-]{0,64}[-_])?(?:api[-_]?key|access[-_]?token|refresh[-_]?token|secret|password)(?:"|')?\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)/giu, '$1[已隐藏]')
+    .replace(/\b(Bearer[ \t]+)[A-Za-z0-9._~+/-]+=*/giu, '$1[已隐藏]')
+    .replace(/\b(?:sk-(?:proj-|ant-)?|gh[pousr]_|github_pat_|xox[baprs]-|AKIA)[A-Za-z0-9_-]{12,}\b/gu, '[已隐藏]')
+    .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^/\s@]+:[^/\s@]+@/giu, '$1[已隐藏]@');
+}
+
 export function addProcessText(steps: MessageProcessStep[] | undefined, kind: 'reasoning' | 'commentary',
   value: unknown, delta = false): MessageProcessStep[] | undefined {
   if (typeof value !== 'string' || !value) return steps;

@@ -28,7 +28,6 @@ export function openStore(connectionString: string) {
         ALTER TABLE topics ADD COLUMN IF NOT EXISTS reasoning_effort text;
         ALTER TABLE topics ADD COLUMN IF NOT EXISTS reasoning_status text;
         ALTER TABLE topics ADD COLUMN IF NOT EXISTS auto_title boolean NOT NULL DEFAULT false;
-        ALTER TABLE topics ADD COLUMN IF NOT EXISTS title_revision bigint NOT NULL DEFAULT 0;
         ALTER TABLE topics ADD COLUMN IF NOT EXISTS archived boolean NOT NULL DEFAULT false;
         ALTER TABLE topics ADD COLUMN IF NOT EXISTS updated_at timestamptz;
         CREATE TABLE IF NOT EXISTS messages (
@@ -67,6 +66,9 @@ export function openStore(connectionString: string) {
           created_at timestamptz NOT NULL DEFAULT now()
         );
         CREATE INDEX IF NOT EXISTS commands_pending_idx ON commands (position) WHERE result IS NULL;
+        UPDATE commands SET result = jsonb_build_object(
+          'type', 'command_result', 'command_id', id, 'status', 'error'
+        ) WHERE result IS NULL AND payload->>'kind' = 'summarize_title';
         -- shortcut: 旧消息没有时间戳，按最近命令推算历史活动，有消息时间戳时再从消息回填。
         UPDATE topics AS t SET updated_at = GREATEST(t.created_at, activity.last_command_at)
         FROM (

@@ -85,6 +85,5 @@ stop_container() {
 
 stop_process 连接器 connector index "$(connector_pids || true)"
 stop_process BFF bff main "$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null || true)"
-stop_container hermes-dev
 stop_container hermes-mobile-postgres
 printf '停止检查完成。\n'

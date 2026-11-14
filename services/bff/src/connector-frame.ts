@@ -114,6 +114,11 @@ export function connectorFrame(value: unknown): ConnectorFrame {
       return { type, event_id: uuid(body.event_id, "事件 ID"), delivery_id: uuid(body.delivery_id, "投递 ID"),
         profile_ref: string(body.profile_ref, "配置档案名称", 256), text: string(body.text, "消息正文", 256 * 1024) };
     }
+    case "topic_title": {
+      const body = record(value, ["type", "event_id", "topic_id", "session_id", "title"]);
+      return { type, event_id: uuid(body.event_id, "事件 ID"), topic_id: uuid(body.topic_id, "话题 ID"),
+        session_id: string(body.session_id, "会话 ID", 512), title: string(body.title, "话题标题", MAX_TOPIC_TITLE_BYTES) };
+    }
     case "message": {
       const body = record(value, ["type", "event_id", "topic_id", "message_id", "submission_id", "text", "status", "process"]);
       return { type, event_id: uuid(body.event_id, "事件 ID"), topic_id: uuid(body.topic_id, "话题 ID"),

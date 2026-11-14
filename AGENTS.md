@@ -34,5 +34,7 @@ Clarify material ambiguities before implementing. If the repository root contain
 
 ## Project
 
+Hermes Agent 源码保持原版。通过 Hermes 原生接口、配置或插件机制接入。
+
 项目内使用中文作为UI语言。
 尽量避免使用二级描述来表达功能，尽可能的用布局的方式来表述

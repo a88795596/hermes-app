@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { AttachmentReference, BridgeFrame, Command, CommandResult } from '@hermes-mobile/protocol';
 import { isAttachmentMime, isAttachmentName, isManagementOperation, isReasoningEffort, MAX_ATTACHMENTS, MAX_ATTACHMENT_BYTES,
-  MAX_ATTACHMENT_TOTAL_BYTES, MAX_CONTROL_ANSWER_BYTES, MAX_TITLE_INPUT_BYTES } from '@hermes-mobile/protocol';
+  MAX_ATTACHMENT_TOTAL_BYTES, MAX_CONTROL_ANSWER_BYTES } from '@hermes-mobile/protocol';
 import { object } from './gateway.js';
 
 export function stableId(parts: string[]): string {
@@ -78,9 +78,6 @@ export function bridgeFrame(source: string): BridgeFrame {
       return { ...base, session_id, kind: 'watch', body: {} };
     case 'model_options':
       if (!Object.keys(body).length) return { ...base, session_id, kind: 'model_options', body: {} };
-      break;
-    case 'summarize_title':
-      if (text(body.input, MAX_TITLE_INPUT_BYTES)) return { ...base, session_id, kind: 'summarize_title', body: { input: body.input } };
       break;
     case 'select_model':
       if (text(body.provider, 256) && text(body.model, 512) &&

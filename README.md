@@ -25,16 +25,18 @@
 
 BFF 和连接器在同一个容器运行，PostgreSQL 由 Compose 单独启动。Hermes Agent 在同一台宿主机运行，手机继续使用 Expo 客户端。应用容器通过 host 网络访问宿主机的回环地址。Linux Docker Engine 可直接使用，Docker Desktop 需要 4.34 或以上版本，并在 **Settings → Resources → Network** 中启用 **Enable host networking**。 [Docker host 网络](https://docs.docker.com/engine/network/drivers/host/)
 
-1. 在宿主机启用 Hermes HTTP Runs API。Hermes 版本须支持按配置档案创建会话和运行聊天，即 `/p/<profile>/api/sessions` 和 `/p/<profile>/v1/runs`。若尚未启用，在 Hermes 配置档案的 `.env`（默认 `~/.hermes/.env`）加入以下设置，再重启该档案的网关。已有 API 密钥时直接复用。 [Hermes API Server](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server/)
+1. 使用原版 Hermes Agent，在网关的 `config.yaml` 中启用 Webapp。连接器使用 Webapp 签发的一次性票据连接原生 WebSocket。 [Hermes Webapp 配置](https://hermes-agent.nousresearch.com/docs/user-guide/configuration#webapp)
 
-   ```dotenv
-   API_SERVER_ENABLED=true
-   API_SERVER_HOST=127.0.0.1
-   API_SERVER_PORT=8642
-   API_SERVER_KEY=<已有密钥或用 openssl rand -hex 32 生成>
+   ```yaml
+   webapp:
+     enabled: true
+     host: 127.0.0.1
+     port: 9120
    ```
 
-   已安装为服务的网关用 `hermes gateway restart` 重启。首次在前台启动可用 `hermes gateway run`。运行 `curl -fsS http://127.0.0.1:8642/health` 检查宿主机上的 API 是否可达。
+   已安装为服务的网关用 `hermes gateway restart` 重启。首次在前台启动可用 `hermes gateway run`。回环模式的 Webapp 会在 Hermes 数据目录下生成 `webapp/session-token`，连接器使用该文件中的令牌。
+
+   Hermes 在 Docker 中运行时，使用官方镜像和现有配置及数据卷。在容器内部将 Webapp 绑定到 `0.0.0.0`，通过 `-p 127.0.0.1:9120:9120` 发布到宿主机回环地址，并在 Hermes 容器的环境中设置 `HERMES_DASHBOARD_SESSION_TOKEN` 作为 Webapp 登录令牌。两种接入均使用原版 Hermes。
 
 2. 首次部署时，在仓库根目录生成一份权限受限的 `.env`。已有 `.env` 时保留其中的配对令牌和数据库密码，对照模板补齐缺失项。 [配置模板](.env.example)
 
@@ -42,12 +44,12 @@ BFF 和连接器在同一个容器运行，PostgreSQL 由 Compose 单独启动�
    (set -eu
      umask 077
      set -C
-     printf "HERMES_API_KEY=''\nAPP_PAIRING_TOKEN=%s\nPOSTGRES_PASSWORD=%s\n" \
+     printf "HERMES_DASHBOARD_SESSION_TOKEN=''\nAPP_PAIRING_TOKEN=%s\nPOSTGRES_PASSWORD=%s\n" \
        "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" > .env
    )
    ```
 
-   编辑仓库根目录的 `.env`，将宿主机的 API 密钥填入 `HERMES_API_KEY` 的单引号内。`APP_PAIRING_TOKEN` 用于手机配对。`CONNECTOR_TOKEN` 省略时由容器在启动时随机生成，并同时传给 BFF 和连接器。
+   编辑仓库根目录的 `.env`，将上一步的 Webapp 令牌填入 `HERMES_DASHBOARD_SESSION_TOKEN` 的单引号内。`APP_PAIRING_TOKEN` 用于手机配对。`CONNECTOR_TOKEN` 省略时由容器在启动时随机生成，并同时传给 BFF 和连接器。
 
 3. 构建并启动。BFF 默认监听 `127.0.0.1:4317`。健康检查通过后，应用日志应显示「Hermes 连接器已连接 BFF」。
 
@@ -59,11 +61,11 @@ BFF 和连接器在同一个容器运行，PostgreSQL 由 Compose 单独启动�
 
 4. 在移动端填写 BFF 地址和 `APP_PAIRING_TOKEN`，然后新建话题验证 Hermes 连接。本机 iOS 模拟器使用 `http://127.0.0.1:4317`，Android 模拟器使用 `http://10.0.2.2:4317`。真机使用宿主机上的 HTTPS 反向代理，将 HTTPS 和 WebSocket 请求转发至 `127.0.0.1:4317`。代理须允许至少 9 MiB 的请求体，管理请求的响应超时至少设为 60 秒。
 
-端口冲突时，在 `.env` 中调整 `BFF_PORT` 或 `POSTGRES_PORT`，数据库默认仅通过宿主机的 `127.0.0.1:55433` 访问。若 Hermes 使用其他端口，设置 `HERMES_API_URL` 为对应的 `http://127.0.0.1:<端口>`。`HERMES_PROFILES` 默认为 `default`，可填写当前 API 密钥能访问的配置档案，多个名称用逗号分隔。
+端口冲突时，在 `.env` 中调整 `BFF_PORT` 或 `POSTGRES_PORT`，数据库默认通过宿主机的 `127.0.0.1:55433` 访问。若 Webapp 使用其他端口，设置 `HERMES_WEBAPP_URL` 为对应的 `http://127.0.0.1:<端口>`。`HERMES_PROFILES` 默认为 `default`，多个由网关提供服务的配置档案用逗号分隔。
 
-启用移动端管理时，在宿主机启动控制台，再将 `HERMES_DASHBOARD_URL` 和 `HERMES_DASHBOARD_SESSION_TOKEN` 填入仓库的 `.env`。Expo 推送可通过 `EXPO_ACCESS_TOKEN` 注入访问令牌。 [控制台配置](#enable-manage-on-mobile)
+启用移动端管理时，可将 `HERMES_DASHBOARD_URL` 设为 Webapp 的回环地址。Expo 推送可通过 `EXPO_ACCESS_TOKEN` 注入访问令牌。 [控制台配置](#enable-manage-on-mobile)
 
-自动标题和普通文件暂存需要宿主机 Hermes 提供本项目的扩展接口。已有扩展实现可直接复用。宿主机安装可在兼容的 Hermes 版本上应用仓库提供的扩展代码和 HTTP Runs 补丁。 [Hermes 扩展构建步骤](services/connector/Dockerfile.hermes)
+从旧部署升级时，保留 PostgreSQL、连接器的 SQLite 和 Hermes 的数据卷，并换用原版 Hermes。已有 `mobile_…` 会话通过原版 HTTP Runs 继续发送，需保留对应的 `HERMES_API_URL` 与 `HERMES_API_KEY`。这些会话从原版会话接口读取标题，并通过同一个 Hermes 实例的 Webapp 暂存普通文件。过程显示取决于原版 Runs 提供的事件，新会话通过 WebSocket 接收思考和阶段说明。 [Hermes API Server](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server)
 
 启用定时任务向移动端收件箱投递时，在宿主机安装插件。通过 Compose 覆盖文件将队列所在目录以读写方式挂载到 `app`，并设置 `HERMES_MOBILE_SPOOL_PATH` 为容器内的队列绝对路径。队列目录和文件须由连接器运行的 UID 持有，镜像默认使用 UID 1000。 [Hermes 投递插件](plugins/hermes-mobile-delivery/README.md)
 
@@ -80,9 +82,9 @@ pnpm install
 pnpm typecheck
 ```
 
-已有 `hermes-mobile-postgres`、`hermes-dev` 容器和 `.data/dev.env` 时，运行 `pnpm dev:services`。脚本依次检查 PostgreSQL、Hermes API、BFF 和连接器，跳过已经运行的服务。新启动的 BFF 和连接器在后台运行，日志分别在 `.data/bff.log` 和 `.data/connector.log`。
+已有 `hermes-mobile-postgres` 容器、运行中的原版 Hermes 网关和 `.data/dev.env` 时，运行 `pnpm dev:services`。脚本检查 PostgreSQL、Hermes 网关、BFF 和连接器，跳过已经运行的服务。新启动的 BFF 和连接器在后台运行，日志分别在 `.data/bff.log` 和 `.data/connector.log`。
 
-运行 `pnpm dev:stop` 依次停止连接器、BFF、Hermes 和 PostgreSQL。脚本跳过未运行的服务，保留容器、数据库文件和日志。
+运行 `pnpm dev:stop` 停止连接器、BFF 和开发数据库。
 
 `.data/dev.env` 使用 Shell 变量赋值，需包含 `POSTGRES_PASSWORD`、`APP_PAIRING_TOKEN` 和 `CONNECTOR_TOKEN`。可以通过 `PORT` 指定 BFF 端口，默认端口为 `4317`。首次准备环境或分步启动时，使用以下命令。
 
@@ -102,26 +104,16 @@ pnpm typecheck
    pnpm dev:bff
    ```
 
-2. 本地 `hermes-dev` 容器通过 8642 端口提供 HTTP Runs API。将 API 密钥留在连接器的环境变量中。以下命令读取已配置的密钥。执行时请关闭 Shell 命令跟踪。
+2. 以网关所用的 OS 用户在同一台主机运行连接器。原版 Hermes CLI 须支持 `gateway attach --json`。若网关独立运行在容器中，按上面的 Webapp 配置设置 `HERMES_WEBAPP_URL` 和 `HERMES_DASHBOARD_SESSION_TOKEN`，也可写入 `.data/dev.env` 供一键启动脚本读取。 [Hermes 网关接入](https://hermes-agent.nousresearch.com/docs/developer-guide/gateway-internals)
 
    ```sh
    export BFF_URL='http://127.0.0.1:4317'
    export CONNECTOR_TOKEN='THE_SAME_MACHINE_SECRET'
-   export HERMES_API_URL='http://127.0.0.1:8642'
-   export HERMES_API_KEY="$(docker exec hermes-dev printenv API_SERVER_KEY)"
    export CONNECTOR_DB_PATH="$PWD/.data/connector.sqlite"
    pnpm dev:connector
    ```
 
-   HTTP 适配器使用 Hermes API 管理的会话。如果安装了较新版本的 Hermes，可将 `HERMES_API_URL` 留空，以网关所用的账户在同一台主机上运行连接器，并将 `HERMES_BIN` 指向支持 `gateway attach --json` 的命令行程序。连接器与 BFF 的数据库应配套使用，绑定同一个 Hermes 后端和传输方式。试用其他后端时请使用独立的数据库。
-
-   HTTP Runs 模式使用配套的 `hermes-mobile-runtime` 镜像生成自动标题、暂存聊天文件、转发思考和阶段说明。它也修复了部分 Hermes 版本的「技能」菜单报错。构建后使用该镜像更新 Hermes 容器，并复用原有配置和数据卷。Canonical Gateway 模式使用 Hermes 自带的 `llm.oneshot` 生成标题。 [Hermes 单次模型调用](https://github.com/NousResearch/hermes-agent/blob/main/gateway/session_llm_oneshot.py)
-
-   ```sh
-   docker build -f services/connector/Dockerfile.hermes -t hermes-mobile-runtime services/connector
-   ```
-
-   如果聊天运行失败，且容器日志显示 `no_provider_configured`，运行 `docker exec -it -u hermes hermes-dev hermes model`，为容器中的 Hermes 用户配置模型服务商。API 服务密钥用于验证连接器，模型服务商使用自己的凭据。
+   可用 `HERMES_BIN` 指定本机 Hermes 可执行文件。连接器队列和 BFF 数据库应一起使用，并指向原来的 Hermes 安装和配置档案。若 Hermes 报告 `no_provider_configured`，用 `hermes model` 配置对应档案的模型服务商。
 
 3. 在另一个终端启动应用。按平台选择命令，构建并打开开发客户端。
 
@@ -138,13 +130,15 @@ pnpm typecheck
 
 ## 聊天交互
 
-点击「新建会话」直接打开聊天。首条发送的消息会成为临时标题。每轮成功完成后，Hermes 根据最近四轮已完成的对话生成标题，并参考已生成的标题。聊天顶部和话题列表会同步更新。
+点击「新建会话」直接打开聊天。首条发送的消息会成为临时标题，Hermes 原生自动标题就绪后会同步到聊天顶部和话题列表。
 
 点输入框左侧的回形针，选择「图片」或「文件」。选中的附件会显示在输入框上方，可移除或继续添加。写好描述后点发送，附件和描述会一起交给 Hermes，也可以单独发送附件。每条消息最多 10 个附件，单个最多 5 MB，合计最多 6 MB。
 
-附件功能需要更新移动端、BFF 和连接器。HTTP Runs 的普通文件需要重新构建上面的 Hermes 镜像。Canonical Gateway 需要支持 `image.attach_bytes` 和 `file.attach`。使用反向代理时，请为消息提交请求允许至少 9 MiB 请求体，并将 `/internal/connector/v1/submissions/` 的 HTTPS 请求转发给 BFF。图片读取由 Hermes 和当前模型的视觉能力决定。
+图片和普通文件分别通过原版 Hermes 的 `image.attach_bytes` 和 `file.attach` 发送。使用反向代理时，请为消息提交请求允许至少 9 MiB 请求体，并将 `/internal/connector/v1/submissions/` 的 HTTPS 请求转发给 BFF。图片读取由 Hermes 和当前模型的视觉能力决定。
 
 点击会话标题右侧的「过程」开关，可以查看每条回复的思考、阶段说明和工具执行状态。开关在本次使用期间按话题记忆，默认关闭。能查看哪些过程取决于 Hermes 和模型实际提供的数据。
+
+聊天中的「浏览技能」从当前配置档案的原版技能目录读取。Webapp 接入使用 `/api/skills`，本机 CLI 接入使用会话的 `session.info.skills`。
 
 在话题中发送 `/model`，先选择服务商，再选择模型。菜单会显示当前 Hermes 配置档案下可用的服务商，并标记当前选项。等本轮回复完成后即可切换模型，新选择对当前话题的后续对话生效。
 
@@ -152,13 +146,13 @@ pnpm typecheck
 
 当智能体调用 `clarify` 时，点击选项即可回答当前的问题。澄清卡片也支持多选、输入自定义答案和跳过问题。
 
-使用 HTTP Runs 时，Hermes API 对应的配置档案须公开运行中等待处理的交互，并启用 `clarify` 工具。在开发容器中，用 Hermes 用户执行以下命令即可启用该工具。
+话题绑定的 Hermes 会话工具集须包含 `clarify`。旧 HTTP Runs 会话还需要 API 配置档案公开等待处理的交互，可以在对应的 Hermes 环境中启用该工具。
 
 ```sh
-docker exec -u hermes hermes-dev hermes tools enable --platform api_server clarify
+hermes tools enable --platform api_server clarify
 ```
 
-如果使用具名配置档案，命令中的 Hermes 调用部分为 `hermes --profile <name> tools enable --platform api_server clarify`。如果使用 Canonical Gateway，话题所绑定的本地会话工具集须包含 `clarify`。
+具名配置档案使用 `hermes --profile <name> tools enable --platform api_server clarify`。
 
 个人版已实现单账户、带图片和文件的聊天，以及 WSS 变更通知配合 HTTP 补拉。 [已实现的通信协议](docs/superpowers/plans/2026-11-13-personal-mvp-wire.md)
 
@@ -176,6 +170,6 @@ export HERMES_DASHBOARD_URL='http://127.0.0.1:9119'
 pnpm dev:connector
 ```
 
-继续使用连接器已有的环境变量，包括 `BFF_URL`、`CONNECTOR_TOKEN` 和 HTTP Runs API 相关配置。Hermes 在容器中运行时，将支持管理的连接器放在同一容器或网络命名空间中，使它可以访问环回地址上的控制台。复用已有的控制台进程时，为连接器配置对应的环回地址和已发放的会话令牌。如果 BFF 使用反向代理，管理请求的响应超时时间至少设为 60 秒。
+继续使用连接器已有的环境变量。如果已启用网关的 Webapp，可将 `HERMES_DASHBOARD_URL` 设为该 Webapp 的回环地址，并沿用现有会话令牌。如果 BFF 使用反向代理，管理请求的响应超时时间至少设为 60 秒。
 
 重启更新后的 BFF 和连接器，在已配对的应用中打开「设置」的「管理」。选择 `HERMES_PROFILES` 中的配置档案，即可查看其定时任务、模型、日志、技能和 MCP 服务器。变更由 Hermes 保存。定时任务依赖 Hermes 调度器，投递到 `hermes_mobile` 依赖现有收件箱插件。日志级别在相应的 Hermes 进程重启后生效。需要 OAuth 的 MCP 服务器须在 Hermes 控制台中登录。引用环境变量作为凭据的 MCP 服务器由对应配置档案的控制台进程执行连接测试。

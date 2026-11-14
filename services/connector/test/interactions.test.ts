@@ -24,14 +24,20 @@ async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: Jso
   const server = createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
-    const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : {};
+    const raw = Buffer.concat(chunks).toString();
+    const body = req.headers['content-type']?.startsWith('multipart/form-data') ? { raw } : raw ? JSON.parse(raw) : {};
     const path = req.url!.replace('/p/default', '');
     calls.push({ path, body });
     res.setHeader('content-type', 'application/json');
-    if (path === '/api/hermes-mobile/attachment') {
-      res.end(JSON.stringify({ path: '/opt/data/cache/documents/report.txt' }));
-    } else if (path === '/api/hermes-mobile/title') {
-      res.end(JSON.stringify({ text: '「移动端   同步排查」' }));
+    if (path === '/api/chat/file-upload?profile=default') {
+      assert.equal(req.headers.authorization, 'Bearer dashboard-key');
+      res.end(JSON.stringify({ ok: true, size: 3, path: '/opt/data/uploads/report.txt' }));
+    } else if (path === '/v1/skills') {
+      res.statusCode = 500;
+      res.end('{}');
+    } else if (path === '/api/skills?profile=default') {
+      assert.equal(req.headers.authorization, 'Bearer dashboard-key');
+      res.end(JSON.stringify([{ name: 'example', category: 'dev', description: '示例技能', enabled: true }]));
     } else if (path === '/api/model/options?include_unconfigured=false') {
       res.end(JSON.stringify({
         provider: 'nous', model: 'default-model',
@@ -43,7 +49,7 @@ async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: Jso
       }));
     } else if (path === `/api/sessions/${sessionId}`) {
       res.statusCode = sessionAvailable ? 200 : 503;
-      res.end(JSON.stringify(sessionAvailable ? { session: { id: sessionId } } : {}));
+      res.end(JSON.stringify(sessionAvailable ? { session: { id: sessionId, title: 'Hermes 原生标题' } } : {}));
     } else if (path === '/v1/runs') {
       res.statusCode = 202;
       res.end(JSON.stringify({ run_id: runId }));
@@ -73,6 +79,7 @@ async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: Jso
   const directory = mkdtempSync(join(tmpdir(), 'hermes-mobile-interactions-'));
   const filename = join(directory, 'connector.sqlite');
   const options = { url: `http://127.0.0.1:${address.port}`, token: 'test-key', send: (frame: JsonObject) => frames.push(frame),
+    webapp: { origin: `http://127.0.0.1:${address.port}`, token: 'dashboard-key' },
     downloadAttachment: async (_id: string, number: number) => Buffer.from(number === 1 ? 'YWJj' : png, 'base64') };
   let spool = new Spool(filename);
   const createId = randomUUID();
@@ -100,7 +107,10 @@ async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: Jso
     await connector.command(frame, () => true);
     return frames.find((frame) => frame.type === 'command_result' && frame.command_id === id);
   }
-  return { calls, frames, restart, command, disconnectSession: () => { sessionAvailable = false; } };
+  return { calls, frames, restart, command,
+    skills: () => connector.query({ type: 'topic_query', kind: 'skills', request_id: randomUUID(),
+      topic_id: topicId, session_id: sessionId, profile_ref: 'default' }),
+    disconnectSession: () => { sessionAvailable = false; } };
 }
 
 const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jLG0AAAAASUVORK5CYII=';
@@ -114,12 +124,12 @@ test('HTTP Runs 同一轮收到描述、Hermes 本地文件引用和真实图片
     { name: 'pixel.png', mime: 'image/png', size: 68, sha256: '2ae67197d8706fbe5a6fdf6a46b7f6ba46a3a9568a905f7f1d2d10ee22cc3e36' },
   ] } }, submission_id);
   assert.equal(result?.status, 'ok');
-  const staged = calls.find(({ path }) => path === '/api/hermes-mobile/attachment');
-  assert.deepEqual(staged?.body, { name: 'report.txt', content_base64: 'YWJj' });
+  const staged = calls.find(({ path }) => path === '/api/chat/file-upload?profile=default');
+  assert.match(String(staged?.body.raw), /name="file"; filename="report\.txt"\r\nContent-Type: text\/plain\r\n\r\nabc\r\n/);
   const input = calls.find(({ path }) => path === '/v1/runs')?.body.input as { role: string; content: JsonObject[] }[];
   assert.equal(input[0].role, 'user');
   assert.match(String(input[0].content[0].text), /对比两份附件。/);
-  assert.match(String(input[0].content[0].text), /\/opt\/data\/cache\/documents\/report.txt/);
+  assert.match(String(input[0].content[0].text), /\/opt\/data\/uploads\/report.txt/);
   assert.deepEqual(input[0].content[1], { type: 'image_url', image_url: { url: `data:image/png;base64,${png}` } });
 });
 
@@ -152,16 +162,19 @@ async function waitForQuestion(frames: JsonObject[]) {
   return { control_id, choices, multi_select };
 }
 
-test('HTTP 模式使用单次模型调用生成标题，重放命令沿用已保存的结果', async (t) => {
-  const { command, calls, restart } = await harness(t);
-  const id = randomUUID();
-  const input = '{"turns":[{"user":"排查同步延迟","assistant":"已检查重试"}]}';
-  const payload = { kind: 'summarize_title', body: { input } } as const;
-  assert.equal((await command(payload, id))?.title, '移动端 同步排查');
-  restart();
-  assert.equal((await command(payload, id))?.title, '移动端 同步排查');
-  assert.deepEqual(calls.map(({ path }) => path), ['/api/hermes-mobile/title']);
-  assert.equal(calls[0].body.input, input);
+test('旧 HTTP 会话监听时同步 Hermes 已保存的标题', async (t) => {
+  const { command, calls, frames } = await harness(t);
+  await command({ kind: 'watch', body: {} });
+  assert.deepEqual(calls.map(({ path }) => path), ['/api/sessions/mobile_test']);
+  const frame = frames.find(({ type }) => type === 'topic_title');
+  assert.equal(frame?.title, 'Hermes 原生标题');
+  assert.equal(frame?.session_id, 'mobile_test');
+});
+
+test('原版 Runs 技能接口出错时查询原版控制台技能目录', async (t) => {
+  const { calls, skills } = await harness(t);
+  assert.deepEqual(await skills(), { kind: 'skills', skills: [{ name: 'example', category: 'dev', description: '示例技能' }] });
+  assert.deepEqual(calls.map(({ path }) => path), ['/v1/skills', '/api/skills?profile=default']);
 });
 
 test('HTTP 模式的模型选择器返回已配置的服务商目录，并在重启后保留选择', async (t) => {
@@ -306,5 +319,5 @@ test('HTTP Runs 将思考、阶段说明和工具状态随最终回复保存', {
   ]);
   assert(replies.every((frame) => frame.message_id === finalReply()?.message_id && frame.submission_id === id));
   const completed = frames.findIndex((frame) => frame.type === 'submission' && frame.status === 'final');
-  assert(completed > frames.indexOf(finalReply()!), '应先投影最终回复，再触发本轮标题摘要');
+  assert(completed > frames.indexOf(finalReply()!), '应先投影最终回复，再同步提交状态');
 });
