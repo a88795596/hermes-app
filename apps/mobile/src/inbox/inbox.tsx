@@ -68,7 +68,7 @@ export function InboxList({ items, profiles, profileId, ready, onProfile, onOpen
   </>;
 }
 
-export function InboxDetail({ item, profiles, onBack }: { item: InboxItem; profiles: Profile[]; onBack: () => void }) {
+export function InboxDetail({ item, profiles }: { item: InboxItem; profiles: Profile[] }) {
   const { colors, styles } = useTheme();
   const [error, setError] = useState<string>();
   const openLink = useCallback((url: string) => {
@@ -84,15 +84,6 @@ export function InboxDetail({ item, profiles, onBack }: { item: InboxItem; profi
   }, [colors.foreground, colors.surface]);
   return (
     <View style={[styles.frame, { backgroundColor: colors.surface }]}>
-      <View style={[styles.header, layout.header, { borderBottomColor: colors.edge }]}>
-        <Pressable accessibilityRole="button" accessibilityLabel="返回收件箱" onPress={onBack}
-          style={({ pressed }) => [layout.back, pressed && styles.faded]}>
-          <Icon name="back" size={17} color={colors.accent} />
-          <Text style={[styles.text, { color: colors.accent }]}>收件箱</Text>
-        </Pressable>
-        <Text style={[styles.heading, layout.headerTitle]}>消息详情</Text>
-        <View style={layout.headerSide} />
-      </View>
       <ScrollView contentContainerStyle={[styles.content, layout.detail]}>
         <Text selectable accessibilityRole="header" style={[styles.title, layout.detailTitle]}>{item.title ?? inboxTitle(item.text)}</Text>
         <View style={[layout.detailMetadata, { borderBottomColor: colors.edge }]}>
@@ -113,10 +104,6 @@ const layout = StyleSheet.create({
   card: { padding: 16, gap: 8, borderWidth: 1, borderColor: "transparent" },
   metadata: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 4 },
   profile: { flex: 1, minWidth: 0 },
-  header: { borderBottomWidth: StyleSheet.hairlineWidth, minHeight: 48, paddingHorizontal: 12, paddingVertical: 2 },
-  back: { flexDirection: "row", gap: 2, minHeight: 44, minWidth: 80, alignItems: "center" },
-  headerTitle: { flex: 1, textAlign: "center" },
-  headerSide: { minWidth: 80 },
   detail: { width: "100%", maxWidth: 680, alignSelf: "center", paddingTop: 24, paddingBottom: 32, gap: 18 },
   detailTitle: { fontSize: 24, lineHeight: 32, letterSpacing: -0.4 },
   detailMetadata: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: 12, rowGap: 6,
