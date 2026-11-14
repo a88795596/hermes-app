@@ -1,0 +1,16 @@
+{
+  "cli": {
+    "version": ">= 27.10.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "preview": {
+      "distribution": "internal",
+      "node": "24.9.0",
+      "pnpm": "10.14.0",
+      "ios": {
+        "autoIncrement": true
+      }
+    }
+  }
+}

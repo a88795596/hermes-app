@@ -2,17 +2,20 @@
   "expo": {
     "name": "Hermes 移动端",
     "slug": "hermes-mobile",
+    "owner": "finstep-intelligent-technology-co-ltd",
     "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/images/hermes-icon.png",
     "scheme": "hermes-mobile",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "bundleIdentifier": "com.hermesmobile.app",
+      "bundleIdentifier": "hermes.cashcat.cn",
+      "appleTeamId": "4SAK5KMM76",
       "buildNumber": "2",
       "icon": "./assets/hermes.icon",
       "infoPlist": {
-        "CFBundleDevelopmentRegion": "zh-Hans"
+        "CFBundleDevelopmentRegion": "zh-Hans",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -46,6 +49,11 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "45ab06a1-0174-4304-933d-2582320d950f"
+      }
     }
   }
 }
