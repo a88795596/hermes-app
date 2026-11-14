@@ -1,10 +1,21 @@
+import { topicTitlePreview } from "@hermes-mobile/protocol";
 import type { FastifyBaseLogger, FastifyInstance, FastifyRequest } from "fastify";
 import type { PoolClient } from "pg";
 import type { Store } from "./store.js";
 
 type Authenticate = (request: FastifyRequest) => Promise<string>;
-type Job = { inbox_id: string; device_id: string; token: string; attempts: number };
+type Job = { inbox_id: string; device_id: string; token: string; attempts: number; profile_ref: string; text: string };
 type Ticket = { status: string; details?: { error?: string } };
+
+function bodyPreview(text: string) {
+  // shortcut: 仅清理常见 Markdown 标记；需要完整富文本预览时再接入解析器。
+  const plain = text.replace(/!?\[([^\n[\]]*)\]\([^\n()[\]]*\)/gu, "$1")
+    .replace(/^[ \t]{0,3}(?:#{1,6}[ \t]+|>[ \t]?|[-*+][ \t]+)/gmu, "")
+    .replace(/\*\*|__|~~|`/gu, "")
+    .replace(/[\s\p{Cc}]+/gu, " ").trim();
+  const characters = Array.from(plain || text.trim());
+  return characters.length > 500 ? characters.slice(0, 499).join("").trimEnd() + "…" : characters.join("");
+}
 
 export async function migratePush(store: Store) {
   await store.query(`
@@ -64,8 +75,9 @@ export function startPushWorker(store: Store, log: FastifyBaseLogger) {
   async function flush() {
     // shortcut: 每个 BFF 实例运行一个推送工作进程。部署多副本前，在数据库中增加任务领取租约。
     const { rows } = await store.query<Job>(`
-      SELECT o.inbox_id, o.device_id, o.attempts, d.token
+      SELECT o.inbox_id, o.device_id, o.attempts, d.token, i.profile_ref, i.data->>'text' AS text
       FROM push_outbox o JOIN push_devices d USING (device_id)
+      JOIN inbox i ON i.id = o.inbox_id
       WHERE o.next_attempt_at <= now()
       ORDER BY o.next_attempt_at LIMIT 50
     `);
@@ -77,8 +89,11 @@ export function startPushWorker(store: Store, log: FastifyBaseLogger) {
         headers: { "Content-Type": "application/json", ...(accessToken && { Authorization: `Bearer ${accessToken}` }) },
         body: JSON.stringify(rows.map((job) => ({
           to: job.token,
-          title: "Hermes 移动端",
-          body: "打开应用查看新结果",
+          title: job.profile_ref === "default" ? "Hermes 收件箱" : topicTitlePreview(`Hermes · ${job.profile_ref}`),
+          body: bodyPreview(job.text),
+          interruptionLevel: "time-sensitive",
+          priority: "high",
+          sound: "default",
           channelId: "inbox",
           ttl: 3600,
           data: { inbox_id: job.inbox_id },

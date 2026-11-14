@@ -126,6 +126,8 @@ pnpm typecheck
 
    安装开发客户端后，运行 `pnpm dev:mobile` 重新启动 Metro。使用 `APP_PAIRING_TOKEN` 和 BFF 地址配对。在 iOS 模拟器中使用 `http://127.0.0.1:4317`，在 Android 模拟器中使用 `http://10.0.2.2:4317`，在真机上使用 BFF 受信任的 HTTPS 反向代理。原生应用通过 SecureStore 保存设备令牌，并在应用私有的 SQLite 数据库中保存历史记录和待发文本。开发构建配置 Expo 项目 ID 和 APNs／FCM 凭据后，可在「设置」的「连接」中开启收件箱通知。
 
+   收件箱通知显示来源档案和最多 500 个字符的正文预览，清理常见 Markdown 标记，完整内容保留在收件箱。预览随推送发送到 Expo／APNs／FCM，并按系统的「显示预览」设置展示在锁屏。iOS 默认使用时间敏感通知；新增能力需要重新构建并安装 App，系统中也需允许该 App 的时间敏感通知。Android 使用高优先级投递，新建收件箱通知通道的重要性为高；已存在通道的重要性由系统保留，需在系统通知设置中调整。 [iOS 能力配置](https://docs.expo.dev/build-reference/ios-capabilities/)
+
 4. 如需在本地通过 npm 安装连接器，运行 `pnpm --filter @hermes-mobile/connector pack` 并安装生成的压缩包。使用定时投递或 `hermes send` 时，在 Hermes 运行环境安装插件，再配置所用渠道。 [Hermes 投递插件](plugins/hermes-mobile-delivery/README.md)
 
 <a name="interactive-chat"></a>

@@ -36,8 +36,17 @@ class BarkDeliveryTest(unittest.TestCase):
     def test_sends_plain_text_with_the_configured_device_key(self):
         self.assertEqual(post_bark(self.endpoint, ["test-key"], "早报完成\n详见附件"), {"success": True})
         self.assertEqual(self.requests, [("/bark/push", "application/json", {
-            "device_key": "test-key", "body": "早报完成\n详见附件",
+            "device_key": "test-key", "body": "早报完成\n详见附件", "level": "timeSensitive",
         })])
+
+    def test_defaults_json_notifications_to_time_sensitive_and_preserves_explicit_levels(self):
+        for level in (None, "active", "passive", "timeSensitive", "critical"):
+            with self.subTest(level=level):
+                payload = {"title": "早报", "body": "今天有两项待办"}
+                if level is not None:
+                    payload["level"] = level
+                self.assertEqual(post_bark(self.endpoint, ["test-key"], json.dumps(payload)), {"success": True})
+                self.assertEqual(self.requests[-1][2], {**payload, "device_key": "test-key", "level": level or "timeSensitive"})
 
     def test_passes_bark_fields_with_their_original_types(self):
         options = {
@@ -61,7 +70,7 @@ class BarkDeliveryTest(unittest.TestCase):
         self.assertIn("1/2", result["error"])
         self.assertNotIn("test-key", result["error"])
         self.assertEqual(self.requests, [("/bark/push", "application/json", {
-            "device_keys": keys, "id": "deploy", "delete": "1",
+            "device_keys": keys, "id": "deploy", "delete": "1", "level": "timeSensitive",
         })] * 2)
 
     def test_rejects_invalid_json_and_device_keys_from_the_message(self):
