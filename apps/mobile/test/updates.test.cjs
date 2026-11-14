@@ -7,14 +7,20 @@ const source = ts.transpileModule(readFileSync(require.resolve("../src/updates.t
   compilerOptions: { module: ts.ModuleKind.CommonJS },
 }).outputText;
 const configured = { EXPO_PUBLIC_HOT_UPDATER_BASE_URL: "https://updates.example.com/", EXPO_PUBLIC_HOT_UPDATER_API_KEY: "client-key" };
+const builtinId = "017f22e2-79b0-7000-8000-000000000000";
+const bundleId = "017f22e2-79b0-7cc3-98c4-dc0c0c07398f";
 
-function loadUpdates({ env = configured, dev = false, init } = {}) {
+function loadUpdates({ env = configured, dev = false, init = () => ({}) } = {}) {
   const exports = {};
   const warnings = [];
   const loaded = [];
   new Function("exports", "require", "process", "__DEV__", "console", source)(exports, (name) => {
     loaded.push(name);
-    return { HotUpdater: { init } };
+    return { HotUpdater: { init: (options) => ({
+      getManifest: () => ({ bundleId: builtinId, assets: {} }),
+      getMinBundleId: () => builtinId,
+      ...init(options),
+    }) } };
   }, { env }, dev, { warn: (...args) => warnings.push(args) });
   return { ...exports, warnings, loaded };
 }
@@ -25,6 +31,36 @@ test("开发和未启用热更新时不加载原生模块", async () => {
     await runtime.prepareUpdate();
     assert.deepEqual(runtime.loaded, []);
     assert.deepEqual(runtime.warnings, []);
+  }
+});
+
+test("版本信息固定为启动时的更新包 ID 和构建时间，下载新包不会提前改变显示", async () => {
+  let selectedBundle = bundleId;
+  const runtime = loadUpdates({ init: () => ({
+    getManifest: () => ({ bundleId: selectedBundle, assets: {} }),
+    getBundleId: () => "017f22e2-89b0-7cc3-98c4-dc0c0c07398f",
+    async checkForUpdate() {
+      return { async updateBundle() { selectedBundle = "017f22e2-99b0-7cc3-98c4-dc0c0c07398f"; return true; } };
+    },
+  }) });
+  const expected = { id: bundleId, builtAt: 1645557742000 };
+  assert.deepEqual(runtime.currentUpdate, expected);
+  await runtime.prepareUpdate();
+  assert.deepEqual(runtime.currentUpdate, expected);
+});
+
+test("内置包使用原生构建时间，开发与未启用状态不伪造时间", () => {
+  assert.deepEqual(loadUpdates().currentUpdate, { id: "内置版本", builtAt: 1645557742000 });
+  assert.deepEqual(loadUpdates({ dev: true }).currentUpdate, { id: "开发版本", builtAt: undefined });
+  assert.deepEqual(loadUpdates({ env: {} }).currentUpdate, { id: "未启用", builtAt: undefined });
+  assert.deepEqual(loadUpdates({ init() { throw new Error("missing native module"); } }).currentUpdate,
+    { id: "不可用", builtAt: undefined });
+});
+
+test("不认识的更新包 ID 保留原值，构建时间显示为未知", () => {
+  for (const id of ["legacy-bundle", "017f22e2-79b0-4cc3-98c4-dc0c0c07398f", "017f22e2-79b0-7cc3-98c4-dc0c0c07398f-invalid"]) {
+    const runtime = loadUpdates({ init: () => ({ getManifest: () => ({ bundleId: id, assets: {} }) }) });
+    assert.deepEqual(runtime.currentUpdate, { id, builtAt: undefined });
   }
 });
 

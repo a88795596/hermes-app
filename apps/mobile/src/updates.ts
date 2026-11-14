@@ -8,6 +8,10 @@ function reportUpdateError(error: unknown) {
 }
 
 export let hotUpdater: HotUpdaterInstance | undefined;
+export let currentUpdate: { id: string; builtAt?: number } = {
+  id: __DEV__ ? "开发版本" : baseURL && apiKey ? "不可用" : "未启用",
+  builtAt: undefined,
+};
 if (!__DEV__ && baseURL && apiKey) {
   try {
     const { HotUpdater } = require("@hot-updater/react-native") as typeof import("@hot-updater/react-native");
@@ -16,6 +20,14 @@ if (!__DEV__ && baseURL && apiKey) {
       requestHeaders: { "x-api-key": apiKey },
       onError: reportUpdateError,
     });
+    // 下载会改变 SDK 的包信息，因此在启动时固定当前正在运行的版本。
+    const bundleId = hotUpdater.getManifest().bundleId;
+    currentUpdate = {
+      id: bundleId === hotUpdater.getMinBundleId() ? "内置版本" : bundleId,
+      builtAt: /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(bundleId)
+        ? Number.parseInt(bundleId.replaceAll("-", "").slice(0, 12), 16)
+        : undefined,
+    };
   } catch (error) {
     reportUpdateError(error);
   }

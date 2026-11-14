@@ -16,8 +16,9 @@ import { enablePushNotifications, pushAvailable } from "../notifications";
 import { pairDevice } from "../sync/api";
 import { useWorkspace, type Pending } from "../sync/use-workspace";
 import { motion, useReduceMotion } from "../ui/motion";
-import { profileLabel } from "../ui/text";
+import { formatDateTime, profileLabel } from "../ui/text";
 import { Action, Card, EmptyState, Icon, Notice, useTheme, type IconName } from "../ui/theme";
+import { currentUpdate } from "../updates";
 
 const sections = {
   topics: { title: "话题", icon: "topics" },
@@ -307,11 +308,25 @@ function Workspace({
         {page === "inbox" && <InboxList items={workspace.inbox} profiles={workspace.profiles} profileId={inboxProfileId}
           ready={workspace.ready} onProfile={setInboxProfileId} onOpen={setInboxItem} />}
         {page === "settings" && (
-          <Group>
-            <Row title="管理" subtitle="定时任务、模型、日志、技能和 MCP" icon="manage" onPress={() => showPage("manage", "push")} />
-            <Row divided title="连接" subtitle={connection} icon="link" onPress={() => showPage("connection", "push")} />
-            <Row divided title="已归档会话" icon="archive" onPress={() => showPage("archive", "push")} />
-          </Group>
+          <>
+            <Group>
+              <Row title="管理" subtitle="定时任务、模型、日志、技能和 MCP" icon="manage" onPress={() => showPage("manage", "push")} />
+              <Row divided title="连接" subtitle={connection} icon="link" onPress={() => showPage("connection", "push")} />
+              <Row divided title="已归档会话" icon="archive" onPress={() => showPage("archive", "push")} />
+            </Group>
+            <Group>
+              <View style={styles.listItem}>
+                <Text style={styles.text}>热更新版本</Text>
+                <Text selectable style={[styles.caption, layout.updateValue]}>{currentUpdate.id}</Text>
+              </View>
+              <View style={[styles.listItem, layout.divided, { borderColor: colors.edge }]}>
+                <Text style={styles.text}>构建时间</Text>
+                <Text selectable style={[styles.caption, layout.updateValue]}>
+                  {currentUpdate.builtAt === undefined ? "—" : formatDateTime(currentUpdate.builtAt)}
+                </Text>
+              </View>
+            </Group>
+          </>
         )}
         {(page === "manage" || managementPage) && (
           <ManagementMenu profiles={workspace.profiles} profile={profile} onProfile={setProfileId} onOpen={(next) => showPage(next, "push")} />
@@ -443,6 +458,7 @@ const layout = StyleSheet.create({
   divided: { borderTopWidth: StyleSheet.hairlineWidth },
   rowIcon: { width: 29, height: 29, borderRadius: 8, alignItems: "center", justifyContent: "center" },
   value: { flexShrink: 1, maxWidth: "46%", textAlign: "right" },
+  updateValue: { flex: 1, minWidth: 0, textAlign: "right" },
   chatHeader: { borderBottomWidth: StyleSheet.hairlineWidth, minHeight: 48, paddingHorizontal: 12, paddingVertical: 2 },
   backBar: { alignItems: "flex-start", borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12 },
   back: { flexDirection: "row", gap: 2, minHeight: 44, minWidth: 65, alignItems: "center" },
