@@ -2,7 +2,23 @@
 
 项目通过 Hot Updater 1.1.15 给已安装的 iOS / Android Release App 分发 JavaScript 和资源更新。App 启动后检查并在后台下载，下载完成后的下一次冷启动生效，不会中断正在进行的聊天；标记为必需的更新也遵循这一时机。开发构建继续使用 Metro，Web 不检查原生更新。
 
-本次完成代码接入，**尚未部署更新服务，也未完成首次真机 OTA 验收**。下面是后续部署和验证步骤，命令均从仓库根目录执行。使用 Node 24.22.1 或以上的 24.x 版本、pnpm 10.14。
+代码已支持连接现有更新服务。已有服务配置包时，按下文导入本地配置即可；新建服务才需要执行部署步骤。首次真机 OTA 仍需单独验收。命令均从仓库根目录执行，使用 Node 24.22.1 或以上的 24.x 版本、pnpm 10.14。
+
+设置页显示当前运行版本的两项信息，离线也可查看：
+
+- **热更新版本**：更新包的完整 Bundle ID，可长按选择复制；未安装 OTA 时显示“内置版本”。后台下载的新包在下次冷启动生效后才会显示。
+- **构建时间**：从当前包的 UUIDv7 ID 读取构建开始时间，按手机本地时区显示；内置包使用原生构建 ID 的时间。开发、网页、未启用热更新或无法识别的旧包不推测时间，显示 `—`。
+
+## 接入已有服务的配置包
+
+将包内 `apps/mobile/.env.local` 和 `apps/mobile/.env.hotupdater` 的对应字段合并到项目同名文件，保留其他配置。前者只保存手机端 HTTPS 地址与客户端 Key，后者保存发布端根地址与管理令牌；公网发布地址不追加 `/admin` 或 `/storage`。两份文件都在 Git 忽略范围内，再设置本地文件权限：
+
+```sh
+chmod 600 apps/mobile/.env.local apps/mobile/.env.hotupdater
+git check-ignore apps/mobile/.env.local apps/mobile/.env.hotupdater
+```
+
+配置包 ZIP 和 `credentials.json` 留在项目目录外；真实密钥仅存于被忽略的本地环境文件，不写入示例、文档或提交。换工作区或开发电脑时需重新配置本地文件。导入配置后保留现有 `fingerprint.json`，尚未安装支持热更新的原生包时从第 3 节继续；已有兼容 Release 包则按第 4 节发布和验收。EAS 云端构建的环境变量配置见第 2 节。已有服务无需重新部署或创建客户端 Key。
 
 ## 1. 准备更新服务
 
@@ -52,7 +68,7 @@ cp -n apps/mobile/.env.hotupdater.example apps/mobile/.env.hotupdater
 | --- | --- | --- |
 | `apps/mobile/.env.local` | `EXPO_PUBLIC_HOT_UPDATER_BASE_URL` | 手机可达的 HTTPS 根地址，与服务端生成下载链接的地址一致 |
 | `apps/mobile/.env.local` | `EXPO_PUBLIC_HOT_UPDATER_API_KEY` | 上一步生成的客户端 Key，可包含在 App 中 |
-| `apps/mobile/.env.hotupdater` | `HOT_UPDATER_BASE_URL` | 发布端访问服务的根地址；同机或 SSH 隧道可用 `http://127.0.0.1:4318` |
+| `apps/mobile/.env.hotupdater` | `HOT_UPDATER_BASE_URL` | 发布端访问服务的 HTTPS 根地址，不追加 `/admin`；同机或 SSH 隧道可用 `http://127.0.0.1:4318` |
 | `apps/mobile/.env.hotupdater` | `HOT_UPDATER_ADMIN_TOKEN` | 与服务端一致的管理令牌，仅用于发布和 Console |
 
 上述文件已被 Git 忽略。不要给管理令牌添加 `EXPO_PUBLIC_` 前缀。App 的地址与客户端 Key 必须同时配置；两项都留空会停用热更新，缺少其中一项会阻止构建。原生构建和 OTA 打包应使用相同的客户端配置。
