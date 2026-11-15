@@ -182,11 +182,15 @@ function Workspace() {
           { text: "取消", style: "cancel", onPress: () => resolve(false) },
           { text: "下载", onPress: () => { downloadRequested = true; haptic("medium"); setUpdateStatus("下载中…"); resolve(true); } },
         ], { cancelable: true, onDismiss: () => resolve(false) });
-      }));
-      if (message) {
+      }), () => new Promise<boolean>((resolve) => {
         if (downloadRequested) haptic("success");
-        Alert.alert("热更新", message);
-      }
+        setUpdateStatus("等待确认…");
+        Alert.alert("热更新已下载", "是否立即重启应用以应用更新？", [
+          { text: "稍后", style: "cancel", onPress: () => resolve(false) },
+          { text: "立即重启", onPress: () => { setUpdateStatus("重启中…"); resolve(true); } },
+        ], { cancelable: true, onDismiss: () => resolve(false) });
+      }));
+      if (message) Alert.alert("热更新", message);
     } catch (failure) {
       haptic("error");
       Alert.alert("热更新失败", failure instanceof Error ? failure.message : "请稍后重试。");

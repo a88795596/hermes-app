@@ -54,7 +54,10 @@ export function prepareUpdate() {
   return automaticUpdate;
 }
 
-export async function checkUpdateManually(confirm: (update: { id: string; message: string | null; publishedAt?: number }) => Promise<boolean>) {
+export async function checkUpdateManually(
+  confirm: (update: { id: string; message: string | null; publishedAt?: number }) => Promise<boolean>,
+  confirmReload: () => Promise<boolean>,
+) {
   if (!hotUpdater) return "当前版本未启用热更新。";
   // 启动下载先完成，避免两个入口同时操作原生更新包。
   await automaticUpdate;
@@ -66,13 +69,19 @@ export async function checkUpdateManually(confirm: (update: { id: string; messag
   } catch (error) {
     throw new Error("检查热更新失败，请稍后重试。", { cause: error });
   }
-  const downloaded = "热更新已下载，下次启动 App 时生效。";
-  if (!update) return hotUpdater.isUpdateDownloaded() ? downloaded : "当前已是最新版本。";
-  if (!await confirm({ id: update.id, message: update.message, publishedAt: updateTimestamp(update.id) })) return;
-  try {
-    if (!await update.updateBundle()) throw new Error("更新包未能下载完成。");
-  } catch (error) {
-    throw new Error("热更新下载失败，请稍后重试。", { cause: error });
+  if (!update && !hotUpdater.isUpdateDownloaded()) return "当前已是最新版本。";
+  if (update) {
+    if (!await confirm({ id: update.id, message: update.message, publishedAt: updateTimestamp(update.id) })) return;
+    try {
+      if (!await update.updateBundle()) throw new Error("更新包未能下载完成。");
+    } catch (error) {
+      throw new Error("热更新下载失败，请稍后重试。", { cause: error });
+    }
   }
-  return downloaded;
+  if (!await confirmReload()) return;
+  try {
+    await hotUpdater.reload();
+  } catch (error) {
+    throw new Error("重启应用失败，请手动重启 App 以应用更新。", { cause: error });
+  }
 }

@@ -123,22 +123,28 @@ test("没有更新时停止；初始化、网络和下载失败均不阻断应�
   }
 });
 
-test("手动检查先确认 Message、发布时间和 ID，确认后才下载且不重载", async () => {
-  let downloads = 0;
-  const runtime = loadUpdates({ init: () => ({
-    async checkForUpdate(options) {
-      assert.equal(options.updateStrategy, "fingerprint");
-      return { id: bundleId, message: "修复会话显示", async updateBundle() { downloads++; return true; } };
-    },
-    reload() { assert.fail("不能重载当前会话"); },
-  }) });
-  const result = await runtime.checkUpdateManually(async (update) => {
-    assert.deepEqual(update, { id: bundleId, message: "修复会话显示", publishedAt: 1645557742000 });
-    assert.equal(downloads, 0);
-    return true;
-  });
-  assert.equal(downloads, 1);
-  assert.equal(result, "热更新已下载，下次启动 App 时生效。");
+test("手动检查先确认版本信息，下载成功后询问重启，仅确认时调用 reload", async () => {
+  for (const restart of [false, true]) {
+    const calls = [];
+    const runtime = loadUpdates({ init: () => ({
+      async checkForUpdate(options) {
+        assert.equal(options.updateStrategy, "fingerprint");
+        return { id: bundleId, message: "修复会话显示", async updateBundle() { calls.push("download"); return true; } };
+      },
+      async reload() { calls.push("reload"); },
+    }) });
+    const result = await runtime.checkUpdateManually(async (update) => {
+      assert.deepEqual(update, { id: bundleId, message: "修复会话显示", publishedAt: 1645557742000 });
+      calls.push("confirm-download");
+      return true;
+    }, async () => {
+      assert.deepEqual(calls, ["confirm-download", "download"]);
+      calls.push("confirm-reload");
+      return restart;
+    });
+    assert.deepEqual(calls, ["confirm-download", "download", "confirm-reload", ...(restart ? ["reload"] : [])]);
+    assert.equal(result, undefined);
+  }
 });
 
 test("取消仅跳过本次手动下载，后续自动更新和手动重试仍可下载", async () => {
@@ -153,21 +159,24 @@ test("取消仅跳过本次手动下载，后续自动更新和手动重试仍�
   assert.equal(await runtime.checkUpdateManually(async (update) => {
     assert.equal(update.message, null);
     return false;
-  }), undefined);
+  }, () => assert.fail("取消下载不应询问重启")), undefined);
   assert.equal(downloads, 0);
   await runtime.prepareUpdate();
   assert.equal(downloads, 1);
-  await runtime.checkUpdateManually(async () => true);
+  await runtime.checkUpdateManually(async () => true, async () => false);
   assert.equal(downloads, 2);
   assert.equal(checks, 3);
 });
 
-test("手动检查等待启动下载结束，已下载版本提示下次启动生效", async () => {
+test("手动检查等待启动下载结束，已有更新也询问重启且不重复下载", async () => {
   let finishDownload;
   let downloaded = false;
   let checks = 0;
+  let reloads = 0;
+  let confirmations = 0;
   const runtime = loadUpdates({ init: () => ({
     isUpdateDownloaded: () => downloaded,
+    async reload() { reloads++; },
     async checkForUpdate() {
       checks++;
       if (checks > 1) return null;
@@ -178,24 +187,32 @@ test("手动检查等待启动下载结束，已下载版本提示下次启动�
   }) });
   const automatic = runtime.prepareUpdate();
   await Promise.resolve();
-  const manual = runtime.checkUpdateManually(() => assert.fail("已经下载，不应再次询问"));
+  const confirmReload = async () => { confirmations++; assert.equal(downloaded, true); return confirmations > 1; };
+  const confirmDownload = () => assert.fail("已经下载，不应再次询问下载");
+  const manual = runtime.checkUpdateManually(confirmDownload, confirmReload);
   await Promise.resolve();
   assert.equal(checks, 1);
+  assert.equal(confirmations, 0);
   finishDownload();
   await automatic;
-  assert.equal(await manual, "热更新已下载，下次启动 App 时生效。");
+  assert.equal(await manual, undefined);
   assert.equal(checks, 2);
+  assert.equal(confirmations, 1);
+  assert.equal(reloads, 0);
+  await runtime.checkUpdateManually(confirmDownload, confirmReload);
+  assert.equal(confirmations, 2);
+  assert.equal(reloads, 1);
 });
 
 test("手动检查区分没有更新、未启用和 SDK 回调报告的检查失败", async () => {
   const confirm = () => assert.fail("没有可确认的更新");
-  assert.equal(await loadUpdates({ env: {} }).checkUpdateManually(confirm), "当前版本未启用热更新。");
-  assert.equal(await loadUpdates({ init: () => ({ checkForUpdate: async () => null }) }).checkUpdateManually(confirm), "当前已是最新版本。");
+  assert.equal(await loadUpdates({ env: {} }).checkUpdateManually(confirm, confirm), "当前版本未启用热更新。");
+  assert.equal(await loadUpdates({ init: () => ({ checkForUpdate: async () => null }) }).checkUpdateManually(confirm, confirm), "当前已是最新版本。");
   for (const checkForUpdate of [
     async () => { throw new Error("offline"); },
     async (options) => { options.onError(new Error("offline")); return null; },
   ]) {
-    await assert.rejects(loadUpdates({ init: () => ({ checkForUpdate }) }).checkUpdateManually(confirm), /检查热更新失败/);
+    await assert.rejects(loadUpdates({ init: () => ({ checkForUpdate }) }).checkUpdateManually(confirm, confirm), /检查热更新失败/);
   }
 });
 
@@ -207,8 +224,19 @@ test("无时间的版本仍可确认，下载失败和过期目录均提示重�
     await assert.rejects(runtime.checkUpdateManually(async (update) => {
       assert.deepEqual(update, { id: "legacy-bundle", message: null, publishedAt: undefined });
       return true;
-    }), /热更新下载失败/);
+    }, () => assert.fail("下载失败不应询问重启")), /热更新下载失败/);
   }
+});
+
+test("插件重载失败时报告可重试的错误，保留原始原因", async () => {
+  const cause = new Error("native reload failed");
+  const runtime = loadUpdates({ init: () => ({
+    isUpdateDownloaded: () => true,
+    async checkForUpdate() { return null; },
+    async reload() { throw cause; },
+  }) });
+  await assert.rejects(runtime.checkUpdateManually(() => assert.fail("无需再次下载"), async () => true),
+    (error) => /重启应用失败/.test(error.message) && error.cause === cause);
 });
 
 test("原生构建拒绝不完整配置和不安全的更新地址", () => {

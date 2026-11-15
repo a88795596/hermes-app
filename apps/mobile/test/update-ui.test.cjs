@@ -14,8 +14,8 @@ new Function("exports", compile("../src/ui/text.ts"))(textExports);
 const flush = () => new Promise(setImmediate);
 const ManagementScreen = Symbol("ManagementScreen");
 
-function mountWorkspace({ update, message, params = {}, router = {}, stack, context = {} } = {}) {
-  const alerts = [], choices = [], statuses = [], feedback = [];
+function mountWorkspace({ update, message, downloaded = false, reloadError, params = {}, router = {}, stack, context = {} } = {}) {
+  const alerts = [], choices = [], reloadChoices = [], statuses = [], feedback = [];
   const values = [];
   let checks = 0, cursor = 0;
   const state = {
@@ -63,12 +63,17 @@ function mountWorkspace({ update, message, params = {}, router = {}, stack, cont
       case "./chat/topic-list": return { TopicList: "TopicList" };
       case "./updates": return {
         currentUpdate: { id: "running-version" },
-        async checkUpdateManually(confirm) {
+        async checkUpdateManually(confirm, confirmReload) {
           checks++;
           if (message) return message;
-          const accepted = await confirm(update);
-          choices.push(accepted);
-          return accepted ? "热更新已下载，下次启动 App 时生效。" : undefined;
+          if (!downloaded) {
+            const accepted = await confirm(update);
+            choices.push(accepted);
+            if (!accepted) return;
+          }
+          const reload = await confirmReload();
+          reloadChoices.push(reload);
+          if (reload && reloadError) throw reloadError;
         },
       };
       case "expo-crypto": return { randomUUID: () => "new-topic" };
@@ -83,7 +88,7 @@ function mountWorkspace({ update, message, params = {}, router = {}, stack, cont
   });
   const workspace = exports.default().props.children;
   const render = () => { cursor = 0; return workspace.type(); };
-  return { alerts, choices, statuses, feedback, state, render, screen: render(), checks: () => checks };
+  return { alerts, choices, reloadChoices, statuses, feedback, state, render, screen: render(), checks: () => checks };
 }
 
 function findNode(node, matches) {
@@ -95,8 +100,8 @@ function findNode(node, matches) {
     : node.props.children, matches);
 }
 
-function mountSettings(update, message) {
-  const { screen: settings, ...state } = mountWorkspace({ update, message });
+function mountSettings(update, message, options = {}) {
+  const { screen: settings, ...state } = mountWorkspace({ update, message, ...options });
   const button = findNode(settings, (node) => node.type === "Pressable" && node.props.accessibilityLabel === "检查更新");
   assert.ok(button, "设置中应有可点击的检查更新入口");
   assert.equal(button.props.accessibilityRole, "button");
@@ -130,7 +135,7 @@ test("检查更新展示说明、时间和 ID，取消可重试，确认前防�
 });
 
 test("未启用热更新或无需下载时只提示点击，不宣告下载成功", async () => {
-  for (const message of ["当前版本未启用热更新。", "当前已是最新版本。", "热更新已下载，下次启动 App 时生效。"]) {
+  for (const message of ["当前版本未启用热更新。", "当前已是最新版本。"]) {
     const screen = mountSettings(undefined, message);
     screen.press();
     await flush();
@@ -139,17 +144,59 @@ test("未启用热更新或无需下载时只提示点击，不宣告下载成�
   }
 });
 
-test("下载按钮确认后显示完成提示，流程结束可再次检查", async () => {
-  const screen = mountSettings({ id: "next-version", message: "更新说明", publishedAt: 1794700800000 });
+test("下载完成后可选择稍后、立即重启或关闭弹窗，确认期间防止重复检查", async () => {
+  for (const choice of ["稍后", "立即重启", "关闭"]) {
+    const screen = mountSettings({ id: "next-version", message: "更新说明", publishedAt: 1794700800000 });
+    screen.press();
+    screen.alerts[0].buttons.find((button) => button.text === "下载").onPress();
+    assert.equal(screen.statuses.at(-1), "下载中…");
+    await flush();
+    assert.deepEqual(screen.choices, [true]);
+    const alert = screen.alerts[1];
+    assert.equal(alert.title, "热更新已下载");
+    assert.match(alert.message, /立即重启/);
+    assert.equal(alert.buttons.find((button) => button.text === "稍后").style, "cancel");
+    assert.equal(screen.statuses.at(-1), "等待确认…");
+    assert.deepEqual(screen.feedback, ["light", "medium", "success"]);
+    screen.press();
+    assert.equal(screen.checks(), 1);
+    if (choice === "关闭") {
+      assert.equal(alert.options.cancelable, true);
+      alert.options.onDismiss();
+    } else {
+      alert.buttons.find((button) => button.text === choice).onPress();
+    }
+    if (choice === "立即重启") assert.equal(screen.statuses.at(-1), "重启中…");
+    await flush();
+    assert.deepEqual(screen.reloadChoices, [choice === "立即重启"]);
+    assert.equal(screen.alerts.length, 2, "完成后不再显示重复提示");
+    assert.equal(screen.statuses.at(-1), undefined);
+    screen.press();
+    assert.equal(screen.checks(), 2, "结束后可以再次检查");
+    screen.alerts[2].buttons.find((button) => button.text === "取消").onPress();
+    await flush();
+  }
+});
+
+test("已有待生效更新时直接确认重启，重启失败显示错误并允许重试", async () => {
+  const screen = mountSettings(undefined, undefined, { downloaded: true, reloadError: new Error("应用重启失败，请稍后重试。") });
   screen.press();
-  screen.alerts[0].buttons.find((button) => button.text === "下载").onPress();
-  assert.equal(screen.statuses.at(-1), "下载中…");
   await flush();
-  assert.deepEqual(screen.choices, [true]);
-  assert.equal(screen.alerts[1].title, "热更新");
-  assert.equal(screen.alerts[1].message, "热更新已下载，下次启动 App 时生效。");
+  const alert = screen.alerts[0];
+  assert.equal(alert.title, "热更新已下载");
+  assert.deepEqual(screen.choices, []);
+  assert.deepEqual(screen.feedback, ["light"], "已有下载不重复反馈下载成功");
+  alert.buttons.find((button) => button.text === "立即重启").onPress();
+  await flush();
+  assert.deepEqual(screen.reloadChoices, [true]);
+  assert.equal(screen.alerts[1].title, "热更新失败");
+  assert.match(screen.alerts[1].message, /重启失败/);
+  assert.equal(screen.feedback.at(-1), "error");
   assert.equal(screen.statuses.at(-1), undefined);
-  assert.deepEqual(screen.feedback, ["light", "medium", "success"]);
+  screen.press();
+  assert.equal(screen.checks(), 2);
+  screen.alerts[2].buttons.find((button) => button.text === "稍后").onPress();
+  await flush();
 });
 
 test("缺少说明时仅展示时间和 ID，关闭确认框等同取消", async () => {
