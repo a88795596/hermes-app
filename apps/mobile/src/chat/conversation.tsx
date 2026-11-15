@@ -12,6 +12,7 @@ import { motion, useReduceMotion } from "../ui/motion";
 import { profileLabel } from "../ui/text";
 import { Action, CloseButton, Field, Icon, Notice, useTheme } from "../ui/theme";
 import { AnswerMarkdown } from "./answer-markdown";
+import { AssistantStreamBorder } from "./assistant-stream-border";
 import { pickAttachments } from "./attachments";
 import { AttachmentMenu, ComposerMenu, ReasoningMenu, reasoningLabels, type ComposerCommand } from "./composer-menu";
 import { ModelPicker } from "./model-picker";
@@ -294,7 +295,8 @@ export function Conversation({
   const attachmentsBlocked = canControl && workspace.attachments_supported !== true;
   const sendDisabled = !canSend || (!draft.trim() && !attachments.length && !speech.busy) || (!!attachments.length && attachmentsBlocked)
     || (isModelCommand ? !canControl : reasoningBlocked);
-  const speechDisabled = sending || speech.state === "stopping" || (!speech.busy && (!canWrite || picking || openingSkills));
+  const speechVisible = !draft.length || speech.busy;
+  const speechDisabled = !speechVisible || sending || speech.state === "stopping" || (!speech.busy && (!canWrite || picking || openingSkills));
   const attachmentDisabled = !canWrite || picking || sending || attachments.length >= MAX_ATTACHMENTS;
   const reasoningUnavailable = !canControl ? "重新连接 Hermes 后即可切换思考强度。"
     : reasoningLegacy ? "更新服务端和连接器后即可切换思考强度。"
@@ -677,6 +679,7 @@ export function Conversation({
         )}
         <View style={chat.composerControls}>
           <View style={[chat.composerRow, { backgroundColor: colors.secondary, borderColor: draftFocused ? colors.accent : colors.edge }]}>
+            {speech.state === "recording" && <AssistantStreamBorder variant="composer" />}
             <Pressable accessibilityRole="button" accessibilityLabel="添加附件"
               accessibilityState={{ disabled: attachmentDisabled, busy: picking, expanded: menu === "attachments" }}
               disabled={attachmentDisabled} onPress={() => { haptic("light"); Keyboard.dismiss(); setMenu("attachments"); }}
@@ -719,24 +722,38 @@ export function Conversation({
               )}
             </Pressable>
           </View>
-          {speech.available && <Pressable accessibilityRole="button"
-            accessibilityLabel={speech.busy ? "停止语音输入" : "开始语音输入"}
-            accessibilityState={{ disabled: speechDisabled, selected: speech.busy,
-              busy: speech.state === "starting" || speech.state === "stopping" }}
-            disabled={speechDisabled} onPress={() => {
-              if (speechDisabled) return;
-              haptic("light");
-              Keyboard.dismiss();
-              setMenu(undefined);
-              setError(undefined);
-              if (speech.busy) void speech.stop();
-              else void speech.start();
-            }}
-            style={({ pressed }) => [chat.iconButton, chat.speechButton, (pressed || speechDisabled) && styles.faded]}>
-            {speech.state === "starting" || speech.state === "stopping"
-              ? <ActivityIndicator size="small" color={colors.error} />
-              : <Icon name={speech.busy ? "stop" : "microphone"} size={22} color={speech.busy ? colors.error : colors.accent} />}
-          </Pressable>}
+          {speech.available && <Animated.View
+            pointerEvents={speechVisible ? "auto" : "none"}
+            accessibilityElementsHidden={!speechVisible}
+            importantForAccessibility={speechVisible ? "auto" : "no-hide-descendants"}
+            style={[chat.speechButton, {
+              transitionProperty: ["width", "marginLeft", "opacity", "transform"],
+              transitionDuration: reduced ? 0 : 360,
+              transitionTimingFunction: "ease-in-out",
+              width: speechVisible ? touchSize : 0,
+              marginLeft: speechVisible ? 8 : 0,
+              opacity: speechVisible ? 1 : 0,
+              transform: [{ translateX: speechVisible ? 0 : 8 }],
+            }]}>
+            <Pressable accessibilityRole="button"
+              accessibilityLabel={speech.busy ? "停止语音输入" : "开始语音输入"}
+              accessibilityState={{ disabled: speechDisabled, selected: speech.busy,
+                busy: speech.state === "starting" || speech.state === "stopping" }}
+              disabled={speechDisabled} onPress={() => {
+                if (speechDisabled) return;
+                haptic("light");
+                Keyboard.dismiss();
+                setMenu(undefined);
+                setError(undefined);
+                if (speech.busy) void speech.stop();
+                else void speech.start();
+              }}
+              style={({ pressed }) => [chat.iconButton, (pressed || speechDisabled) && styles.faded]}>
+              {speech.state === "starting" || speech.state === "stopping"
+                ? <ActivityIndicator size="small" color={colors.error} />
+                : <Icon name={speech.busy ? "stop" : "microphone"} size={22} color={speech.busy ? colors.error : colors.accent} />}
+            </Pressable>
+          </Animated.View>}
         </View>
       </View>
       {settingsOpen ? <SettingsDrawer busy={settingsBusy} canWrite={canWrite} reasoningLabel={reasoningLabel}
@@ -790,8 +807,8 @@ const chat = StyleSheet.create({
   chipName: { maxWidth: 140 },
   iconButton: { width: touchSize, height: touchSize, alignItems: "center", justifyContent: "center" },
   composerDivider: { height: 22, width: StyleSheet.hairlineWidth, marginBottom: (touchSize - 22) / 2 },
-  composerControls: { flexDirection: "row", alignItems: "flex-end", gap: 8 },
-  speechButton: { flexShrink: 0, marginBottom: 4 },
+  composerControls: { flexDirection: "row", alignItems: "flex-end" },
+  speechButton: { flexShrink: 0, marginBottom: 4, overflow: "hidden" },
   composerRow: {
     flex: 1,
     minWidth: 0,

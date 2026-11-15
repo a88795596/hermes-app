@@ -3,7 +3,7 @@ const { readFileSync } = require("node:fs");
 const test = require("node:test");
 const ts = require("typescript");
 
-function mount(file, name, props, speech) {
+function mount(file, name, props, speech, reduceMotion = true) {
   const values = [], effects = [], feedback = [];
   const dimensions = { width: 390, height: 844 };
   let cursor = 0;
@@ -39,7 +39,7 @@ function mount(file, name, props, speech) {
       case "expo-web-browser": return { openBrowserAsync: async () => {}, WebBrowserPresentationStyle: { PAGE_SHEET: "pageSheet" } };
       case "@hermes-mobile/protocol": return { MAX_ATTACHMENTS: 5, reasoningEfforts: ["low", "high"] };
       case "../ui/haptics": return { haptic: (kind) => feedback.push(kind) };
-      case "../ui/motion": return { motion: {}, useReduceMotion: () => true };
+      case "../ui/motion": return { motion: {}, useReduceMotion: () => reduceMotion };
       case "../ui/text": return { profileLabel: (label) => label };
       case "../ui/page-header": return { PageHeader: "PageHeader" };
       case "../ui/theme": return {
@@ -53,6 +53,7 @@ function mount(file, name, props, speech) {
       case "./model-picker": return { ModelPicker: "ModelPicker" };
       case "./settings-drawer": return { SettingsDrawer: "SettingsDrawer" };
       case "./answer-markdown": return { AnswerMarkdown: "AnswerMarkdown" };
+      case "./assistant-stream-border": return { AssistantStreamBorder: "AssistantStreamBorder" };
       case "./message-attachments": return { MessageAttachments: "MessageAttachments" };
       case "./attachments": return { pickAttachments: async () => [] };
       case "./use-speech-input": return { useSpeechInput: (_id, _enabled, draft) => speech ?? {
@@ -61,7 +62,7 @@ function mount(file, name, props, speech) {
       default: throw new Error(`Unexpected dependency: ${dependency}`);
     }
   });
-  const render = () => { cursor = 0; return exported[name](props); };
+  const render = (nextProps) => { Object.assign(props, nextProps); cursor = 0; return exported[name](props); };
   return { render, feedback, effects, dimensions, renderChild(predicate) {
     const child = find(render(), predicate);
     return child?.type(child.props);
@@ -95,14 +96,14 @@ test("底部选择框的返回、标题和关闭共用顶栏，忙碌时保留�
   assert.equal(closed, 1);
 });
 
-function conversation(enqueue, draft = "测试消息", { messages = [], workspace = {}, speech, ...props } = {}) {
+function conversation(enqueue, draft = "测试消息", { messages = [], workspace = {}, speech, reduceMotion, ...props } = {}) {
   return mount("conversation", "Conversation", {
     id: "topic", topic: { status: "ready" }, draft, attachments: [], session: {},
     workspace: { ready: true, network: "online", connector_online: true, reasoning_supported: true, profiles: [], pending: [],
       detail: { messages }, enqueue, ...workspace },
     onDraftChange() {}, onAttachmentsChange() {},
     ...props,
-  }, speech);
+  }, speech, reduceMotion);
 }
 
 test("语音按钮独立位于输入框外侧右边，点击开始与停止都不发送消息", async () => {
@@ -110,10 +111,11 @@ test("语音按钮独立位于输入框外侧右边，点击开始与停止都�
   const drafts = [];
   const speech = { available: true, state: "idle", busy: false,
     start: async () => { started++; }, stop: async () => { stopped++; return "已有草稿 语音"; } };
-  const screen = conversation(async () => assert.fail("麦克风按钮不能发送消息"), "已有草稿", {
+  const screen = conversation(async () => assert.fail("麦克风按钮不能发送消息"), "", {
     speech, onDraftChange: (text) => drafts.push(text),
   });
   const tree = screen.render();
+  assert.equal(find(tree, (node) => node.type === "AssistantStreamBorder"), undefined);
   const mic = find(tree, (node) => node.props.accessibilityLabel === "开始语音输入");
   assert.ok(mic, "可用设备显示语音入口");
   const row = find(tree, (node) => Array.isArray(node.props.children)
@@ -121,15 +123,26 @@ test("语音按钮独立位于输入框外侧右边，点击开始与停止都�
   const labels = row.props.children.map((child) => child?.props?.accessibilityLabel).filter(Boolean);
   assert.deepEqual(labels, ["添加附件", "消息", "发送"]);
   const controls = find(tree, (node) => Array.isArray(node.props.children) && node.props.children.includes(row));
-  assert.deepEqual(controls.props.children, [row, mic], "语音按钮在输入框边框外，独立排列在右侧");
+  const speechSlot = find(tree, (node) => node.props.children === mic);
+  assert.deepEqual(controls.props.children, [row, speechSlot], "语音按钮在输入框边框外，独立排列在右侧");
   mic.props.onPress();
   await flush();
   assert.equal(started, 1);
   for (const state of ["starting", "recording"]) {
     speech.state = state;
     speech.busy = true;
-    const tree = screen.render();
+    const tree = screen.render({ draft: "实时识别文字" });
+    const border = find(tree, (node) => node.type === "AssistantStreamBorder");
+    assert.equal(border?.props.variant, state === "recording" ? "composer" : undefined, "仅实际录音时显示输入框流光");
+    if (border) {
+      const row = find(tree, (node) => Array.isArray(node.props.children) && node.props.children.includes(border));
+      assert.ok(row.props.children.some((child) => child?.props?.accessibilityLabel === "消息"), "流光限于输入框内");
+    }
     const stop = find(tree, (node) => node.props.accessibilityLabel === "停止语音输入");
+    const slot = find(tree, (node) => node.props.children === stop);
+    assert.equal(slot.props.accessibilityElementsHidden, false, "识别出文字后仍保留停止入口");
+    assert.equal(slot.props.pointerEvents, "auto");
+    assert.equal(Object.assign({}, ...slot.props.style).width, 44);
     assert.equal(stop.props.disabled, false, "等待权限时也能停止");
     assert.equal(stop.props.accessibilityState.selected, true);
     assert.equal(find(tree, (node) => node.props.accessibilityLabel === "消息").props.editable, false);
@@ -142,10 +155,50 @@ test("语音按钮独立位于输入框外侧右边，点击开始与停止都�
   assert.deepEqual(drafts, [], "停止按钮不清空已有草稿");
   speech.state = "stopping";
   assert.equal(find(screen.render(), (node) => node.props.accessibilityLabel === "停止语音输入").props.disabled, true);
+  assert.equal(find(screen.render(), (node) => node.type === "AssistantStreamBorder"), undefined);
   speech.state = "idle";
   speech.busy = false;
+  assert.equal(find(screen.render(), (node) => node.type === "AssistantStreamBorder"), undefined);
   assert.equal(find(screen.render(), (node) => node.props.accessibilityLabel === "消息").props.editable, true);
   assert.equal(find(conversation(async () => {}).render(), (node) => node.props.accessibilityLabel === "开始语音输入"), undefined);
+});
+
+test("输入任意文字后语音按钮淡出并释放空位，清空后恢复且遵循减少动态效果设置", () => {
+  for (const reduceMotion of [false, true]) {
+    let started = 0;
+    const speech = { available: true, state: "idle", busy: false, start: () => { started++; }, stop: async () => "" };
+    const screen = conversation(async () => {}, "", { speech, reduceMotion });
+    for (const draft of ["", "你好", " ", "\n", "", "再次输入", ""]) {
+      const tree = screen.render({ draft });
+      const mic = find(tree, (node) => node.props.accessibilityLabel === "开始语音输入");
+      const slot = find(tree, (node) => node.props.children === mic);
+      const style = Object.assign({}, ...slot.props.style);
+      const visible = draft.length === 0;
+      assert.equal(style.width + style.marginLeft, visible ? 52 : 0, "隐藏时同时收回按钮与间距");
+      assert.equal(style.opacity, visible ? 1 : 0);
+      assert.deepEqual(style.transform, [{ translateX: visible ? 0 : 8 }]);
+      assert.equal(style.transitionDuration, reduceMotion ? 0 : 360);
+      assert.equal(style.transitionTimingFunction, "ease-in-out");
+      assert.equal(slot.props.pointerEvents, visible ? "auto" : "none");
+      assert.equal(slot.props.accessibilityElementsHidden, !visible);
+      assert.equal(slot.props.importantForAccessibility, visible ? "auto" : "no-hide-descendants");
+      assert.equal(mic.props.disabled, !visible);
+      assert.equal(mic.props.accessibilityState.disabled, !visible);
+      if (!visible) mic.props.onPress();
+      const controls = find(tree, (node) => Array.isArray(node.props.children) && node.props.children.includes(slot));
+      assert.equal(controls.props.style.gap ?? 0, 0, "父容器不能残留按钮间距");
+    }
+    assert.equal(started, 0, "不可见的按钮不能开始录音");
+  }
+});
+
+test("不支持语音的设备不保留语音按钮占位", () => {
+  const tree = conversation(async () => {}, "").render();
+  const row = find(tree, (node) => Array.isArray(node.props.children)
+    && node.props.children.some((child) => child?.props?.accessibilityLabel === "消息"));
+  const controls = find(tree, (node) => Array.isArray(node.props.children) && node.props.children.includes(row));
+  assert.deepEqual(controls.props.children.filter(Boolean), [row]);
+  assert.equal(controls.props.style.gap ?? 0, 0);
 });
 
 test("录音中发送等待最后转写，快速重复点击只提交一份完整草稿", async () => {

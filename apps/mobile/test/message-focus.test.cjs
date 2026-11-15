@@ -48,6 +48,7 @@ function mount(props) {
       };
       case "./composer-menu": return { reasoningLabels: {} };
       case "./answer-markdown": return { AnswerMarkdown: "AnswerMarkdown" };
+      case "./assistant-stream-border": return { AssistantStreamBorder: "AssistantStreamBorder" };
       case "./message-attachments": return { MessageAttachments: "MessageAttachments" };
       case "./attachments": return {};
       case "./model-picker": return {};

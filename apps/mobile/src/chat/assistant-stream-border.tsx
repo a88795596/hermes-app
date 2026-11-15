@@ -1,5 +1,5 @@
 import { useFocusEffect } from "expo-router";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { Animated, Easing, Image, View, useAnimatedValue, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useReduceMotion } from "../ui/motion";
@@ -12,13 +12,11 @@ const tiles = {
 };
 const corner = require("../../assets/assistant-aurora-corner.png");
 const period = 384;
-const glow = 28;
-const cornerStyle = { position: "absolute" as const, width: 96, height: 96 };
-
-function Edge({ side, length, motion }: {
+function Edge({ side, length, motion, glow }: {
   side: keyof typeof tiles;
   length: number;
   motion: Animated.Value;
+  glow: number;
 }) {
   const vertical = side === "right" || side === "left";
   const forward = side === "top" || side === "right";
@@ -47,11 +45,17 @@ function Edge({ side, length, motion }: {
   );
 }
 
-export function AssistantStreamBorder() {
+export function AssistantStreamBorder({ variant = "screen" }: { variant?: "screen" | "composer" } = {}) {
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
+  const [size, setSize] = useState({ width: 0, height: 0 });
   const motion = useAnimatedValue(0);
   const reduced = useReduceMotion();
+  const composer = variant === "composer";
+  const glow = composer ? 8 : 28;
+  const cornerSize = composer ? 48 : 96;
+  const cornerStyle = { position: "absolute" as const, width: cornerSize, height: cornerSize };
+  const duration = composer ? 9000 : 6000;
 
   useFocusEffect(useCallback(() => {
     if (reduced) {
@@ -59,22 +63,25 @@ export function AssistantStreamBorder() {
       return;
     }
     const animation = Animated.loop(Animated.timing(motion, {
-      toValue: 1, duration: 6000, easing: Easing.linear,
+      toValue: 1, duration, easing: Easing.linear,
       useNativeDriver: true, isInteraction: false,
     }));
     animation.start();
     return () => { animation.stop(); motion.setValue(0); };
-  }, [motion, reduced]));
+  }, [motion, reduced, duration]));
 
   return (
-    <View testID="assistant-stream-border" pointerEvents="none" accessible={false}
+    <View testID={composer ? "recording-input-border" : "assistant-stream-border"} pointerEvents="none" accessible={false}
       accessibilityElementsHidden importantForAccessibility="no-hide-descendants"
+      onLayout={composer ? ({ nativeEvent: { layout } }) => setSize({ width: layout.width, height: layout.height }) : undefined}
       // Extend past the page's safe-area padding to keep the glow on the screen edges.
-      style={{ position: "absolute", top: -insets.top, right: -insets.right, bottom: -insets.bottom, left: -insets.left }}>
-      <Edge side="top" length={width} motion={motion} />
-      <Edge side="right" length={height} motion={motion} />
-      <Edge side="bottom" length={width} motion={motion} />
-      <Edge side="left" length={height} motion={motion} />
+      style={composer
+        ? { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, borderRadius: 24, overflow: "hidden" }
+        : { position: "absolute", top: -insets.top, right: -insets.right, bottom: -insets.bottom, left: -insets.left }}>
+      <Edge side="top" length={composer ? size.width : width} motion={motion} glow={glow} />
+      <Edge side="right" length={composer ? size.height : height} motion={motion} glow={glow} />
+      <Edge side="bottom" length={composer ? size.width : width} motion={motion} glow={glow} />
+      <Edge side="left" length={composer ? size.height : height} motion={motion} glow={glow} />
       <Image source={corner} style={[cornerStyle, { top: 0, left: 0 }]} />
       <Image source={corner} style={[cornerStyle, { top: 0, right: 0, transform: [{ scaleX: -1 }] }]} />
       <Image source={corner} style={[cornerStyle, { bottom: 0, right: 0, transform: [{ scaleX: -1 }, { scaleY: -1 }] }]} />
