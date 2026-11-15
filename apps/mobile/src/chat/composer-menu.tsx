@@ -9,7 +9,7 @@ import { haptic } from "../ui/haptics";
 import { motion, useReduceMotion } from "../ui/motion";
 import { PageHeader } from "../ui/page-header";
 import { profileLabel } from "../ui/text";
-import { Action, CloseButton, Icon, Notice, useTheme, type IconName } from "../ui/theme";
+import { Action, CloseButton, Field, Icon, Notice, useTheme, type IconName } from "../ui/theme";
 
 const commands = [
   { name: "status", label: "查看会话状态", icon: "chat" },
@@ -196,6 +196,15 @@ function Skills({ call, path, onSelect }: {
   const [attempt, setAttempt] = useState(0);
   const [skills, setSkills] = useState<Skill[]>();
   const [error, setError] = useState<string>();
+  const [search, setSearch] = useState("");
+  const query = search.trim();
+  const pattern = query ? new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "i") : undefined;
+
+  function highlight(text: string) {
+    return pattern ? text.split(pattern).map((part, index) => index % 2
+      ? <Text key={index} style={{ backgroundColor: colors.tint, color: colors.accent, fontWeight: "700" }}>{part}</Text>
+      : part) : text;
+  }
 
   useEffect(() => {
     const request = new AbortController();
@@ -219,27 +228,32 @@ function Skills({ call, path, onSelect }: {
   }
   if (!skills) return <ActivityIndicator accessibilityLabel="正在加载技能" color={colors.accent} />;
   return (
-    <FlatList
-      data={skills}
-      style={menu.list}
-      keyExtractor={(item, index) => `${item.name}:${index}`}
-      ListEmptyComponent={<Text style={styles.muted}>此配置档案暂无可用技能。</Text>}
-      renderItem={({ item }) => (
-        <Pressable accessibilityRole="button" accessibilityLabel={item.name} accessibilityHint="带入输入框"
-          onPress={() => { haptic("selection"); onSelect(item); }}
-          style={({ pressed }) => [menu.row, { borderBottomColor: colors.edge }, pressed && styles.faded]}>
-          <View style={[menu.skillIcon, { backgroundColor: colors.tint }]}>
-            <Icon name="skill" size={18} color={colors.accent} />
-          </View>
-          <View style={menu.grow}>
-            <Text style={styles.heading}>{item.name}</Text>
-            {!!item.category && <Text style={styles.caption}>{item.category}</Text>}
-            {!!item.description && <Text style={[styles.caption, { color: colors.foreground }]}>{item.description}</Text>}
-          </View>
-          <Icon name="chevron" size={15} color={colors.accent} />
-        </Pressable>
-      )}
-    />
+    <>
+      <FlatList
+        data={skills.filter((skill) => !pattern || pattern.test(skill.name) || pattern.test(skill.description ?? ""))}
+        style={menu.list}
+        keyboardShouldPersistTaps="handled"
+        keyExtractor={(item, index) => `${item.name}:${index}`}
+        ListEmptyComponent={<Text style={styles.muted}>{query ? "暂无匹配的技能" : "此配置档案暂无可用技能。"}</Text>}
+        renderItem={({ item }) => (
+          <Pressable accessibilityRole="button" accessibilityLabel={item.name} accessibilityHint="带入输入框"
+            onPress={() => { haptic("selection"); onSelect(item); }}
+            style={({ pressed }) => [menu.row, { borderBottomColor: colors.edge }, pressed && styles.faded]}>
+            <View style={[menu.skillIcon, { backgroundColor: colors.tint }]}>
+              <Icon name="skill" size={18} color={colors.accent} />
+            </View>
+            <View style={menu.grow}>
+              <Text style={styles.heading}>{highlight(item.name)}</Text>
+              {!!item.category && <Text style={styles.caption}>{item.category}</Text>}
+              {!!item.description && <Text style={[styles.caption, { color: colors.foreground }]}>{highlight(item.description)}</Text>}
+            </View>
+            <Icon name="chevron" size={15} color={colors.accent} />
+          </Pressable>
+        )}
+      />
+      <Field accessibilityLabel="搜索技能名称或描述" placeholder="搜索技能名称或描述"
+        value={search} onChangeText={setSearch} autoCapitalize="none" autoCorrect={false} returnKeyType="search" />
+    </>
   );
 }
 
