@@ -39,6 +39,7 @@ function mount() {
       if (name === "../sync/api") return { ApiError };
       if (name === "../ui/haptics") return { haptic: (kind) => feedback.push(kind) };
       if (name === "../ui/motion") return { motion: {}, useReduceMotion: () => true };
+      if (name === "../ui/page-header") return { PageHeader: "PageHeader" };
       if (name === "../ui/theme") return {
         useTheme: () => ({ colors: {}, styles: {} }), Action: "Action", Card: "Card", CloseButton: "CloseButton",
         EmptyState: "EmptyState", Field: "Field", Icon: "Icon", Notice: "Notice",
@@ -59,7 +60,7 @@ function find(node, predicate) {
   if (Array.isArray(node)) return node.map((child) => find(child, predicate)).find(Boolean);
   if (!node?.props) return;
   if (predicate(node)) return node;
-  return find(node.props.children, predicate);
+  return find([node.props.leading, node.props.children, node.props.trailing], predicate);
 }
 const flush = () => new Promise(setImmediate);
 

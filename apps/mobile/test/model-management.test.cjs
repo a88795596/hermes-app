@@ -27,6 +27,7 @@ test("从模型目录选取后回填编辑表单，只有点击顶栏保存才�
     "react-native-safe-area-context": { SafeAreaView: "SafeAreaView" },
     "../ui/haptics": { haptic() {} },
     "../ui/motion": { useReduceMotion: () => true },
+    "../ui/page-header": { PageHeader: "PageHeader" },
     "../ui/theme": { Action: "Action", Field: "Field", Icon: "Icon", CloseButton: "CloseButton",
       useTheme: () => ({ colors: {}, styles: {} }) },
     "./shared": {

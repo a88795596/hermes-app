@@ -6,6 +6,7 @@ import Animated from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { DEFAULT_TOPIC_TITLE, topicTitlePreview } from "@hermes-mobile/protocol";
 import { Conversation } from "./chat/conversation";
+import { ComposerSheet, PickerRow } from "./chat/composer-menu";
 import { TopicList, type TopicListRow } from "./chat/topic-list";
 import { InboxDetail, InboxList } from "./inbox/inbox";
 import { ManagementMenu, ManagementScreen, type ManagementPage } from "./manage";
@@ -13,6 +14,7 @@ import { Group, Row } from "./manage/shared";
 import { enablePushNotifications, pushAvailable } from "./notifications";
 import type { Pending } from "./sync/use-workspace";
 import { motion, useReduceMotion } from "./ui/motion";
+import { PageHeader } from "./ui/page-header";
 import { haptic } from "./ui/haptics";
 import { formatDateTime, profileLabel } from "./ui/text";
 import { Action, Card, EmptyState, Icon, Notice, SectionLabel, useTheme, type IconName } from "./ui/theme";
@@ -33,7 +35,6 @@ function BackLink({ title, onPress }: { title: string; onPress: () => void }) {
     <Pressable accessibilityRole="button" accessibilityLabel={`返回${title}`} onPress={() => { haptic("light"); onPress(); }}
       style={({ pressed }) => [layout.backLink, pressed && styles.faded]}>
       <Icon name="back" size={18} color={colors.accent} />
-      <Text style={[styles.text, { color: colors.accent }]}>{title}</Text>
     </Pressable>
   );
 }
@@ -262,14 +263,7 @@ function Workspace() {
     const processVisible = showProcess[id] ?? false;
     return (
       <View style={styles.frame}>
-        <View style={[styles.header, layout.chatHeader, { borderBottomColor: colors.edge, backgroundColor: colors.background }]}>
-          <Pressable accessibilityRole="button" accessibilityLabel={archived ? "返回已归档会话" : "返回话题列表"} onPress={() => { haptic("light"); goBack(); }}
-            style={({ pressed }) => [layout.chatBack, layout.chatHeaderSide, pressed && styles.faded]}>
-            <Icon name="back" size={17} color={colors.accent} />
-          </Pressable>
-          <Text accessibilityRole="header" numberOfLines={1} ellipsizeMode="tail" style={[styles.heading, layout.grow, layout.chatTitle]}>{chatTitle}</Text>
-          <View style={layout.chatHeaderSide} />
-        </View>
+        <PageHeader title={chatTitle} leading={<BackLink title={archived ? "已归档会话" : "话题列表"} onPress={goBack} />} />
         <Conversation
           id={id}
           topic={topic}
@@ -292,12 +286,7 @@ function Workspace() {
   }
 
   if (inboxItem) {
-    return (
-      <View style={styles.frame}>
-        <View style={layout.detailHeader}><BackLink title="收件箱" onPress={goBack} /></View>
-        <InboxDetail item={inboxItem} profiles={workspace.profiles} session={session} />
-      </View>
-    );
+    return <InboxDetail item={inboxItem} profiles={workspace.profiles} session={session} onBack={goBack} />;
   }
 
   const content = managementPage && profile ? (
@@ -305,57 +294,32 @@ function Workspace() {
       onTabVisibilityChange={setManagementTabsVisible} />
   ) : (
     <>
-      <View style={layout.pageHeader}>
-        {settingsPage
-          ? <BackLink title={sections[rootSection].title} onPress={goBack} />
-          : <Text style={[styles.wordmark, layout.wordmark]}>Hermes</Text>}
-        <View style={layout.heading}>
-          <Text accessibilityRole="header" style={[styles.title, layout.grow]}>{pageTitle}</Text>
-          {page === "topics" && profile && (
-            <Pressable accessibilityRole="button" accessibilityLabel="新建会话"
-              onPress={() => { haptic("medium"); startConversation(profile.profile_id); }}
-              style={({ pressed }) => [layout.compose, { backgroundColor: colors.accentFill }, pressed && styles.faded]}>
-              <Icon name="compose" color={colors.onAccent} size={21} />
-            </Pressable>
-          )}
-        </View>
-        {page === "topics" && (
-          <Pressable accessibilityRole="button" accessibilityLabel={connection + "。打开连接设置"} onPress={() => { haptic("light"); showPage("connection"); }}
+      {page === "topics" ? (
+        <PageHeader
+          leading={<Pressable accessibilityRole="button" accessibilityLabel={`选择配置档案${profile ? `，${profileLabel(profile.label)}` : ""}`}
+            accessibilityState={{ expanded: profilesExpanded }}
+            onPress={() => { haptic("light"); setProfilesExpanded(true); }}
+            style={({ pressed }) => [layout.avatar, { backgroundColor: colors.tint }, pressed && styles.faded]}>
+            <Text style={[styles.heading, { color: colors.accent }]}>{Array.from(profileLabel(profile?.label ?? "H"))[0]}</Text>
+          </Pressable>}
+          title={<Pressable accessibilityRole="button" accessibilityLabel={connection + "。打开连接设置"}
+            onPress={() => { haptic("light"); showPage("connection"); }}
             style={({ pressed }) => [layout.connectionSummary, pressed && styles.faded]}>
-            <View style={[layout.dot, { backgroundColor: connected ? colors.accentFill : colors.muted }]} />
-            <Text style={styles.muted}>{connection}</Text>
-          </Pressable>
-        )}
-        {page === "topics" && profile && (
-          workspace.profiles.length > 1 ? (
-            <Pressable accessibilityRole="button" accessibilityLabel={`选择配置档案，${profileLabel(profile.label)}`}
-              accessibilityState={{ expanded: profilesExpanded }}
-              onPress={() => { haptic("light"); setProfilesExpanded(!profilesExpanded); }}
-              style={({ pressed }) => [layout.profilePicker, { backgroundColor: colors.tint }, pressed && styles.faded]}>
-              <Icon name="sparkles" size={18} color={colors.accent} />
-              <Text style={[styles.label, layout.profileLabel]}>{profileLabel(profile.label)}</Text>
-              <Icon name="down" size={15} color={colors.accent} />
-            </Pressable>
-          ) : (
-            <View style={[layout.profilePicker, { backgroundColor: colors.tint }]}>
-              <Icon name="sparkles" size={18} color={colors.accent} />
-              <Text style={[styles.label, layout.profileLabel]}>{profileLabel(profile.label)}</Text>
-            </View>
-          )
-        )}
-      </View>
+            <Text accessibilityRole="header" numberOfLines={1} style={[styles.wordmark, layout.wordmark, layout.brand]}>Hermes</Text>
+            <View style={[layout.dot, { backgroundColor: connected ? "#2F9461" : "#888888" }]} />
+          </Pressable>}
+          trailing={<Pressable accessibilityRole="button" accessibilityLabel="新建会话" accessibilityState={{ disabled: !profile }} disabled={!profile}
+            onPress={() => { if (profile) { haptic("medium"); startConversation(profile.profile_id); } }}
+            style={({ pressed }) => [layout.compose, { backgroundColor: colors.accentFill }, (pressed || !profile) && styles.faded]}>
+            <Icon name="compose" color={colors.onAccent} size={21} />
+          </Pressable>}
+        />
+      ) : <PageHeader title={pageTitle} leading={settingsPage && <BackLink title={sections[rootSection].title} onPress={goBack} />} />}
       <ScrollView
         contentContainerStyle={[styles.content, layout.page]}
         keyboardShouldPersistTaps="handled"
         refreshControl={<RefreshControl refreshing={workspace.refreshing} onRefresh={() => { if (!workspace.refreshing) { haptic("light"); void workspace.refresh(); } }} tintColor={colors.accent} colors={[colors.accent]} />}
       >
-        {page === "topics" && profilesExpanded && <View style={styles.row}>
-          {workspace.profiles.map((item) => (
-            <Action key={item.profile_id} title={profileLabel(item.label)} selected={item.profile_id === profile?.profile_id}
-              feedback={item.profile_id === profile?.profile_id ? false : "selection"}
-              onPress={() => { setProfileId(item.profile_id); setProfilesExpanded(false); }} />
-          ))}
-        </View>}
         {error && <Notice>{error}</Notice>}
         {workspace.error && <Notice>{workspace.error}</Notice>}
         {workspace.storageError && <Notice>{workspace.storageError}</Notice>}
@@ -451,6 +415,19 @@ function Workspace() {
       <View style={styles.frame}>
         {content}
       </View>
+      {page === "topics" && profilesExpanded && (
+        <ComposerSheet title="选择配置档案" closeLabel="关闭配置档案选择" onClose={() => setProfilesExpanded(false)}>
+          <ScrollView style={layout.profileList}>
+            {workspace.profiles.map((item) => (
+              <PickerRow key={item.profile_id} title={profileLabel(item.label)} selected={item.profile_id === profile?.profile_id}
+                trailing={item.profile_id === profile?.profile_id ? "check" : undefined} disabled={false}
+                feedback={item.profile_id === profile?.profile_id ? false : undefined}
+                onPress={() => { setProfileId(item.profile_id); setProfilesExpanded(false); }} />
+            ))}
+            {workspace.profiles.length === 0 && <Text style={styles.muted}>暂无可用配置档案</Text>}
+          </ScrollView>
+        </ComposerSheet>
+      )}
       {(!settingsPage || (managementPage && managementTabsVisible)) && (
         <View accessibilityRole="tablist" style={[layout.tabs, { borderColor: colors.edge, backgroundColor: colors.background }]}>
           {tabs.map((id) => {
@@ -480,16 +457,14 @@ export default function WorkspaceScreen() {
 const layout = StyleSheet.create({
   clip: { overflow: "hidden" },
   page: { width: "100%", maxWidth: 680, alignSelf: "center", paddingTop: 20 },
-  pageHeader: { width: "100%", maxWidth: 680, alignSelf: "center", paddingTop: 12, paddingHorizontal: 24 },
-  wordmark: { fontSize: 21, lineHeight: 26 },
-  heading: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: 12 },
+  wordmark: { fontSize: 18, lineHeight: 24 },
+  brand: { flexShrink: 1 },
   grow: { flex: 1, minWidth: 0 },
-  compose: { width: 44, height: 44, borderRadius: 12, alignItems: "center", justifyContent: "center" },
-  connectionSummary: { flexDirection: "row", alignItems: "center", gap: 8, minHeight: 44, alignSelf: "flex-start", marginBottom: -4 },
+  compose: { width: 48, height: 48, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  avatar: { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center" },
+  connectionSummary: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, minHeight: 48, maxWidth: "100%" },
   dot: { width: 8, height: 8, borderRadius: 4 },
-  profilePicker: { flexDirection: "row", alignItems: "center", alignSelf: "flex-start", maxWidth: "100%", gap: 12,
-    minHeight: 44, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 8 },
-  profileLabel: { flexShrink: 1 },
+  profileList: { flexGrow: 0, flexShrink: 1 },
   version: { marginTop: 8 },
   ruledRow: { borderBottomWidth: StyleSheet.hairlineWidth, minHeight: 56 },
   address: { borderRadius: 12, paddingHorizontal: 16, marginTop: 8 },
@@ -500,13 +475,7 @@ const layout = StyleSheet.create({
   value: { flexShrink: 1, maxWidth: "46%", textAlign: "right" },
   updateValue: { flex: 1, minWidth: 0, textAlign: "right" },
   updateId: { fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }) },
-  detailHeader: { width: "100%", maxWidth: 680, alignSelf: "center", paddingHorizontal: 24, paddingTop: 10 },
-  backLink: { minHeight: 44, flexDirection: "row", alignItems: "center", alignSelf: "flex-start", gap: 8 },
-  chatHeader: { width: "100%", maxWidth: 680, alignSelf: "center", borderBottomWidth: StyleSheet.hairlineWidth,
-    minHeight: 56, paddingHorizontal: 12, paddingVertical: 4 },
-  chatBack: { minHeight: 44, alignItems: "center", justifyContent: "center" },
-  chatHeaderSide: { width: 44 },
-  chatTitle: { textAlign: "center" },
+  backLink: { width: 48, minHeight: 48, alignItems: "center", justifyContent: "center" },
   tabs: { width: "100%", maxWidth: 680, alignSelf: "center", flexDirection: "row", borderTopWidth: StyleSheet.hairlineWidth, paddingHorizontal: 8 },
   tab: { flex: 1, minHeight: 56, justifyContent: "center", alignItems: "center", gap: 3, paddingVertical: 6, paddingHorizontal: 2 },
   tabLabel: { fontSize: 13, fontWeight: "600", textAlign: "center" },

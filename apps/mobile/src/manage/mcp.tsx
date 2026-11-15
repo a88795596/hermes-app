@@ -281,7 +281,7 @@ function Catalog({ call, onClose }: { call: ManageCall; onClose: () => void }) {
   return <ManagementLayout key={selected ? `entry:${selected.name}` : "catalog"} hideTabs header={
     <ManagementHeader title={selected?.name ?? "MCP 目录"} backLabel={selected ? "目录" : "全部服务器"} backDisabled={busy}
       onBack={selected ? () => select(undefined) : onClose}
-      trailing={<Action icon="refresh" title="刷新目录" primary={!selected} disabled={catalog.loading || busy}
+      trailing={<Action compact icon="refresh" title="刷新" accessibilityLabel="刷新目录" disabled={catalog.loading || busy}
         onPress={() => void reloadCatalog()} />} />
   }>
     <DataState {...catalog} />

@@ -4,6 +4,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { haptic } from "../ui/haptics";
 import { useReduceMotion } from "../ui/motion";
 import { Action, CloseButton, Field, Icon, useTheme, type IconName } from "../ui/theme";
+import { PageHeader } from "../ui/page-header";
 import {
   ActionState, Confirm, DataState, EditField, FormHeader, Group, ManagementHeader, ManagementLayout, Row,
   mono, useManagementAction, useManagementContext, useManagementData, type ManageCall,
@@ -182,10 +183,8 @@ function ModelCatalog({ call, disabled, onClose, onChoose }: {
   const [count, setCount] = useState(30);
   const header = <View style={layout.sheetHeader}>
     <View style={[layout.handle, { backgroundColor: colors.edge }]} />
-    <View style={layout.sheetTitle}>
-      <Text accessibilityRole="header" style={[styles.title, layout.grow]}>模型目录</Text>
-      <CloseButton accessibilityLabel="关闭模型目录" disabled={disabled} onPress={onClose} />
-    </View>
+    <PageHeader title="模型目录"
+      trailing={<CloseButton accessibilityLabel="关闭模型目录" disabled={disabled} onPress={onClose} />} />
   </View>;
 
   return <Modal transparent animationType={reduced ? "none" : "fade"} onRequestClose={() => { if (!disabled) onClose(); }}>
@@ -291,9 +290,8 @@ const layout = StyleSheet.create({
   backdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(53, 40, 32, 0.27)" },
   sheet: { width: "100%", maxWidth: 680, height: "61%", alignSelf: "center",
     borderTopLeftRadius: 28, borderTopRightRadius: 28, overflow: "hidden" },
-  sheetHeader: { gap: 8, paddingTop: 12, paddingHorizontal: 24 },
+  sheetHeader: { gap: 8, paddingTop: 12 },
   handle: { alignSelf: "center", width: 44, height: 4, borderRadius: 2 },
-  sheetTitle: { flexDirection: "row", alignItems: "center", gap: 8 },
   catalogAction: { marginTop: "auto", paddingTop: 8 },
   keyHeading: { gap: 4, paddingBottom: 8 },
   removeKey: { alignItems: "center", borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 16, marginTop: 16 },

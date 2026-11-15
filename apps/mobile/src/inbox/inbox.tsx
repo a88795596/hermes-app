@@ -8,6 +8,7 @@ import { MessageAttachments } from "../chat/message-attachments";
 import type { Session } from "../auth/session";
 import { formatTopicTime, groupTopics } from "../chat/topic-groups";
 import { haptic } from "../ui/haptics";
+import { PageHeader } from "../ui/page-header";
 import { formatDateTime, profileLabel } from "../ui/text";
 import { Action, EmptyState, Icon, Notice, SectionLabel, useTheme } from "../ui/theme";
 
@@ -94,7 +95,7 @@ export function InboxList({ items, profiles, profileId, ready, onProfile, onOpen
   </>;
 }
 
-export function InboxDetail({ item, profiles, session }: { item: InboxItem; profiles: Profile[]; session: Session }) {
+export function InboxDetail({ item, profiles, session, onBack }: { item: InboxItem; profiles: Profile[]; session: Session; onBack: () => void }) {
   const { colors, styles } = useTheme();
   const [error, setError] = useState<string>();
   const openLink = useCallback((url: string) => {
@@ -111,8 +112,12 @@ export function InboxDetail({ item, profiles, session }: { item: InboxItem; prof
   }, [colors.foreground, colors.surface]);
   return (
     <View style={styles.frame}>
+      <PageHeader title={item.title ?? inboxTitle(item.text || item.attachments?.[0]?.name || "")}
+        leading={<Pressable accessibilityRole="button" accessibilityLabel="返回收件箱" onPress={() => { haptic("light"); onBack(); }}
+          style={({ pressed }) => [layout.back, pressed && styles.faded]}>
+          <Icon name="back" size={18} color={colors.accent} />
+        </Pressable>} />
       <ScrollView contentContainerStyle={[styles.content, layout.detail]}>
-        <Text selectable accessibilityRole="header" style={styles.title}>{item.title ?? inboxTitle(item.text || item.attachments?.[0]?.name || "")}</Text>
         <View style={[layout.detailMetadata, { borderBottomColor: colors.edge }]}>
           <Text selectable style={[styles.label, { color: colors.accent }]}>{itemProfile(item, profiles)}</Text>
           <Text selectable style={styles.caption}>{formatDateTime(item.created_at)}</Text>
@@ -133,7 +138,8 @@ const layout = StyleSheet.create({
   rowContent: { flex: 1, minWidth: 0, gap: 4 },
   metadata: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 },
   profile: { flex: 1, minWidth: 0 },
-  detail: { width: "100%", maxWidth: 680, alignSelf: "center", paddingTop: 24, paddingBottom: 32, gap: 20 },
+  back: { width: 48, minHeight: 48, alignItems: "center", justifyContent: "center" },
+  detail: { width: "100%", maxWidth: 680, alignSelf: "center", paddingTop: 16, paddingBottom: 32, gap: 20 },
   detailMetadata: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: 12, rowGap: 6,
     paddingBottom: 18, borderBottomWidth: StyleSheet.hairlineWidth },
 });

@@ -5,6 +5,7 @@ import type { Attachment } from "@hermes-mobile/protocol";
 import type { Session } from "../auth/session";
 import { haptic } from "../ui/haptics";
 import { useReduceMotion } from "../ui/motion";
+import { PageHeader } from "../ui/page-header";
 import { Action, CloseButton, Icon, Notice, useTheme } from "../ui/theme";
 import { AnswerMarkdown } from "./answer-markdown";
 import { attachmentKind, type AttachmentContent } from "./attachment-content";
@@ -99,11 +100,11 @@ function ReceivedFile({ item: { attachment_id, name, mime, size }, session, tint
             marginTop: kind === "markdown" ? Math.min(106, height * 0.18) : Math.min(60, height * 0.12),
           }]}>
           <View style={[layout.header, { borderBottomColor: colors.edge }]}>
-            {kind === "html" && <View style={[layout.fileIcon, { backgroundColor: colors.tint }]}>
-              <Icon name="logs" size={18} color={colors.accent} />
-            </View>}
-            <Text accessibilityRole="header" numberOfLines={2} style={[styles.heading, layout.name]}>{name}</Text>
-            <CloseButton accessibilityLabel="关闭文件预览" onPress={() => setOpen(false)} />
+            <PageHeader title={name}
+              leading={kind === "html" && <View style={[layout.fileIcon, { backgroundColor: colors.tint }]}>
+                <Icon name="logs" size={18} color={colors.accent} />
+              </View>}
+              trailing={<CloseButton accessibilityLabel="关闭文件预览" onPress={() => setOpen(false)} />} />
           </View>
           {loading}{failure}
           {open && content && kind === "image" && <View style={layout.imagePreview}>
@@ -150,8 +151,7 @@ const layout = StyleSheet.create({
   previewWindow: { flex: 1 },
   preview: { flex: 1, minHeight: 0 },
   documentSheet: { borderTopLeftRadius: 24, borderTopRightRadius: 24, overflow: "hidden" },
-  header: { flexDirection: "row", alignItems: "center", minHeight: 56, gap: 8, marginHorizontal: 24,
-    borderBottomWidth: StyleSheet.hairlineWidth },
+  header: { borderBottomWidth: StyleSheet.hairlineWidth },
   imagePreview: { flex: 1, paddingHorizontal: 16, paddingVertical: 24 },
   fullImage: { flex: 1, width: "100%", maxWidth: 800, alignSelf: "center", borderRadius: 16 },
   markdown: { padding: 24, maxWidth: 800, width: "100%", alignSelf: "center" },

@@ -40,6 +40,7 @@ function mount(file, name, props) {
       case "../ui/haptics": return { haptic: (kind) => feedback.push(kind) };
       case "../ui/motion": return { motion: {}, useReduceMotion: () => true };
       case "../ui/text": return { profileLabel: (label) => label };
+      case "../ui/page-header": return { PageHeader: "PageHeader" };
       case "../ui/theme": return {
         useTheme: () => ({ colors: {}, styles: {} }), Action: "Action", Card: "Card", CloseButton: "CloseButton",
         EmptyState: "EmptyState", Field: "Field", Icon: "Icon", Notice: "Notice",
@@ -63,11 +64,28 @@ function find(node, predicate) {
   if (Array.isArray(node)) return node.map((child) => find(child, predicate)).find(Boolean);
   if (!node?.props) return;
   if (predicate(node)) return node;
-  return find(node.props.children, predicate);
+  return find([node.props.children, node.props.leading, node.props.trailing], predicate);
 }
 const flush = () => new Promise(setImmediate);
 const findSend = (tree) => find(tree, (node) => node.props.accessibilityLabel === "发送");
 const findList = (tree) => find(tree, (node) => node.type === "FlatList");
+
+test("底部选择框的返回、标题和关闭共用顶栏，忙碌时保留关闭保护", () => {
+  let closed = 0;
+  const back = { type: "Back", props: {} };
+  for (const busy of [true, false]) {
+    const sheet = mount("composer-menu", "ComposerSheet", {
+      title: "选择模型", subtitle: "当前配置档案", back, busy, onClose: () => closed++,
+    }).render();
+    const header = find(sheet, (node) => node.type === "PageHeader");
+    assert.equal(header.props.title, "选择模型");
+    assert.equal(header.props.leading, back);
+    assert.equal(header.props.trailing.props.disabled, busy);
+    assert.ok(find(sheet, (node) => node.props.children === "当前配置档案"));
+    sheet.props.onRequestClose();
+  }
+  assert.equal(closed, 1);
+});
 
 function conversation(enqueue, draft = "测试消息", { showProcess = false, messages = [] } = {}) {
   return mount("conversation", "Conversation", {

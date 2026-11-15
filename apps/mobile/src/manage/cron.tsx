@@ -86,9 +86,17 @@ export function ScheduledTasks({ call }: { call: ManageCall }) {
   if (job && history) return <RunHistory key={job.id} call={call} job={job} onClose={() => showHistory(false)} />;
   if (job) {
     return <ManagementLayout key="detail" hideTabs header={<ManagementHeader title={jobName(job)} backLabel="定时任务" onBack={close}
-      backDisabled={action.busy} trailing={<View style={styles.row}>
-        <Action compact icon="refresh" title="刷新" disabled={jobs.loading || action.busy} onPress={() => void jobs.reload()} />
-        <Action compact icon="compose" title="编辑" accessibilityLabel="编辑任务" disabled={action.busy} onPress={() => edit(true)} />
+      backDisabled={action.busy} trailing={<View style={layout.headerActions}>
+        <Pressable accessibilityRole="button" accessibilityLabel="刷新任务" accessibilityState={{ disabled: jobs.loading || action.busy }}
+          disabled={jobs.loading || action.busy} onPress={() => { if (!jobs.loading && !action.busy) { haptic("light"); void jobs.reload(); } }}
+          style={({ pressed }) => [layout.headerAction, (pressed || jobs.loading || action.busy) && styles.faded]}>
+          <Icon name="refresh" size={20} color={colors.accent} />
+        </Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="编辑任务" accessibilityState={{ disabled: action.busy }} disabled={action.busy}
+          onPress={() => { if (!action.busy) { haptic("light"); edit(true); } }}
+          style={({ pressed }) => [layout.headerAction, (pressed || action.busy) && styles.faded]}>
+          <Icon name="compose" size={20} color={colors.accent} />
+        </Pressable>
       </View>} />}>
       <ActionState {...action} />
       <DataState {...jobs} />
@@ -261,6 +269,8 @@ function JobForm({ job, busy, onCancel, onSave, children }: {
 }
 
 const layout = StyleSheet.create({
+  headerActions: { flexDirection: "row" },
+  headerAction: { width: 48, minHeight: 48, alignItems: "center", justifyContent: "center" },
   grow: { flex: 1, minWidth: 0 },
   fact: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", minHeight: 56,
     paddingVertical: 12, gap: 12, borderBottomWidth: StyleSheet.hairlineWidth },

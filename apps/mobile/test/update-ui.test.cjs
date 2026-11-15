@@ -14,9 +14,19 @@ new Function("exports", compile("../src/ui/text.ts"))(textExports);
 const flush = () => new Promise(setImmediate);
 const ManagementScreen = Symbol("ManagementScreen");
 
-function mountWorkspace({ update, message, params = {}, router = {}, stack } = {}) {
+function mountWorkspace({ update, message, params = {}, router = {}, stack, context = {} } = {}) {
   const alerts = [], choices = [], statuses = [], feedback = [];
-  let checks = 0;
+  const values = [];
+  let checks = 0, cursor = 0;
+  const state = {
+    section: "settings", setSection: (value) => { state.section = value; },
+    setProfileId: (value) => { state.profileId = value; }, setError() {},
+    ...context,
+    workspace: {
+      profiles: [{ profile_id: "default", label: "默认" }], topics: [], pending: [], ready: true, network: "online",
+      ...context.workspace,
+    },
+  };
   const exports = {};
   const jsx = (type, props) => ({ type, props });
   new Function("exports", "require", source)(exports, (name) => {
@@ -24,8 +34,12 @@ function mountWorkspace({ update, message, params = {}, router = {}, stack } = {
       case "react/jsx-runtime": return { jsx, jsxs: jsx, Fragment: "Fragment" };
       case "react": return {
         useCallback: (callback) => callback,
-        useRef: (current) => ({ current }),
-        useState: (initial) => [initial, (value) => statuses.push(value)],
+        useRef(current) { const index = cursor++; return values[index] ??= { current }; },
+        useState(initial) {
+          const index = cursor++;
+          if (!(index in values)) values[index] = initial;
+          return [values[index], (value) => { values[index] = value; statuses.push(value); }];
+        },
       };
       case "react-native": return {
         Alert: { alert: (title, message, buttons, options) => alerts.push({ title, message, buttons, options }) },
@@ -34,20 +48,19 @@ function mountWorkspace({ update, message, params = {}, router = {}, stack } = {
         Pressable: "Pressable", Text: "Text", View: "View", ScrollView: "ScrollView", RefreshControl: "RefreshControl",
       };
       case "expo-router": return {
-        useRouter: () => router, useLocalSearchParams: () => params,
+        useRouter: () => ({ canDismiss: () => false, ...router }), useLocalSearchParams: () => params,
         useNavigation: () => ({ getState: () => stack }), useFocusEffect() {},
       };
       case "react-native-reanimated": return { default: { View: "Animated.View" } };
       case "react-native-safe-area-context": return { SafeAreaView: "SafeAreaView" };
       case "./ui/theme": return { useTheme: () => ({ colors: {}, styles: {} }), Icon: "Icon" };
+      case "./ui/page-header": return { PageHeader: "PageHeader" };
       case "./ui/motion": return { useReduceMotion: () => true, motion: {} };
       case "./ui/haptics": return { haptic: (kind) => feedback.push(kind) };
       case "./ui/text": return textExports;
-      case "./workspace-context": return { useWorkspaceContext: () => ({
-        section: "settings", workspace: {
-          profiles: [{ profile_id: "default", label: "默认" }], topics: [], pending: [], ready: true, network: "online",
-        },
-      }) };
+      case "./workspace-context": return { useWorkspaceContext: () => state };
+      case "./chat/composer-menu": return { ComposerSheet: "ComposerSheet", PickerRow: "PickerRow" };
+      case "./chat/topic-list": return { TopicList: "TopicList" };
       case "./updates": return {
         currentUpdate: { id: "running-version" },
         async checkUpdateManually(confirm) {
@@ -58,10 +71,9 @@ function mountWorkspace({ update, message, params = {}, router = {}, stack } = {
           return accepted ? "热更新已下载，下次启动 App 时生效。" : undefined;
         },
       };
-      case "expo-crypto":
+      case "expo-crypto": return { randomUUID: () => "new-topic" };
       case "@hermes-mobile/protocol":
       case "./chat/conversation":
-      case "./chat/topic-list":
       case "./inbox/inbox":
       case "./manage/shared":
       case "./notifications": return {};
@@ -70,14 +82,17 @@ function mountWorkspace({ update, message, params = {}, router = {}, stack } = {
     }
   });
   const workspace = exports.default().props.children;
-  return { alerts, choices, statuses, feedback, screen: workspace.type(), checks: () => checks };
+  const render = () => { cursor = 0; return workspace.type(); };
+  return { alerts, choices, statuses, feedback, state, render, screen: render(), checks: () => checks };
 }
 
 function findNode(node, matches) {
   if (Array.isArray(node)) return node.map((child) => findNode(child, matches)).find(Boolean);
   if (!node?.props) return;
   if (matches(node)) return node;
-  return findNode(node.props.children, matches);
+  return findNode(node.type === "PageHeader"
+    ? [node.props.leading, node.props.title, node.props.trailing]
+    : node.props.children, matches);
 }
 
 function mountSettings(update, message) {
@@ -160,4 +175,101 @@ test("管理分类返回到已有管理菜单，直接进入分类时补上菜�
     findNode(screen, (node) => node.type === ManagementScreen).props.onBack();
   }
   assert.deepEqual(actions, ["back", { pathname: "/[page]", params: { page: "manage" } }]);
+});
+
+test("首页头像打开配置档案选择，取消保留原选择，切换后列表和新会话使用所选档案", () => {
+  const routes = [];
+  const screen = mountWorkspace({
+    router: { push: (route) => routes.push(route) },
+    context: {
+      section: "topics",
+      workspace: {
+        profiles: [{ profile_id: "default", label: "default" }, { profile_id: "work", label: "工作" }],
+        topics: [
+          { topic_id: "personal-topic", profile_id: "default", title: "个人会话" },
+          { topic_id: "work-topic", profile_id: "work", title: "工作会话" },
+        ],
+      },
+    },
+  });
+  const find = (predicate) => findNode(screen.render(), predicate);
+  const avatar = () => find((node) => node.props.accessibilityLabel?.startsWith("选择配置档案"));
+  const sheet = () => find((node) => node.type === "ComposerSheet");
+  const rows = () => find((node) => node.type === "TopicList").props.rows.map((row) => row.id);
+
+  assert.equal(find((node) => node.props.accessibilityRole === "header" && node.props.children === "话题"), undefined);
+  assert.ok(find((node) => node.props.accessibilityRole === "tab" && node.props.accessibilityLabel === "话题"));
+  assert.deepEqual(rows(), ["personal-topic"]);
+  assert.equal(sheet(), undefined);
+  avatar().props.onPress();
+  assert.equal(avatar().props.accessibilityState.expanded, true);
+  assert.equal(sheet().props.title, "选择配置档案");
+  sheet().props.onClose();
+  assert.equal(sheet(), undefined);
+  assert.deepEqual(rows(), ["personal-topic"]);
+
+  avatar().props.onPress();
+  find((node) => node.type === "PickerRow" && node.props.title === "工作").props.onPress();
+  assert.equal(sheet(), undefined);
+  assert.equal(avatar().props.accessibilityLabel, "选择配置档案，工作");
+  assert.deepEqual(rows(), ["work-topic"]);
+  avatar().props.onPress();
+  assert.equal(find((node) => node.type === "PickerRow" && node.props.title === "工作").props.selected, true);
+  sheet().props.onClose();
+  find((node) => node.props.accessibilityLabel === "新建会话").props.onPress();
+  assert.deepEqual(routes, [{ pathname: "/[page]", params: { page: "conversation", topicId: "new-topic", newProfileId: "work" } }]);
+});
+
+test("单个配置档案仍可打开选择，尚无档案时显示空态且不能新建会话", () => {
+  for (const profiles of [[{ profile_id: "default", label: "默认" }], []]) {
+    const routes = [];
+    const screen = mountWorkspace({ router: { push: (route) => routes.push(route) }, context: { section: "topics", workspace: { profiles } } });
+    const find = (predicate) => findNode(screen.render(), predicate);
+    find((node) => node.props.accessibilityLabel?.startsWith("选择配置档案")).props.onPress();
+    assert.ok(find((node) => node.type === "ComposerSheet"));
+    if (!profiles.length) {
+      assert.ok(find((node) => node.props.children === "暂无可用配置档案"));
+      const compose = find((node) => node.props.accessibilityLabel === "新建会话");
+      assert.equal(compose.props.disabled, true);
+      compose.props.onPress();
+      assert.deepEqual(routes, []);
+    }
+  }
+});
+
+test("首页仅在网络和连接器均在线时显示绿点，连接入口保留", () => {
+  for (const [network, connector_online, label] of [
+    ["online", true, "已连接"], ["online", false, "连接器离线"], ["online", undefined, "连接器离线"],
+    ["offline", true, "离线"], ["connecting", true, "连接中…"],
+  ]) {
+    const routes = [];
+    const { screen } = mountWorkspace({ router: { push: (route) => routes.push(route) }, context: { section: "topics", workspace: { network, connector_online } } });
+    const connection = findNode(screen, (node) => node.props.accessibilityLabel === `${label}。打开连接设置`);
+    assert.ok(connection);
+    const dot = findNode(connection, (node) => node.type === "View");
+    assert.equal(dot.props.style.at(-1).backgroundColor, label === "已连接" ? "#2F9461" : "#888888");
+    connection.props.onPress();
+    assert.deepEqual(routes, [{ pathname: "/[page]", params: { page: "connection" } }]);
+  }
+});
+
+test("普通标签与二级页面把标题交给统一顶栏，二级页面保留返回入口", () => {
+  for (const [section, page, title] of [
+    ["inbox", undefined, "收件箱"], ["settings", undefined, "设置"],
+    ["settings", "manage", "管理"], ["settings", "connection", "连接"], ["settings", "archive", "已归档会话"],
+  ]) {
+    let backs = 0;
+    const { screen } = mountWorkspace({
+      params: page ? { page } : {}, router: { back: () => backs++ },
+      context: { section, session: { origin: "https://hermes.example" } },
+    });
+    const header = findNode(screen, (node) => node.type === "PageHeader");
+    assert.equal(header?.props.title, title);
+    assert.equal(Boolean(header.props.leading), Boolean(page));
+    assert.equal(findNode(screen, (node) => node.type === "Text" && node.props.children === "Hermes"), undefined);
+    if (page) {
+      header.props.leading.props.onPress();
+      assert.equal(backs, 1);
+    }
+  }
 });

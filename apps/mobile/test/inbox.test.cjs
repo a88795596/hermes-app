@@ -92,7 +92,7 @@ test("纯附件消息列出文件并为五类内容提供预览或播放入口",
   ].map(([name, mime], index) => ({ name, mime, size: 100, attachment_id: `733ab797-95fd-42ea-b514-63c2b11413a${index}` }));
   const item = { ...items[0], title: undefined, text: "", attachments };
   const html = renderToStaticMarkup(createElement(InboxDetail, {
-    item, profiles, session: { origin: "https://mobile.example", token: "private-token" },
+    item, profiles, session: { origin: "https://mobile.example", token: "private-token" }, onBack() {},
   }));
   for (const name of ["图片.png", "语音.m4a", "视频.mp4", "报告.md", "页面.html"]) assert.ok(html.includes(name));
   assert.match(html, /打开音频：语音.m4a/);
@@ -132,13 +132,14 @@ test("旧缓存没有标题或档案时仍可在全部中阅读原文", () => {
   assert.doesNotMatch(renderList({ items: [legacy], profileId: "work" }), /原文不能丢失/);
 });
 
-test("详情直接展示标题、完整 Markdown 正文、档案和接收时间，不再显示顶部导航栏", () => {
+test("详情标题只在顶部导航显示一次，正文、档案和接收时间完整保留", () => {
   const text = ["## 正文小节", "", "这是一段较长的消息正文。".repeat(80), "", "**最后一段内容**", "", "[查看文档](https://example.com/docs)"].join("\n");
   const html = renderToStaticMarkup(createElement(InboxDetail, {
-    item: { ...items[2], text }, profiles, session: { origin: "https://mobile.example", token: "private-token" },
+    item: { ...items[2], text }, profiles, session: { origin: "https://mobile.example", token: "private-token" }, onBack() {},
   }));
-  assert.doesNotMatch(html, /返回收件箱|消息详情/);
-  assert.match(html, />最新报告</);
+  assert.match(html, /aria-label="返回收件箱"/);
+  assert.match(html, /aria-label="最新报告"/);
+  assert.equal([...html.matchAll(/>最新报告</g)].length, 1);
   assert.match(html, /<h2[^>]*>[\s\S]*正文小节[\s\S]*<\/h2>/);
   assert.equal([...html.matchAll(/这是一段较长的消息正文。/g)].length, 80);
   assert.match(html, /最后一段内容/);

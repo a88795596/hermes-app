@@ -7,7 +7,7 @@ const source = ts.transpileModule(readFileSync(require.resolve("../src/manage/cr
   compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS },
 }).outputText;
 
-function mountTasks(jobs, call = assert.fail) {
+function mountTasks(jobs, call = assert.fail, { busy = false, loading = false, reload = () => {} } = {}) {
   const values = [];
   let cursor = 0;
   const exports = {};
@@ -30,8 +30,8 @@ function mountTasks(jobs, call = assert.fail) {
       ManagementLayout: "ManagementLayout", ManagementHeader: "ManagementHeader", FormHeader: "FormHeader",
       Row: "Row", EditField: "EditField",
       useManagementContext: () => ({ label: "日常助手" }),
-      useManagementAction: () => ({ busy: false, run: (task) => task() }),
-      useManagementData: (_, operation) => ({ data: operation === "cron.list" ? jobs : { runs: [] }, reload() {} }),
+      useManagementAction: () => ({ busy, run: (task) => task() }),
+      useManagementData: (_, operation) => ({ data: operation === "cron.list" ? jobs : { runs: [] }, loading, reload }),
     },
   };
   new Function("exports", "require", source)(exports, (name) => modules[name]);
@@ -68,6 +68,23 @@ test("定时列表展示 Hermes 提供的计划文案，查看记录后可逐级
   assert.equal(render().props.header.props.title, "晨间简报");
   render().props.header.props.onBack();
   assert.equal(render().props.header.props.title, "定时任务");
+});
+
+test("任务详情图标操作保留刷新、编辑和忙碌禁用保护", () => {
+  for (const busy of [false, true]) {
+    let refreshes = 0;
+    const render = mountTasks([{ id: "brief", name: "晨间简报", enabled: true }], assert.fail, { busy, reload: () => refreshes++ });
+    find(render(), (node) => node.type === "Row" && node.props.title === "晨间简报").props.onPress();
+    const actions = render().props.header.props.trailing;
+    const refresh = find(actions, (node) => node.props.accessibilityLabel === "刷新任务");
+    const edit = find(actions, (node) => node.props.accessibilityLabel === "编辑任务");
+    assert.equal(refresh.props.disabled, busy);
+    assert.equal(edit.props.disabled, busy);
+    refresh.props.onPress();
+    edit.props.onPress();
+    assert.equal(refreshes, busy ? 0 : 1);
+    assert.equal(render().type === "ManagementLayout", busy);
+  }
 });
 
 test("固定表单操作栏在填写计划后可提交原生投递目标", () => {

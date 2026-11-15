@@ -6,6 +6,7 @@ import type { ManagementOperation } from "@hermes-mobile/protocol";
 import { ApiError } from "../sync/api";
 import { haptic } from "../ui/haptics";
 import { motion, useReduceMotion } from "../ui/motion";
+import { PageHeader } from "../ui/page-header";
 import { Action, CloseButton, Field, Icon, Notice, useTheme, type IconName } from "../ui/theme";
 
 export type ManageCall = <T>(operation: ManagementOperation, input?: object, signal?: AbortSignal) => Promise<T>;
@@ -38,36 +39,26 @@ export function ManagementHeader({ title, onBack, backLabel = "管理", trailing
 }) {
   const { colors, styles } = useTheme();
   const context = useManagementContext();
-  return <View style={layout.header}>
-    <View style={layout.navigation}>
+  return <PageHeader title={title} leading={
       <Pressable accessibilityRole="button" accessibilityLabel={`返回${backLabel}`} accessibilityState={{ disabled: backDisabled }}
         disabled={backDisabled} onPress={() => { if (!backDisabled) { haptic("light"); (onBack ?? context.onBack)(); } }}
         style={({ pressed }) => [layout.back, (pressed || backDisabled) && styles.faded]}>
-        <Icon name="back" size={20} color={colors.accent} /><Text style={[styles.text, { color: colors.accent }]}>{backLabel}</Text>
+        <Icon name="back" size={20} color={colors.accent} />
       </Pressable>
-      {trailing}
-    </View>
-    <Text style={styles.wordmark}>Hermes</Text>
-    <Text accessibilityRole="header" style={styles.title}>{title}</Text>
-    {!!context.label && <View style={[layout.profile, { backgroundColor: colors.tint }]}>
-      <Icon name="sparkles" size={17} color={colors.accent} /><Text style={styles.label}>{context.label}</Text>
-    </View>}
-  </View>;
+    } trailing={trailing} />;
 }
 
 export function FormHeader({ title, onCancel, onSave, saveLabel = "保存", disabled, cancelDisabled }: {
   title: string; onCancel: () => void; onSave: () => void; saveLabel?: string; disabled?: boolean; cancelDisabled?: boolean;
 }) {
   const { colors, styles } = useTheme();
-  return <View style={[layout.formHeader, { borderBottomColor: colors.edge }]}>
+  return <PageHeader title={title} leading={
     <Pressable accessibilityRole="button" accessibilityLabel="取消" accessibilityState={{ disabled: cancelDisabled }} disabled={cancelDisabled}
       onPress={() => { if (!cancelDisabled) { haptic("light"); onCancel(); } }}
-      style={({ pressed }) => [layout.back, layout.formSide, (pressed || cancelDisabled) && styles.faded]}>
+      style={({ pressed }) => [layout.back, (pressed || cancelDisabled) && styles.faded]}>
       <Text style={[styles.text, { color: colors.accent }]}>取消</Text>
     </Pressable>
-    <Text accessibilityRole="header" style={[styles.heading, layout.formTitle]}>{title}</Text>
-    <Action title={saveLabel} primary disabled={disabled} onPress={onSave} style={layout.formSide} />
-  </View>;
+  } trailing={<Action title={saveLabel} primary disabled={disabled} onPress={onSave} style={layout.back} />} />;
 }
 
 export function useManagementData<T>(call: ManageCall, operation: ManagementOperation, input?: object) {
@@ -246,13 +237,7 @@ export const mono = Platform.select({ ios: "Menlo", android: "monospace", defaul
 
 const layout = StyleSheet.create({
   page: { width: "100%", maxWidth: 680, alignSelf: "center" },
-  header: { paddingHorizontal: 24, paddingTop: 4, paddingBottom: 12, gap: 8 },
-  navigation: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10, gap: 8 },
-  back: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: 5, flexShrink: 1 },
-  profile: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 13, paddingVertical: 8, borderRadius: 12, marginTop: 2 },
-  formHeader: { minHeight: 72, paddingHorizontal: 24, paddingVertical: 12, gap: 10, flexDirection: "row", alignItems: "center", borderBottomWidth: StyleSheet.hairlineWidth },
-  formTitle: { flex: 1, textAlign: "center" },
-  formSide: { minWidth: 60, maxWidth: "30%" },
+  back: { minWidth: 48, minHeight: 48, alignItems: "center", justifyContent: "center" },
   group: { borderBottomWidth: StyleSheet.hairlineWidth },
   row: { minHeight: 72, paddingVertical: 16, gap: 14 },
   rowIcon: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center" },

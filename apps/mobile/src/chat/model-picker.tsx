@@ -93,7 +93,6 @@ export function ModelPicker({
           disabled={busy} onPress={() => { haptic("light"); setProviderId(undefined); }}
           style={({ pressed }) => [picker.back, (pressed || busy) && styles.faded]}>
           <Icon name="back" size={16} color={colors.accent} />
-          <Text style={[styles.label, { color: colors.accent }]}>服务商</Text>
         </Pressable>
       )}
     >
@@ -150,7 +149,7 @@ export function ModelPicker({
 }
 
 const picker = StyleSheet.create({
-  back: { flexDirection: "row", alignItems: "center", minHeight: 44, gap: 4 },
+  back: { width: 48, minHeight: 48, alignItems: "center", justifyContent: "center" },
   check: { width: 18 },
   list: { flexGrow: 0, flexShrink: 1 },
   rows: { gap: 8 },

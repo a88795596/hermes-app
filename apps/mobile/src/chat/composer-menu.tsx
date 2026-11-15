@@ -7,6 +7,7 @@ import { reasoningEfforts, type ReasoningEffort, type Skill } from "@hermes-mobi
 import type { useWorkspace } from "../sync/use-workspace";
 import { haptic } from "../ui/haptics";
 import { motion, useReduceMotion } from "../ui/motion";
+import { PageHeader } from "../ui/page-header";
 import { profileLabel } from "../ui/text";
 import { Action, CloseButton, Icon, Notice, useTheme, type IconName } from "../ui/theme";
 
@@ -44,16 +45,8 @@ export function ComposerSheet({ title, subtitle, busy, onClose, back, closeLabel
           style={[menu.sheet, { backgroundColor: colors.background }]}>
           <Animated.View style={[menu.content, !reduced && motion.reveal]}>
             <View style={[menu.handle, { backgroundColor: colors.edge }]} />
-            <View>
-              {back && <View style={menu.header}>{back}{close}</View>}
-              <View style={menu.header}>
-                <View style={menu.grow}>
-                  <Text accessibilityRole="header" style={[styles.heading, menu.sheetTitle]}>{title}</Text>
-                  {subtitle && <Text style={styles.caption}>{subtitle}</Text>}
-                </View>
-                {!back && close}
-              </View>
-            </View>
+            <View style={menu.header}><PageHeader title={title} leading={back} trailing={close} /></View>
+            {subtitle && <Text style={styles.caption}>{subtitle}</Text>}
             {children}
           </Animated.View>
         </SafeAreaView>
@@ -290,8 +283,7 @@ const menu = StyleSheet.create({
     borderTopLeftRadius: 28, borderTopRightRadius: 28 },
   content: { paddingHorizontal: 24, paddingTop: 12, paddingBottom: 16, gap: 12, flexShrink: 1 },
   handle: { alignSelf: "center", width: 44, height: 4, borderRadius: 2 },
-  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", minHeight: 44, gap: 8 },
-  sheetTitle: { fontSize: 22, lineHeight: 28 },
+  header: { marginHorizontal: -24 },
   list: { flexGrow: 0, flexShrink: 1 },
   grow: { flex: 1, minWidth: 0 },
   row: { minHeight: 56, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: 12, borderBottomWidth: StyleSheet.hairlineWidth },
