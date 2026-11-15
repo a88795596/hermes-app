@@ -54,7 +54,7 @@ export function SettingsDrawer({ busy, canWrite, reasoningLabel, showProcess, on
               <View style={[drawer.row, { borderColor: colors.edge }]}>
                 <Icon name="process" size={21} color={colors.accent} />
                 <Text style={[styles.text, drawer.label]}>显示过程</Text>
-                <Switch accessibilityLabel="显示回复过程" value={showProcess}
+                <Switch accessibilityLabel="显示回复过程" value={showProcess} style={{ alignSelf: "center" }}
                   trackColor={{ false: colors.edge, true: colors.accentFill }}
                   onValueChange={() => { haptic("selection"); onToggleProcess(); }} />
               </View>
