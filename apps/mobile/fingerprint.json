@@ -1,7 +1,7 @@
 {
   "ios": {
     "engine": "hot-updater/interface@1",
-    "hash": "ed3bca8e1703b3780fb3c7945fc883b7b4e2f2ab9c278693da65f33eaeb6a2ec",
+    "hash": "4aa00af26fc1eb6037181be34ff952de68e94629799e3a53bc924b881a025563",
     "sources": [
       {
         "type": "contents",
@@ -284,6 +284,15 @@
       },
       {
         "type": "contents",
+        "id": "dependency:expo-screen-orientation",
+        "contents": "expo-screen-orientation@58.0.4",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "ebcb5f2c22f2cf9adbc59c76986b49f6e91b50574d1fbde93bf54de647813154"
+      },
+      {
+        "type": "contents",
         "id": "dependency:expo-secure-store",
         "contents": "expo-secure-store@58.0.3",
         "reasons": [
@@ -449,7 +458,7 @@
         "reasons": [
           "extra-source"
         ],
-        "hash": "4dce52ae16cac8ec6e2f95ea36e8dce022e6dd876379a762b2d8499b20e07fc6"
+        "hash": "c3d46b8d26d9d90d51c206de9055b0333ec4e7707ad815863b95835f368ff8ba"
       },
       {
         "type": "file",
@@ -463,7 +472,7 @@
   },
   "android": {
     "engine": "hot-updater/interface@1",
-    "hash": "59fa4e08faa6ab74d407e0dbe469289ea3b21a6a5454904d9d3a52faadf910c6",
+    "hash": "edf763f4de8f203966cdc453c8f0fe68afdc7db8f45b3f98a9fe7f4b63a94970",
     "sources": [
       {
         "type": "contents",
@@ -737,6 +746,15 @@
       },
       {
         "type": "contents",
+        "id": "dependency:expo-screen-orientation",
+        "contents": "expo-screen-orientation@58.0.4",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "ebcb5f2c22f2cf9adbc59c76986b49f6e91b50574d1fbde93bf54de647813154"
+      },
+      {
+        "type": "contents",
         "id": "dependency:expo-secure-store",
         "contents": "expo-secure-store@58.0.3",
         "reasons": [
@@ -893,7 +911,7 @@
         "reasons": [
           "extra-source"
         ],
-        "hash": "4dce52ae16cac8ec6e2f95ea36e8dce022e6dd876379a762b2d8499b20e07fc6"
+        "hash": "c3d46b8d26d9d90d51c206de9055b0333ec4e7707ad815863b95835f368ff8ba"
       },
       {
         "type": "file",

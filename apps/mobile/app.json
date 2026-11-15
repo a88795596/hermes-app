@@ -12,13 +12,19 @@
       "bundleIdentifier": "hermes.cashcat.cn",
       "appleTeamId": "4SAK5KMM76",
       "buildNumber": "2",
+      "requireFullScreen": true,
       "icon": "./assets/hermes.icon",
       "entitlements": {
         "com.apple.developer.usernotifications.time-sensitive": true
       },
       "infoPlist": {
         "CFBundleDevelopmentRegion": "zh-Hans",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "UISupportedInterfaceOrientations": [
+          "UIInterfaceOrientationPortrait",
+          "UIInterfaceOrientationLandscapeLeft",
+          "UIInterfaceOrientationLandscapeRight"
+        ]
       }
     },
     "android": {
@@ -37,6 +43,7 @@
     },
     "plugins": [
       "expo-router",
+      ["expo-screen-orientation", { "initialOrientation": "PORTRAIT_UP" }],
       ["@hot-updater/expo", { "channel": "preview" }],
       ["expo-secure-store", { "faceIDPermission": "允许 Hermes 移动端使用面容 ID。" }],
       ["expo-image-picker", { "photosPermission": "允许 Hermes 移动端选择要发送的照片。", "cameraPermission": false, "microphonePermission": false }],

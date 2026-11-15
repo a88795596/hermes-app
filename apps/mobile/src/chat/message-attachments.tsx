@@ -92,7 +92,8 @@ function ReceivedFile({ item: { attachment_id, name, mime, size }, session, tint
     )}
     {!open && loading}
     {!open && failure}
-    <Modal visible={open} transparent animationType={reduced ? "none" : "slide"} onRequestClose={() => setOpen(false)}>
+    <Modal visible={open} transparent animationType={reduced ? "none" : "slide"} onRequestClose={() => setOpen(false)}
+      supportedOrientations={["portrait", "landscape-left", "landscape-right"]}>
       <SafeAreaView style={layout.previewWindow} edges={["top"]}>
         <SafeAreaView accessibilityViewIsModal importantForAccessibility="yes" edges={["bottom", "left", "right"]}
           style={[layout.preview, kind === "markdown" && layout.documentSheet, {

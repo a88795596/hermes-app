@@ -84,6 +84,7 @@ const symbols = {
   shield: ["checkmark.shield", "verified_user"],
   download: ["arrow.down.to.line", "download"],
   plus: ["plus", "add"],
+  expand: ["arrow.up.left.and.arrow.down.right", "fullscreen"],
 } as const satisfies Record<string, readonly [SFSymbol, AndroidSymbol]>;
 
 export type IconName = keyof typeof symbols;
