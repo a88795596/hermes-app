@@ -5,6 +5,7 @@ const ts = require("typescript");
 
 function mount(file, name, props) {
   const values = [], effects = [], feedback = [];
+  const dimensions = { width: 390, height: 844 };
   let cursor = 0;
   let requestSequence = 0;
   const jsx = (type, props) => ({ type, props });
@@ -30,7 +31,7 @@ function mount(file, name, props) {
         ActivityIndicator: "ActivityIndicator", FlatList: "FlatList", Modal: "Modal", Pressable: "Pressable",
         Text: "Text", View: "View", ScrollView: "ScrollView", KeyboardAvoidingView: "KeyboardAvoidingView", RefreshControl: "RefreshControl",
         StyleSheet: { create: (styles) => styles, hairlineWidth: 1 }, Platform: { OS: "ios" },
-        Keyboard: { dismiss() {} }, useWindowDimensions: () => ({ width: 390, height: 844 }),
+        Keyboard: { dismiss() {} }, useWindowDimensions: () => dimensions,
       };
       case "react-native-reanimated": return { default: { View: "Animated.View" } };
       case "react-native-safe-area-context": return { SafeAreaView: "SafeAreaView", useSafeAreaInsets: () => ({ top: 0 }) };
@@ -58,7 +59,7 @@ function mount(file, name, props) {
     }
   });
   const render = () => { cursor = 0; return exported[name](props); };
-  return { render, feedback, effects, renderChild(predicate) {
+  return { render, feedback, effects, dimensions, renderChild(predicate) {
     const child = find(render(), predicate);
     return child?.type(child.props);
   } };
@@ -189,7 +190,7 @@ test("本地消息保存失败提示错误，禁用的发送不触发触感", as
   assert.deepEqual(disabled.feedback, []);
 });
 
-test("过程默认收起并展示最新一项，点击可展开全量并再次收起", () => {
+test("已完成的过程收起后只保留标题，展开仍能查看全部记录", () => {
   const messages = [{ message_id: "reply", role: "assistant", text: "已整理。", status: "final", process: [
     { kind: "reasoning", text: "先按紧急程度整理。" },
     { kind: "tool", id: "tool", name: "读取笔记", status: "running" },
@@ -199,10 +200,11 @@ test("过程默认收起并展示最新一项，点击可展开全量并再次�
   const header = (tree) => find(tree, (node) => node.props.accessibilityRole === "button");
   for (const expanded of [false, true, false]) {
     const tree = render();
-    assert.ok(tree, "默认展示服务端返回的过程");
+    assert.ok(tree, "完成后仍保留可展开的过程标题");
     assert.equal(header(tree).props.accessibilityState.expanded, expanded);
     assert.equal(Boolean(find(tree, (node) => node.props.children === "先按紧急程度整理。")), expanded);
-    assert.ok(find(tree, (node) => node.props.children === "读取笔记 · 结果未确认"));
+    assert.equal(Boolean(find(tree, (node) => node.props.children === "读取笔记 · 结果未确认")), expanded);
+    assert.equal(Boolean(find(tree, (node) => node.type === "ScrollView")), expanded);
     header(tree).props.onPress();
   }
   assert.equal(find(screen.render(), (node) => node.type === "AnswerMarkdown").props.text, "已整理。");
@@ -222,11 +224,43 @@ test("收起的过程跟随最新流式 item，展开后新 item 仍保留完整
   const latest = find(tree, (node) => node.props.children === "根据笔记整理\n保留完整的第二行。");
   assert.ok(latest);
   assert.equal(latest.props.numberOfLines, undefined);
+  message.status = "final";
+  tree = render();
+  assert.equal(find(tree, (node) => node.props.children === "根据笔记整理\n保留完整的第二行。"), undefined);
+  assert.equal(find(tree, (node) => node.type === "ScrollView"), undefined);
+  message.status = "streaming";
+  tree = render();
   find(tree, (node) => node.props.accessibilityRole === "button").props.onPress();
   message.process = [...message.process, { kind: "tool", id: "save", name: "保存笔记", status: "succeeded" }];
   tree = render();
   for (const text of ["读取笔记 · 执行中…", "根据笔记整理\n保留完整的第二行。", "保存笔记 · 已完成"]) {
     assert.ok(find(tree, (node) => node.props.children === text));
+  }
+  message.status = "final";
+  tree = render();
+  assert.equal(find(tree, (node) => node.props.accessibilityRole === "button").props.accessibilityState.expanded, true);
+  assert.ok(find(tree, (node) => node.props.children === "保存笔记 · 已完成"));
+});
+
+test("展开的过程高度限制为当前屏幕三分之一，完整记录支持内部滚动", () => {
+  const steps = Array.from({ length: 20 }, (_, index) => ({ kind: "reasoning", text: `思考记录 ${index + 1}` }));
+  const message = { message_id: "reply", role: "assistant", text: "", status: "streaming", process: steps };
+  const screen = conversation(async () => {}, "", { messages: [message] });
+  const render = () => screen.renderChild((node) => node.props.steps === steps);
+  let tree = render();
+  assert.equal(Object.assign({}, ...tree.props.style).maxHeight, undefined);
+  find(tree, (node) => node.props.accessibilityRole === "button").props.onPress();
+  for (const [height, maxHeight] of [[900, 300], [600, 200]]) {
+    screen.dimensions.height = height;
+    tree = render();
+    assert.equal(Object.assign({}, ...tree.props.style).maxHeight, maxHeight);
+    const content = find(tree, (node) => node.type === "ScrollView");
+    assert.ok(content, "超出高度的过程必须可以滚动");
+    assert.equal(content.props.nestedScrollEnabled, true);
+    assert.equal(content.props.scrollEnabled, true);
+    assert.equal(find(content, (node) => node.props.accessibilityRole === "button"), undefined, "标题保留在滚动区域外");
+    assert.ok(find(content, (node) => node.props.children === "思考记录 1"));
+    assert.ok(find(content, (node) => node.props.children === "思考记录 20"));
   }
 });
 
