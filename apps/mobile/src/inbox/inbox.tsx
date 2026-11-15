@@ -6,6 +6,7 @@ import { AnswerMarkdown } from "../chat/answer-markdown";
 import { MessageAttachments } from "../chat/message-attachments";
 import type { Session } from "../auth/session";
 import { formatTopicTime, groupTopics } from "../chat/topic-groups";
+import { haptic } from "../ui/haptics";
 import { formatDateTime, profileLabel } from "../ui/text";
 import { Action, EmptyState, Icon, Notice, useTheme } from "../ui/theme";
 
@@ -23,7 +24,7 @@ function InboxCard({ item, profile, now, onOpen }: {
   const preview = item.text.replace(/\s+/gu, " ").trim() || item.attachments?.map(({ name }) => name).join("、") || "";
   return (
     <Pressable accessibilityRole="button" accessibilityLabel={`${title}，${profile}，${formatDateTime(item.created_at)}，${Array.from(preview).slice(0, 160).join("")}`}
-      accessibilityHint="查看消息全文" onPress={() => onOpen(item)}
+      accessibilityHint="查看消息全文" onPress={() => { haptic("light"); onOpen(item); }}
       onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
       style={({ pressed }) => [styles.card, layout.card, focused && styles.focused, pressed && { backgroundColor: colors.secondary }]}>
       <Text numberOfLines={2} ellipsizeMode="tail" style={styles.heading}>{title}</Text>
@@ -52,9 +53,10 @@ export function InboxList({ items, profiles, profileId, ready, onProfile, onOpen
   const filtered = profileId ? items.filter((item) => item.profile_id === profileId) : items;
   return <>
     <ScrollView horizontal showsHorizontalScrollIndicator={false} style={layout.filterBar} contentContainerStyle={layout.filters}>
-      <Action title="全部" selected={!profileId} toggled={!profileId} onPress={() => onProfile(undefined)} />
+      <Action title="全部" selected={!profileId} toggled={!profileId} feedback={profileId ? "selection" : false} onPress={() => onProfile(undefined)} />
       {profiles.map((profile) => (
         <Action key={profile.profile_id} title={profileLabel(profile.label)} selected={profileId === profile.profile_id} toggled={profileId === profile.profile_id}
+          feedback={profileId === profile.profile_id ? false : "selection"}
           onPress={() => onProfile(profile.profile_id)} />
       ))}
     </ScrollView>
@@ -74,6 +76,7 @@ export function InboxDetail({ item, profiles, session }: { item: InboxItem; prof
   const { colors, styles } = useTheme();
   const [error, setError] = useState<string>();
   const openLink = useCallback((url: string) => {
+    haptic("light");
     setError(undefined);
     void openBrowserAsync(url, {
       dismissButtonStyle: "close",
@@ -82,7 +85,7 @@ export function InboxDetail({ item, profiles, session }: { item: InboxItem; prof
       toolbarColor: colors.surface,
       controlsColor: colors.foreground,
       windowFeatures: { noopener: true, noreferrer: true },
-    }).catch(() => setError("无法打开链接，请稍后重试。"));
+    }).catch(() => { haptic("error"); setError("无法打开链接，请稍后重试。"); });
   }, [colors.foreground, colors.surface]);
   return (
     <View style={[styles.frame, { backgroundColor: colors.surface }]}>

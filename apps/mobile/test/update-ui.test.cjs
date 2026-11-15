@@ -13,8 +13,8 @@ const textExports = {};
 new Function("exports", compile("../src/ui/text.ts"))(textExports);
 const flush = () => new Promise(setImmediate);
 
-function mountSettings(update) {
-  const alerts = [], choices = [], statuses = [];
+function mountSettings(update, message) {
+  const alerts = [], choices = [], statuses = [], feedback = [];
   let checks = 0;
   const exports = {};
   const jsx = (type, props) => ({ type, props });
@@ -36,6 +36,7 @@ function mountSettings(update) {
       case "react-native-safe-area-context": return { SafeAreaView: "SafeAreaView" };
       case "./ui/theme": return { useTheme: () => ({ colors: {}, styles: {} }), Icon: "Icon" };
       case "./ui/motion": return { useReduceMotion: () => true, motion: {} };
+      case "./ui/haptics": return { haptic: (kind) => feedback.push(kind) };
       case "./ui/text": return textExports;
       case "./workspace-context": return { useWorkspaceContext: () => ({
         section: "settings", workspace: { profiles: [], topics: [], pending: [], ready: true, network: "online" },
@@ -44,6 +45,7 @@ function mountSettings(update) {
         currentUpdate: { id: "running-version" },
         async checkUpdateManually(confirm) {
           checks++;
+          if (message) return message;
           const accepted = await confirm(update);
           choices.push(accepted);
           return accepted ? "热更新已下载，下次启动 App 时生效。" : undefined;
@@ -70,7 +72,7 @@ function mountSettings(update) {
   const button = findButton(workspace.type());
   assert.ok(button, "设置中应有可点击的热更新版本项");
   assert.equal(button.props.accessibilityRole, "button");
-  return { alerts, choices, statuses, press: button.props.onPress, checks: () => checks };
+  return { alerts, choices, statuses, feedback, press: button.props.onPress, checks: () => checks };
 }
 
 test("版本项展示更新说明、时间和 ID；取消可重试，确认前防止重复检查", async () => {
@@ -79,6 +81,7 @@ test("版本项展示更新说明、时间和 ID；取消可重试，确认前�
   screen.press();
   screen.press();
   assert.equal(screen.checks(), 1);
+  assert.deepEqual(screen.feedback, ["light"], "重复点击检查不会重复震动");
   assert.equal(screen.alerts.length, 1);
   const alert = screen.alerts[0];
   assert.equal(alert.title, "发现热更新");
@@ -90,10 +93,21 @@ test("版本项展示更新说明、时间和 ID；取消可重试，确认前�
   assert.deepEqual(screen.choices, [false]);
   assert.equal(screen.alerts.length, 1, "取消不显示下载完成");
   assert.equal(screen.statuses.at(-1), undefined);
+  assert.deepEqual(screen.feedback, ["light"], "取消不反馈下载成功");
   screen.press();
   assert.equal(screen.checks(), 2, "取消不禁用后续手动检查");
   screen.alerts[1].buttons.find((button) => button.text === "取消").onPress();
   await flush();
+});
+
+test("未启用热更新或无需下载时只提示点击，不宣告下载成功", async () => {
+  for (const message of ["当前版本未启用热更新。", "当前已是最新版本。", "热更新已下载，下次启动 App 时生效。"]) {
+    const screen = mountSettings(undefined, message);
+    screen.press();
+    await flush();
+    assert.deepEqual(screen.feedback, ["light"]);
+    assert.equal(screen.alerts[0].message, message);
+  }
 });
 
 test("下载按钮确认后显示完成提示，流程结束可再次检查", async () => {
@@ -106,6 +120,7 @@ test("下载按钮确认后显示完成提示，流程结束可再次检查", as
   assert.equal(screen.alerts[1].title, "热更新");
   assert.equal(screen.alerts[1].message, "热更新已下载，下次启动 App 时生效。");
   assert.equal(screen.statuses.at(-1), undefined);
+  assert.deepEqual(screen.feedback, ["light", "medium", "success"]);
 });
 
 test("缺少说明时仅展示时间和 ID，关闭确认框等同取消", async () => {

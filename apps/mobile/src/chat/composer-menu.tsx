@@ -5,6 +5,7 @@ import Animated from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { reasoningEfforts, type ReasoningEffort, type Skill } from "@hermes-mobile/protocol";
 import type { useWorkspace } from "../sync/use-workspace";
+import { haptic } from "../ui/haptics";
 import { motion, useReduceMotion } from "../ui/motion";
 import { profileLabel } from "../ui/text";
 import { Action, CloseButton, Icon, Notice, useTheme } from "../ui/theme";
@@ -100,10 +101,18 @@ export function ReasoningMenu({ effort, status, unavailable, onClose, onRequest 
       const result = await onRequest(id, next, controller.signal);
       if (controller.signal.aborted) return;
       attempt.current = undefined;
-      if (result.status === "ok") onClose();
-      else setError(result.error);
+      if (result.status === "ok") {
+        if (next !== effort || status) haptic("success");
+        onClose();
+      } else {
+        haptic(result.status === "unknown" ? "warning" : "error");
+        setError(result.error);
+      }
     } catch (failure) {
-      if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : "无法切换思考强度。");
+      if (!controller.signal.aborted) {
+        haptic("error");
+        setError(failure instanceof Error ? failure.message : "无法切换思考强度。");
+      }
     } finally {
       pending.current = undefined;
       if (!controller.signal.aborted) setBusy(false);
@@ -124,6 +133,7 @@ export function ReasoningMenu({ effort, status, unavailable, onClose, onRequest 
         {[null, ...reasoningEfforts].map((level) => (
           <Action key={level ?? "default"} title={level === null ? "跟随配置档案" : level === "none" ? "关闭思考" : reasoningLabels[level]}
             toggled={level === effort} selected={level === effort} icon={level === effort ? "check" : undefined}
+            feedback={level === effort && !status ? false : "selection"}
             disabled={busy || waiting || !!unavailable || (status === "pending" && attempt.current?.effort !== level)}
             onPress={() => void select(level)} />
         ))}
@@ -172,7 +182,7 @@ function Skills({ call, path, onSelect }: {
       ListEmptyComponent={<Text style={styles.muted}>此配置档案暂无可用技能。</Text>}
       renderItem={({ item }) => (
         <Pressable accessibilityRole="button" accessibilityLabel={item.name} accessibilityHint="带入输入框"
-          onPress={() => onSelect(item)}
+          onPress={() => { haptic("selection"); onSelect(item); }}
           style={({ pressed }) => [menu.skill, { borderBottomColor: colors.edge }, pressed && styles.faded]}>
           <View style={menu.grow}>
             <Text style={styles.heading}>{item.name}</Text>
@@ -213,7 +223,7 @@ export function ComposerMenu({
           keyExtractor={({ name }) => name}
           renderItem={({ item: { name, label } }) => (
             <Pressable accessibilityRole="button" accessibilityLabel={`/${name} ${label}`}
-              onPress={() => onCommand(name)}
+              onPress={() => { haptic(name === "stop" ? "warning" : "light"); onCommand(name); }}
               style={({ pressed }) => [menu.skill, { borderBottomColor: colors.edge }, pressed && styles.faded]}>
               <Text style={styles.heading}>/{name}</Text>
               <Text style={[styles.muted, menu.grow]}>{label}</Text>

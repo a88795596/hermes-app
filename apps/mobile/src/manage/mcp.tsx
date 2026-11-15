@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Text, View } from "react-native";
+import { haptic } from "../ui/haptics";
 import { Action, Card, CloseButton, EmptyState, Notice, useTheme } from "../ui/theme";
 import { ActionState, Confirm, DataState, EditField, Group, InstallProgress, Row, Toggle, entries,
   useManagementAction, useManagementData, type ManageCall } from "./shared";
@@ -30,6 +31,7 @@ export function Mcp({ call }: { call: ManageCall }) {
     {catalog ? <Catalog call={call} onClose={() => { showCatalog(false); void servers.reload(); }} /> : editing ?
       <ServerForm server={server} busy={action.busy} onCancel={() => edit(false)} onSave={(values) => void action.run(async () => {
         await call(server ? "mcp.edit" : "mcp.add", values);
+        haptic("success");
         edit(false);
         setProbe(undefined);
         await servers.reload();
@@ -50,6 +52,7 @@ export function Mcp({ call }: { call: ManageCall }) {
         {!!server.tools?.exclude?.length && <Text style={styles.muted}>排除的工具 · {server.tools.exclude.join("、")}</Text>}
         <Toggle label="启用服务器" value={server.enabled} disabled={action.busy} onChange={(enabled) => void action.run(async () => {
           await call("mcp.toggle", { name: server.name, enabled });
+          haptic("success");
           await servers.reload();
           return enabled ? "MCP 服务器已启用。" : "MCP 服务器已停用。";
         })} />
@@ -57,7 +60,9 @@ export function Mcp({ call }: { call: ManageCall }) {
           <Action title="编辑服务器" disabled={action.busy} onPress={() => { closeToken(); edit(true); }} />
           <Action title="测试连接" disabled={action.busy} onPress={() => void action.run(async () => {
             setProbe(undefined);
-            setProbe(await call<Probe>("mcp.test", { name: server.name }));
+            const result = await call<Probe>("mcp.test", { name: server.name });
+            haptic(result.ok ? "success" : "error");
+            setProbe(result);
           })} />
         </View>
         {server.bearer_managed && (rotating ? <>
@@ -65,6 +70,7 @@ export function Mcp({ call }: { call: ManageCall }) {
           <View style={styles.row}>
             <Action primary title="保存 Bearer 令牌" disabled={action.busy || !replacement.trim()} onPress={() => void action.run(async () => {
               await call("mcp.token", { name: server.name, bearer_token: replacement.trim() });
+              haptic("success");
               closeToken();
               setProbe(undefined);
               return "Bearer 令牌已更新。";
@@ -73,7 +79,7 @@ export function Mcp({ call }: { call: ManageCall }) {
           </View>
         </> : <Action title="更新 Bearer 令牌" disabled={action.busy} onPress={() => rotate(true)} />)}
         <Confirm title="移除服务器" description={`确定从 Hermes 移除「${server.name}」吗？`} disabled={action.busy}
-          onConfirm={() => void action.run(async () => { await call("mcp.remove", { name: server.name }); close(); await servers.reload(); return "MCP 服务器已移除。"; })} />
+          onConfirm={() => void action.run(async () => { await call("mcp.remove", { name: server.name }); haptic("success"); close(); await servers.reload(); return "MCP 服务器已移除。"; })} />
       </Card>
       {probe && <Card>
         <Text accessibilityRole="header" style={styles.heading}>{probe.ok ? `已连接 · ${probe.tools.length} 个工具` : "连接失败"}</Text>
@@ -240,6 +246,7 @@ function Catalog({ call, onClose }: { call: ManageCall; onClose: () => void }) {
               if (!result.action) return "安装已启动，请刷新目录查看结果。";
               setPending(result.action);
             } else {
+              haptic("success");
               select(undefined); setEnv({}); await catalog.reload(); return "MCP 服务器已安装。";
             }
           })} />

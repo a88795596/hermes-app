@@ -1,5 +1,6 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Group } from "../manage/shared";
+import { haptic } from "../ui/haptics";
 import { Action, Icon, useTheme } from "../ui/theme";
 import { formatTopicTime, groupTopics } from "./topic-groups";
 
@@ -34,7 +35,7 @@ export function TopicList({ rows, archived, busy, onOpen, onArchive }: {
           return (
             <View key={row.id} style={[layout.row, index > 0 && { borderTopColor: colors.edge, borderTopWidth: StyleSheet.hairlineWidth }]}>
               <Pressable accessibilityRole="button" accessibilityLabel={[row.title, row.profileLabel, row.status, created, updated].filter(Boolean).join("，")}
-                onPress={() => onOpen(row)}
+                onPress={() => { haptic("light"); onOpen(row); }}
                 style={({ pressed }) => [styles.listItem, layout.open, pressed && { backgroundColor: colors.secondary }]}>
                 <View style={[layout.icon, { backgroundColor: colors.tint }]}><Icon name="chat" size={17} color={colors.accent} /></View>
                 <View style={layout.details}>
@@ -48,6 +49,7 @@ export function TopicList({ rows, archived, busy, onOpen, onArchive }: {
                 </View>
               </Pressable>
               <Action compact title={action} accessibilityLabel={`${action}会话：${row.title}`} disabled={busy}
+                feedback={archived ? "medium" : "warning"}
                 onPress={() => onArchive(row)} />
             </View>
           );

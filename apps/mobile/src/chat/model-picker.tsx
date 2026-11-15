@@ -2,6 +2,7 @@ import { randomUUID } from "expo-crypto";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Modal, ScrollView, StyleSheet, Text, View } from "react-native";
 import type { ModelCatalog, ModelRequest, ModelResult, ModelSelection } from "@hermes-mobile/protocol";
+import { haptic } from "../ui/haptics";
 import { useReduceMotion } from "../ui/motion";
 import { Action, CloseButton, Notice, useTheme } from "../ui/theme";
 
@@ -39,6 +40,7 @@ export function ModelPicker({
       const reply = await onRequest(id, selection, controller.signal);
       if (controller.signal.aborted) return;
       if (reply.status !== "ok") {
+        if (selection) haptic(reply.status === "unknown" ? "warning" : "error");
         setConfirmation(undefined);
         setError(reply.error);
         return;
@@ -47,12 +49,15 @@ export function ModelPicker({
       if (result.type === "catalog") {
         setCatalog(result.catalog);
       } else if (result.type === "confirmation" && selection) {
+        haptic("warning");
         setConfirmation({ selection: { ...selection, confirm: result.confirm }, message: result.message });
       } else if (result.type !== "confirmation") {
+        if (result.type === "selected" && (result.selection.provider !== catalog?.provider || result.selection.model !== catalog?.model)) haptic("success");
         onSelected(result);
       }
     } catch (failure) {
       if (!controller.signal.aborted) {
+        if (selection) haptic("error");
         setRetry({ id, selection });
         setError(failure instanceof Error ? failure.message : "Hermes 无法完成模型请求。");
       }
@@ -127,6 +132,7 @@ export function ModelPicker({
                   <Action
                     title={item.name}
                     selected={item.selected}
+                    feedback={provider && item.selected ? false : "selection"}
                     icon={item.selected ? "check" : provider ? undefined : "chevron"}
                     disabled={busy || Boolean(provider && !enabled)}
                     onPress={() => provider
