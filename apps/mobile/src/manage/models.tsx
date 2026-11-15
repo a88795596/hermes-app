@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Text, View } from "react-native";
+import { haptic } from "../ui/haptics";
 import { Action, Card, CloseButton, useTheme } from "../ui/theme";
 import { ActionState, Confirm, DataState, EditField, Group, Row, useManagementAction, useManagementData, type ManageCall } from "./shared";
 
@@ -69,9 +70,11 @@ function ModelForm({ call, current, onClose, onSave }: { call: ManageCall; curre
         ...(confirmed && { confirm_expensive_model: true }),
       });
       if (result.confirm_required) {
+        haptic("warning");
         setConfirm(result.confirm_message || "Hermes 需要你确认后才能使用此模型。");
         return;
       }
+      if (result.ok) haptic("success");
       setKey("");
       await onSave();
     });
@@ -171,6 +174,7 @@ function ModelKeys({ call, onClose }: { call: ManageCall; onClose: () => void })
     void action.run(async () => {
       if (replacement === undefined) await call("model.key.remove", { key });
       else await call("model.key", { key, value: replacement });
+      haptic("success");
       setValue("");
       select(undefined);
       await keys.reload();

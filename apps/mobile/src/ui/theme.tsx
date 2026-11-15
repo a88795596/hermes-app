@@ -2,6 +2,7 @@ import { SymbolView, type AndroidSymbol, type SFSymbol } from "expo-symbols";
 import { useState, type ReactNode } from "react";
 import { Platform, Pressable, StyleSheet, Text, TextInput, View, useColorScheme, type TextInputProps } from "react-native";
 import { errorLabel } from "./text";
+import { haptic, type HapticKind } from "./haptics";
 
 const light = {
   background: "#f2f2f7",
@@ -89,7 +90,7 @@ export function CloseButton({ onPress, disabled, accessibilityLabel = "关闭" }
   const [focused, setFocused] = useState(false);
   return (
     <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel} accessibilityState={{ disabled }}
-      disabled={disabled} onPress={onPress} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+      disabled={disabled} onPress={() => { if (!disabled) { haptic("light"); onPress(); } }} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
       style={({ pressed }) => [styles.closeButton, focused && styles.focused, (pressed || disabled) && styles.faded]}>
       <Icon name="close" size={17} color={colors.muted} />
     </Pressable>
@@ -97,7 +98,7 @@ export function CloseButton({ onPress, disabled, accessibilityLabel = "关闭" }
 }
 
 export function Action({
-  title, onPress, primary, disabled, selected, destructive, icon, compact, disclosure, accessibilityLabel, toggled,
+  title, onPress, primary, disabled, selected, destructive, icon, compact, disclosure, accessibilityLabel, toggled, feedback,
 }: {
   title: string;
   onPress: () => void;
@@ -110,6 +111,7 @@ export function Action({
   disclosure?: boolean;
   accessibilityLabel?: string;
   toggled?: boolean;
+  feedback?: HapticKind | false;
 }) {
   const { colors, styles } = useTheme();
   const [focused, setFocused] = useState(false);
@@ -127,7 +129,12 @@ export function Action({
       accessibilityState={{ disabled, selected }}
       aria-pressed={toggled}
       disabled={disabled}
-      onPress={onPress}
+      onPress={() => {
+        if (disabled) return;
+        if (feedback !== false) haptic(feedback ?? (destructive ? "warning" : primary ? "medium"
+          : selected !== undefined || toggled !== undefined ? "selection" : "light"));
+        onPress();
+      }}
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
       style={({ pressed }) => [

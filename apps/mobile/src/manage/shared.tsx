@@ -3,6 +3,7 @@ import { ActivityIndicator, Platform, Pressable, StyleSheet, Switch, Text, View,
 import Animated from "react-native-reanimated";
 import type { ManagementOperation } from "@hermes-mobile/protocol";
 import { ApiError } from "../sync/api";
+import { haptic } from "../ui/haptics";
 import { motion, useReduceMotion } from "../ui/motion";
 import { Action, CloseButton, Field, Icon, Notice, useTheme, type IconName } from "../ui/theme";
 
@@ -49,6 +50,7 @@ export function useManagementAction() {
     try {
       setMessage((await task()) ?? undefined);
     } catch (failure) {
+      haptic("error");
       setError(failure instanceof ApiError ? failure.message : "无法确认操作结果，请先刷新再重试。");
     } finally {
       pending.current = false;
@@ -89,7 +91,11 @@ export function Row({ title, subtitle, value, icon, onPress, divided, disabled }
   const { colors, styles } = useTheme();
   return (
     <Pressable accessibilityRole="button" accessibilityLabel={[title, subtitle, value].filter(Boolean).join("，")}
-      accessibilityState={{ disabled }} disabled={disabled} onPress={onPress}
+      accessibilityState={{ disabled }} disabled={disabled} onPress={() => {
+        if (disabled || !onPress) return;
+        haptic("light");
+        onPress();
+      }}
       style={({ pressed }) => [styles.listItem, layout.row, divided && { borderTopColor: colors.edge, borderTopWidth: StyleSheet.hairlineWidth },
         pressed && { backgroundColor: colors.secondary }]}>
       {icon && <Icon name={icon} size={20} color={colors.accent} />}
@@ -119,7 +125,11 @@ export function Toggle({ label, value, onChange, disabled }: {
   const { colors, styles } = useTheme();
   return <View style={[styles.row, layout.toggle]}>
     <Text style={[styles.text, layout.grow]}>{label}</Text>
-    <Switch accessibilityLabel={label} disabled={disabled} value={value} onValueChange={onChange}
+    <Switch accessibilityLabel={label} disabled={disabled} value={value} onValueChange={(next) => {
+      if (disabled) return;
+      haptic("selection");
+      onChange(next);
+    }}
       trackColor={{ false: colors.edge, true: colors.accentFill }} />
   </View>;
 }
@@ -149,11 +159,17 @@ export function InstallProgress({ call, name, onDone }: { call: ManageCall; name
         const result = await call<{ running: boolean; exit_code: number | null }>("action.status", { name }, controller.signal);
         if (controller.signal.aborted) return;
         if (result.running) next = setTimeout(() => void check(), 1800);
-        else if (result.exit_code === 0) onDone("安装已完成。");
-        else onDone(result.exit_code === null ? "Hermes 无法确认安装结果，请刷新列表查看。"
-          : `安装失败（退出码 ${result.exit_code}），请查看 Hermes 日志。`, true);
+        else {
+          haptic(result.exit_code === 0 ? "success" : result.exit_code === null ? "warning" : "error");
+          if (result.exit_code === 0) onDone("安装已完成。");
+          else onDone(result.exit_code === null ? "Hermes 无法确认安装结果，请刷新列表查看。"
+            : `安装失败（退出码 ${result.exit_code}），请查看 Hermes 日志。`, true);
+        }
       } catch (failure) {
-        if (!controller.signal.aborted) onDone(failure instanceof ApiError ? failure.message : "无法确认安装结果，请刷新查看。", true);
+        if (!controller.signal.aborted) {
+          haptic("error");
+          onDone(failure instanceof ApiError ? failure.message : "无法确认安装结果，请刷新查看。", true);
+        }
       }
     }
     void check();

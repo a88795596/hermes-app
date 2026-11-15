@@ -2,6 +2,7 @@ import { useState } from "react";
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
 import Animated from "react-native-reanimated";
 import { motion, useReduceMotion } from "../ui/motion";
+import { haptic } from "../ui/haptics";
 import { Action, Field, Icon, Notice, useTheme } from "../ui/theme";
 import { parseOrigin } from "./session";
 
@@ -24,7 +25,9 @@ export function Pairing({
     setError(undefined);
     try {
       await onPair(parseOrigin(address), token.trim());
+      haptic("success");
     } catch (error) {
+      haptic("error");
       setError(error instanceof Error ? error.message : "配对失败。");
     } finally {
       setBusy(false);

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Text, View } from "react-native";
+import { haptic } from "../ui/haptics";
 import { Action, Card, CloseButton, EmptyState, useTheme } from "../ui/theme";
 import { ActionState, DataState, EditField, mono, useManagementAction, useManagementData, type ManageCall } from "./shared";
 
@@ -58,7 +59,7 @@ export function Logs({ call }: { call: ManageCall }) {
       <Text style={styles.muted}>此设置控制 Hermes 写入哪些日志。重启相应的 Hermes 进程后生效。</Text>
       {choices(levels, level, setLevel)}
       <Action primary title={action.busy ? "保存中…" : "保存日志级别"} disabled={action.busy || data.data?.level === level}
-        onPress={() => void action.run(async () => { await call("logs.level", { level }); await data.reload(); return "日志级别已保存。"; })} />
+        onPress={() => void action.run(async () => { await call("logs.level", { level }); haptic("success"); await data.reload(); return "日志级别已保存。"; })} />
     </Card>}
     <DataState {...data} />
     {data.data?.file === filters.file && !data.loading && !data.error && (

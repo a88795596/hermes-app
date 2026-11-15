@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MAX_ATTACHMENTS, type AttachmentUpload, type Control, type Message, type MessageProcessStep, type SessionStatus, type Skill, type Topic } from "@hermes-mobile/protocol";
 import type { Session } from "../auth/session";
 import type { useWorkspace } from "../sync/use-workspace";
+import { haptic } from "../ui/haptics";
 import { motion, useReduceMotion } from "../ui/motion";
 import { Action, Card, CloseButton, EmptyState, Field, Icon, Notice, useTheme } from "../ui/theme";
 import { AnswerMarkdown } from "./answer-markdown";
@@ -81,6 +82,7 @@ function ControlCard({
       await onAnswer(control, id, value);
       setSubmitted(true);
     } catch (failure) {
+      haptic("error");
       setError(failure instanceof Error ? failure.message : "无法确认是否已收到你的答复。");
     } finally {
       answering.current = false;
@@ -128,6 +130,7 @@ function ControlCard({
             <View style={styles.row}>
               {control.choices.map((choice) => (
                 <Action key={choice} title={choiceLabel(choice)} disabled={!canAnswer} selected={multiSelect ? selected.includes(choice) : undefined}
+                  feedback={multiSelect ? "selection" : choice === "deny" ? "warning" : "medium"}
                   icon={selected.includes(choice) ? "check" : undefined} onPress={() => pick(choice)} />
               ))}
             </View>
@@ -238,6 +241,7 @@ export function Conversation({
     : reasoning === null ? "跟随配置档案" : reasoningLabels[reasoning];
 
   const openLink = useCallback((url: string) => {
+    haptic("light");
     Keyboard.dismiss();
     setError(undefined);
     void openBrowserAsync(url, {
@@ -247,7 +251,7 @@ export function Conversation({
       toolbarColor: colors.surface,
       controlsColor: colors.foreground,
       windowFeatures: { noopener: true, noreferrer: true },
-    }).catch(() => setError("无法打开网页，请重试。"));
+    }).catch(() => { haptic("error"); setError("无法打开网页，请重试。"); });
   }, [colors.foreground, colors.surface]);
 
   function keepLatestVisible() {
@@ -267,8 +271,12 @@ export function Conversation({
       // Keep the sheet mounted while iOS presents its system picker.
       const selected = await pickAttachments(kind, attachments);
       setMenu(undefined);
-      if (selected.length) onAttachmentsChange([...attachments, ...selected]);
+      if (selected.length) {
+        onAttachmentsChange([...attachments, ...selected]);
+        haptic("selection");
+      }
     } catch (failure) {
+      haptic("error");
       setMenu(undefined);
       setError(failure instanceof Error ? failure.message : "无法读取所选附件。");
     } finally {
@@ -280,6 +288,7 @@ export function Conversation({
   async function send() {
     const text = draft.trim();
     if (sendDisabled) return;
+    haptic(isModelCommand ? "light" : "medium");
     if (isModelCommand) {
       Keyboard.dismiss();
       setError(undefined);
@@ -300,6 +309,7 @@ export function Conversation({
       pinned.current = true;
       scroll.current?.scrollToEnd({ animated: true });
     } catch (failure) {
+      haptic("error");
       setError(failure instanceof Error ? failure.message : "无法保存消息。");
     } finally {
       setSending(false);
@@ -324,6 +334,7 @@ export function Conversation({
       setCommandNotice("已请求停止回复。");
       await workspace.syncWorkspace();
     } catch (failure) {
+      haptic("error");
       setCommandNotice(undefined);
       setError(failure instanceof Error ? failure.message : "无法确认停止请求是否生效。");
     } finally {
@@ -362,6 +373,7 @@ export function Conversation({
           ].filter(Boolean).join(" · "));
         }
       } catch (failure) {
+        haptic("error");
         setCommandNotice(undefined);
         setError(failure instanceof Error ? failure.message : "无法完成 Hermes 查询。");
       } finally {
@@ -379,6 +391,7 @@ export function Conversation({
       if (newProfileId && topic?.status !== "ready") await workspace.prepareTopic(id, newProfileId);
       setMenu("skills");
     } catch (failure) {
+      haptic("error");
       setError(failure instanceof Error ? failure.message : "无法加载技能。");
     } finally {
       setOpeningSkills(false);
@@ -515,6 +528,7 @@ export function Conversation({
                   title="丢弃未发送的消息"
                   destructive
                   onPress={() => void workspace.discard(item).catch((failure: unknown) => {
+                    haptic("error");
                     setError(failure instanceof Error ? failure.message : "无法丢弃未发送的消息。");
                   })}
                 />
@@ -550,6 +564,7 @@ export function Conversation({
           </View>
           {running && (
             <Action compact title={stopping ? "停止中…" : "停止回复"} icon="stop"
+              feedback="warning"
               accessibilityLabel={stopping ? "正在请求停止回复" : undefined} disabled={!canControl || stopping} onPress={() => void stop()} />
           )}
         </View>
@@ -571,7 +586,7 @@ export function Conversation({
         <View style={[chat.composerRow, { backgroundColor: colors.field, borderColor: draftFocused ? colors.accent : colors.edge }]}>
           <Pressable accessibilityRole="button" accessibilityLabel="添加附件"
             accessibilityState={{ disabled: attachmentDisabled, busy: picking, expanded: menu === "attachments" }}
-            disabled={attachmentDisabled} onPress={() => { Keyboard.dismiss(); setMenu("attachments"); }}
+            disabled={attachmentDisabled} onPress={() => { haptic("light"); Keyboard.dismiss(); setMenu("attachments"); }}
             style={({ pressed }) => [chat.iconButton, (pressed || attachmentDisabled) && styles.faded]}>
             {picking ? <ActivityIndicator size="small" color={colors.accent} /> : <Icon name="attachment" size={20} color={colors.accent} />}
           </Pressable>

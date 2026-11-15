@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Text, View } from "react-native";
+import { haptic } from "../ui/haptics";
 import { formatDateTime } from "../ui/text";
 import { Action, Card, CloseButton, EmptyState, useTheme } from "../ui/theme";
 import { ActionState, Confirm, DataState, EditField, Group, Row, Toggle, entries,
@@ -78,6 +79,7 @@ export function ScheduledTasks({ call }: { call: ManageCall }) {
     {editing ? <JobForm job={job} busy={action.busy} onCancel={() => edit(false)} onSave={(values) => void action.run(async () => {
       if (job) await call("cron.edit", { id: job.id, updates: values });
       else await call("cron.create", values);
+      haptic("success");
       edit(false);
       await jobs.reload();
       return job ? "任务已更新。" : "任务已创建。";
@@ -101,10 +103,11 @@ export function ScheduledTasks({ call }: { call: ManageCall }) {
           <Action title="编辑任务" disabled={action.busy} onPress={() => edit(true)} />
           <Action title={job.enabled ? "暂停" : "恢复"} disabled={action.busy} onPress={() => void action.run(async () => {
             await call(job.enabled ? "cron.pause" : "cron.resume", { id: job.id });
+            haptic("success");
             await jobs.reload();
             return job.enabled ? "任务已暂停。" : "任务已恢复。";
           })} />
-          <Action title="立即运行" disabled={action.busy || !job.enabled} onPress={() => void action.run(async () => {
+          <Action title="立即运行" feedback="medium" disabled={action.busy || !job.enabled} onPress={() => void action.run(async () => {
             await call("cron.trigger", { id: job.id });
             await jobs.reload();
             return "已加入队列，将在 Hermes 调度器下次检查时运行。";
@@ -114,7 +117,7 @@ export function ScheduledTasks({ call }: { call: ManageCall }) {
         <View style={styles.row}>
           {!history && <Action title="运行记录" onPress={() => showHistory(true)} />}
           <Confirm title="删除任务" description={`确定删除定时任务「${jobName(job)}」吗？`} disabled={action.busy}
-            onConfirm={() => void action.run(async () => { await call("cron.remove", { id: job.id }); close(); await jobs.reload(); return "任务已删除。"; })} />
+            onConfirm={() => void action.run(async () => { await call("cron.remove", { id: job.id }); haptic("success"); close(); await jobs.reload(); return "任务已删除。"; })} />
         </View>
       </Card>
       {history && <RunHistory key={job.id} call={call} id={job.id} onClose={() => showHistory(false)} />}

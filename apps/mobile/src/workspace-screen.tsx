@@ -13,6 +13,7 @@ import { Group, Row } from "./manage/shared";
 import { enablePushNotifications, pushAvailable } from "./notifications";
 import type { Pending } from "./sync/use-workspace";
 import { motion, useReduceMotion } from "./ui/motion";
+import { haptic } from "./ui/haptics";
 import { formatDateTime, profileLabel } from "./ui/text";
 import { Action, Card, EmptyState, Icon, Notice, useTheme, type IconName } from "./ui/theme";
 import { checkUpdateManually, currentUpdate } from "./updates";
@@ -130,7 +131,9 @@ function Workspace() {
     try {
       await enablePushNotifications(session);
       setPush("enabled");
+      haptic("success");
     } catch (failure) {
+      haptic("error");
       setPush("idle");
       setError(failure instanceof Error ? failure.message : "无法启用通知。");
     }
@@ -139,7 +142,9 @@ function Workspace() {
   async function checkUpdate() {
     if (updateInFlight.current) return;
     updateInFlight.current = true;
+    haptic("light");
     setUpdateStatus("检查中…");
+    let downloadRequested = false;
     try {
       const message = await checkUpdateManually((update) => new Promise<boolean>((resolve) => {
         setUpdateStatus("等待确认…");
@@ -148,11 +153,15 @@ function Workspace() {
           `ID：${update.id}`,
         ].filter(Boolean).join("\n\n"), [
           { text: "取消", style: "cancel", onPress: () => resolve(false) },
-          { text: "下载", onPress: () => { setUpdateStatus("下载中…"); resolve(true); } },
+          { text: "下载", onPress: () => { downloadRequested = true; haptic("medium"); setUpdateStatus("下载中…"); resolve(true); } },
         ], { cancelable: true, onDismiss: () => resolve(false) });
       }));
-      if (message) Alert.alert("热更新", message);
+      if (message) {
+        if (downloadRequested) haptic("success");
+        Alert.alert("热更新", message);
+      }
     } catch (failure) {
+      haptic("error");
       Alert.alert("热更新失败", failure instanceof Error ? failure.message : "请稍后重试。");
     } finally {
       updateInFlight.current = false;
@@ -166,7 +175,9 @@ function Workspace() {
     setError(undefined);
     try {
       await workspace.finishSession(onSignOut, discardIds);
+      haptic("success");
     } catch (failure) {
+      haptic("error");
       setError(failure instanceof Error ? failure.message : "退出登录失败。");
     } finally {
       setSigningOut(false);
@@ -180,7 +191,9 @@ function Workspace() {
     setError(undefined);
     try {
       await workspace.setTopicArchived(row.id, !archived, row.newProfileId);
+      haptic("success");
     } catch (failure) {
+      haptic("error");
       setError(failure instanceof Error ? failure.message : archived ? "无法恢复会话。" : "无法归档会话。");
     } finally {
       archiveInFlight.current = false;
@@ -205,6 +218,7 @@ function Workspace() {
         <Action
           title={workspace.pending.length ? "丢弃待发送内容并重新配对" : "重新配对"}
           disabled={signingOut}
+          feedback={workspace.pending.length ? "warning" : "medium"}
           onPress={() => void disconnect(workspace.pending.map((item) => item.submission_id))}
         />
       </ScrollView>
@@ -223,7 +237,7 @@ function Workspace() {
     return (
       <View style={styles.frame}>
         <View style={[styles.header, layout.chatHeader, { borderBottomColor: colors.edge, backgroundColor: colors.background }]}>
-          <Pressable accessibilityRole="button" accessibilityLabel={archived ? "返回已归档会话" : "返回话题列表"} hitSlop={6} onPress={closeTopic}
+          <Pressable accessibilityRole="button" accessibilityLabel={archived ? "返回已归档会话" : "返回话题列表"} hitSlop={6} onPress={() => { haptic("light"); closeTopic(); }}
             style={({ pressed }) => [layout.chatBack, layout.chatHeaderSide, pressed && styles.faded]}>
             <Icon name="back" size={17} color={colors.accent} />
           </Pressable>
@@ -265,20 +279,20 @@ function Workspace() {
       <ScrollView
         contentContainerStyle={[styles.content, layout.page]}
         keyboardShouldPersistTaps="handled"
-        refreshControl={<RefreshControl refreshing={workspace.refreshing} onRefresh={() => void workspace.refresh()} tintColor={colors.accent} colors={[colors.accent]} />}
+        refreshControl={<RefreshControl refreshing={workspace.refreshing} onRefresh={() => { if (!workspace.refreshing) { haptic("light"); void workspace.refresh(); } }} tintColor={colors.accent} colors={[colors.accent]} />}
       >
         <View style={layout.pageHeader}>
           <Text accessibilityRole="header" style={[styles.title, layout.grow]}>{pageTitle}</Text>
           {page === "topics" && profile && (
             <Pressable accessibilityRole="button" accessibilityLabel="新建会话"
-              onPress={() => startConversation(profile.profile_id)}
+              onPress={() => { haptic("medium"); startConversation(profile.profile_id); }}
               style={({ pressed }) => [layout.compose, { backgroundColor: colors.tint }, pressed && styles.faded]}>
               <Icon name="compose" color={colors.accent} size={19} />
             </Pressable>
           )}
         </View>
         {page === "topics" && (
-          <Pressable accessibilityRole="button" accessibilityLabel={connection + "。打开连接设置"} onPress={() => showPage("connection")}
+          <Pressable accessibilityRole="button" accessibilityLabel={connection + "。打开连接设置"} onPress={() => { haptic("light"); showPage("connection"); }}
             style={({ pressed }) => [layout.connectionSummary, pressed && styles.faded]}>
             <View style={[layout.dot, { backgroundColor: connected ? colors.success : colors.muted }]} />
             <Text style={styles.muted}>{connection}</Text>
@@ -290,7 +304,8 @@ function Workspace() {
         {page === "topics" && workspace.profiles.length > 1 && (
           <View style={styles.row}>
             {workspace.profiles.map((item) => (
-              <Action key={item.profile_id} title={profileLabel(item.label)} selected={profile?.profile_id === item.profile_id} onPress={() => setProfileId(item.profile_id)} />
+              <Action key={item.profile_id} title={profileLabel(item.label)} selected={profile?.profile_id === item.profile_id}
+                feedback={profile?.profile_id === item.profile_id ? false : "selection"} onPress={() => setProfileId(item.profile_id)} />
             ))}
           </View>
         )}
@@ -389,7 +404,8 @@ function Workspace() {
             const active = section === id;
             const color = active ? colors.accent : colors.muted;
             return (
-              <Pressable key={id} accessibilityRole="tab" accessibilityLabel={title} aria-selected={active} onPress={() => showPage(id)}
+              <Pressable key={id} accessibilityRole="tab" accessibilityLabel={title} aria-selected={active}
+                onPress={() => { if (!active) haptic("selection"); showPage(id); }}
                 style={({ pressed }) => [layout.tab, pressed && styles.faded]}>
                 <Icon name={icon} size={19} color={color} />
                 <Text style={[layout.tabLabel, { color }]}>{title}</Text>

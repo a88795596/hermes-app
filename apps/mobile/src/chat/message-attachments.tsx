@@ -3,6 +3,7 @@ import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Tex
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { Attachment } from "@hermes-mobile/protocol";
 import type { Session } from "../auth/session";
+import { haptic } from "../ui/haptics";
 import { Action, CloseButton, Icon, Notice, useTheme } from "../ui/theme";
 import { AnswerMarkdown } from "./answer-markdown";
 import { attachmentKind, type AttachmentContent } from "./attachment-content";
@@ -52,6 +53,7 @@ function ReceivedFile({ item, session, tint, onOpenLink }: {
   const label = kind === "audio" ? "打开音频" : kind === "video" ? "打开视频"
     : kind === "file" ? "查看文件" : "打开预览";
   const show = () => {
+    haptic(kind === "file" ? "warning" : "light");
     if (kind === "file") { setError("暂不支持预览此文件类型。"); return; }
     setRequested(true);
     if (kind === "image" || kind === "markdown" || kind === "html") setOpen(true);

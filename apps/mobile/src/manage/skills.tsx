@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Text, View } from "react-native";
+import { haptic } from "../ui/haptics";
 import { Action, Card, CloseButton, EmptyState, useTheme } from "../ui/theme";
 import { ActionState, DataState, EditField, Group, InstallProgress, Row, Toggle, mono,
   useManagementAction, useManagementData, type ManageCall } from "./shared";
@@ -31,6 +32,7 @@ export function Skills({ call }: { call: ManageCall }) {
     }} />}
     {create ? <SkillForm busy={action.busy} onCancel={() => setCreate(false)} onSave={(name, content, category) => void action.run(async () => {
       await call("skill.create", { name, content, ...(category && { category }) });
+      haptic("success");
       setCreate(false);
       await skills.reload();
       return "技能已创建。";
@@ -42,6 +44,7 @@ export function Skills({ call }: { call: ManageCall }) {
         <Text style={styles.caption}>{[skill.category, skill.provenance].filter(Boolean).join(" · ")}</Text>
         <Toggle label="启用技能" value={skill.enabled} disabled={action.busy} onChange={(enabled) => void action.run(async () => {
           await call("skill.toggle", { name: skill.name, enabled });
+          haptic("success");
           await skills.reload();
           return enabled ? "技能已启用。" : "技能已停用。";
         })} />
@@ -88,6 +91,7 @@ function SkillContent({ call, name }: { call: ManageCall; name: string }) {
     {editing && content !== undefined ? <SkillForm name={name} content={content} busy={action.busy} onCancel={() => edit(false)}
       onSave={(name, content) => void action.run(async () => {
         await call("skill.edit", { name, content });
+        haptic("success");
         setContent(content);
         edit(false);
         return "技能已保存。";
