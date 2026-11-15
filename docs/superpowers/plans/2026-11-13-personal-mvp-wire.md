@@ -31,6 +31,8 @@
 | POST /ws-tickets | `{ticket:string}`，短时单次 |
 | GET /events?ticket=… | WS，服务端仅发 `{type:"changed",topic_id?:string}` 和连接就绪变更。移动端重新拉取受影响数据。握手 URL 不写日志。 |
 
+Expo 通知载荷 `PushNotificationData` 为 `{inbox_id}` 或 `{topic_id,message_id}`。会话首次进入成功 `final` 时按提交和设备排队；发送时优先定位该轮可见的最终助手消息，没有可见回复则定位用户消息。收件箱与会话通知共用投递重试，点击后客户端在路由就绪、配对有效时读取目标并导航，消息定位不会自动改变已读状态。
+
 话题 `Topic` 的结构为 `{topic_id,profile_id,title,status:"creating"|"ready"|"error",error?:string}`。配置档案 `Profile` 的结构为 `{profile_id,label}`。消息 `Message` 的结构为 `{message_id,role:"user"|"assistant",text,status:"accepted"|"queued"|"streaming"|"final"|"failed"|"unknown"|"cancelled",submission_id?:string,error?:string}`。交互 `Control` 的结构为 `{control_id,kind:"approval"|"clarify",prompt,choices:string[],status:"pending"|"responding"|"closed"|"unknown",submission_id?,multi_select?,answer?,error?}`。收件箱条目 `InboxItem` 的结构为 `{inbox_id,profile_id,title,text,created_at}`。旧版服务端或移动端缓存可能缺少 `profile_id`、`title`；新版响应从已保存的配置档案补齐 `profile_id`，无标题时从正文首个非空行生成简短标题，原始 `text` 不变。
 
 话题包含 ISO 8601 格式的 `created_at`、`updated_at` 与布尔值 `archived`，旧缓存可能缺少这些字段。归档状态的变化不计入 `updated_at`。话题可附带已确认的 `reasoning_effort`（缺省时使用 Hermes 的默认设置），或 `reasoning_status:"pending"|"unknown"`。

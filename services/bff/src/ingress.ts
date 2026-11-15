@@ -4,7 +4,7 @@ import { inboxTitle } from "@hermes-mobile/protocol";
 import type { PoolClient } from "pg";
 import { touchTopic } from "./mutations.js";
 import { profileId, topicRow } from "./projections.js";
-import { queueInboxPush } from "./push.js";
+import { queueInboxPush, queueTurnPush } from "./push.js";
 import { validateReceivedAttachments } from "./received-attachments.js";
 import { ApiError, conflict, invalid, missing } from "./validation.js";
 
@@ -26,6 +26,7 @@ async function applySubmission(db: PoolClient, topicId: string, id: string, stat
     status, ...(error ? { error } : {}),
   }]);
   await touchTopic(db, topicId);
+  return status === "final";
 }
 
 export async function applyResult(db: PoolClient, frame: CommandResult, refs: Set<string>) {
@@ -113,7 +114,9 @@ export async function applyEvent(db: PoolClient, frame: ConnectorEvent, refs: Se
     return;
   }
   if (frame.type === "submission") {
-    await applySubmission(db, topic.id, frame.submission_id, frame.status, frame.error);
+    if (await applySubmission(db, topic.id, frame.submission_id, frame.status, frame.error)) {
+      await queueTurnPush(db, frame.submission_id);
+    }
     return;
   }
   if (frame.type === "message") {

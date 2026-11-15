@@ -139,7 +139,9 @@ pnpm typecheck
    pnpm --filter @hermes-mobile/mobile exec expo run:android
    ```
 
-   安装开发客户端后，运行 `pnpm dev:mobile` 重新启动 Metro。使用 `APP_PAIRING_TOKEN` 和 BFF 地址配对。在 iOS 模拟器中使用 `http://127.0.0.1:4317`，在 Android 模拟器中使用 `http://10.0.2.2:4317`，在真机上使用 BFF 受信任的 HTTPS 反向代理。原生应用通过 SecureStore 保存设备令牌，并在应用私有的 SQLite 数据库中保存历史记录和待发文本。开发构建配置 Expo 项目 ID 和 APNs／FCM 凭据后，可在「设置」的「连接」中开启收件箱通知。
+   安装开发客户端后，运行 `pnpm dev:mobile` 重新启动 Metro。使用 `APP_PAIRING_TOKEN` 和 BFF 地址配对。在 iOS 模拟器中使用 `http://127.0.0.1:4317`，在 Android 模拟器中使用 `http://10.0.2.2:4317`，在真机上使用 BFF 受信任的 HTTPS 反向代理。原生应用通过 SecureStore 保存设备令牌，并在应用私有的 SQLite 数据库中保存历史记录和待发文本。开发构建配置 Expo 项目 ID 和 APNs／FCM 凭据后，可在「设置」的「连接」中开启通知；已授权设备在线时会自动恢复推送注册。
+
+   聊天每轮成功完成后会为已注册设备排队推送，显示话题标题与回复预览；失败、取消、流式片段和重复同步不会触发完成通知。点击后打开对应话题并定位、高亮该轮回复，冷启动和后台唤醒均可处理；没有可见回复时定位该轮用户消息。收件箱通知点击后打开对应详情。打开目标需要有效配对和网络连接。升级时同时更新 BFF 与移动端，BFF 启动会自动创建会话推送队列。
 
    收件箱通知显示来源档案和最多 500 个字符的正文预览，清理常见 Markdown 标记，完整内容保留在收件箱。预览随推送发送到 Expo／APNs／FCM，并按系统的「显示预览」设置展示在锁屏。iOS 默认使用时间敏感通知；新增能力需要重新构建并安装 App，系统中也需允许该 App 的时间敏感通知。Android 使用高优先级投递，新建收件箱通知通道的重要性为高；已存在通道的重要性由系统保留，需在系统通知设置中调整。 [iOS 能力配置](https://docs.expo.dev/build-reference/ios-capabilities/)
 

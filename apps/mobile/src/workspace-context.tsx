@@ -1,11 +1,12 @@
-import { useGlobalSearchParams, useRouter } from "expo-router";
+import { useGlobalSearchParams, useRootNavigationState, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { ActivityIndicator, View } from "react-native";
+import { ActivityIndicator, Alert, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import type { AttachmentUpload, InboxItem } from "@hermes-mobile/protocol";
+import type { AttachmentUpload, InboxItem, TopicDetail } from "@hermes-mobile/protocol";
 import { Pairing } from "./auth/pairing";
 import { loadSession, saveSession, type Session } from "./auth/session";
+import { enablePushNotifications, observeNotificationOpens, pushAvailable } from "./notifications";
 import { pairDevice } from "./sync/api";
 import { useWorkspace } from "./sync/use-workspace";
 import { useTheme } from "./ui/theme";
@@ -41,11 +42,67 @@ function SignedInWorkspace({ session, onSignOut, children }: {
   session: Session; onSignOut: () => Promise<void>; children: ReactNode;
 }) {
   const router = useRouter();
+  const rootKey = useRootNavigationState()?.key;
+  const navigationInitialized = useRef(false);
   useEffect(() => {
+    if (!rootKey || navigationInitialized.current) return;
+    navigationInitialized.current = true;
     if (router.canDismiss()) router.dismissAll();
     router.replace("/");
-  }, [router]);
+  }, [rootKey, router]);
   const value = useSignedInWorkspace(session, onSignOut);
+  const { workspace: { ready, call, network, sessionEnded }, setSection, setProfileId, setInboxItem, setInboxProfileId, setError, setPush } = value;
+
+  useEffect(() => {
+    if (!pushAvailable || network !== "online" || sessionEnded) return;
+    let active = true;
+    void enablePushNotifications(session, false).then((enabled) => {
+      if (active && enabled) setPush("enabled");
+    }).catch(() => { /* 设置中的启用入口可重试注册。 */ });
+    return () => { active = false; };
+  }, [network, session, sessionEnded, setPush]);
+
+  useEffect(() => {
+    if (!rootKey || !ready || sessionEnded) return;
+    let active = true;
+    let latest = 0;
+    const controller = new AbortController();
+    const stop = observeNotificationOpens(async (target) => {
+      const intent = ++latest;
+      const requestFailed = (failure: unknown) => {
+        if (active && intent === latest) throw failure;
+      };
+      if ("topic_id" in target) {
+        const detail = await call<TopicDetail>(`/topics/${target.topic_id}`, { signal: controller.signal }).catch(requestFailed);
+        if (!detail || !active || intent !== latest) return;
+        if (detail.topic.topic_id !== target.topic_id || !detail.messages.some((message) => message.message_id === target.message_id)) {
+          throw new Error("找不到通知对应的消息。");
+        }
+        setSection("topics");
+        setProfileId(detail.topic.profile_id);
+        setError(undefined);
+        if (router.canDismiss()) router.dismissAll();
+        router.push({ pathname: "/[page]", params: {
+          page: "conversation", topicId: target.topic_id, messageId: target.message_id,
+          ...(detail.topic.archived && { archived: "1" }),
+        } });
+      } else {
+        const items = await call<InboxItem[]>("/inbox", { signal: controller.signal }).catch(requestFailed);
+        if (!items || !active || intent !== latest) return;
+        const item = items.find((entry) => entry.inbox_id === target.inbox_id);
+        if (!item) throw new Error("找不到通知对应的收件箱消息。");
+        setSection("inbox");
+        setInboxProfileId(item.profile_id);
+        setInboxItem(item);
+        setError(undefined);
+        if (router.canDismiss()) router.dismissAll();
+        router.push({ pathname: "/[page]", params: { page: "inbox-item" } });
+      }
+    }, (failure) => {
+      if (active) Alert.alert("无法打开通知", failure instanceof Error ? failure.message : "请稍后重试。");
+    });
+    return () => { active = false; controller.abort(); stop(); };
+  }, [call, rootKey, ready, router, sessionEnded, setError, setInboxItem, setInboxProfileId, setProfileId, setSection]);
   return <WorkspaceContext value={value}>{children}</WorkspaceContext>;
 }
 

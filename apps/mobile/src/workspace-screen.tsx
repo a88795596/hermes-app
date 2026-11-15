@@ -65,7 +65,7 @@ function Workspace() {
   const [chatSettingsOpen, setChatSettingsOpen] = useState(false);
   const [managementTabsVisible, setManagementTabsVisible] = useState(true);
   const updateDisabled = Platform.OS === "web" || !!updateStatus;
-  const params = useLocalSearchParams<{ page?: Page | "conversation" | "inbox-item"; topicId?: string; newProfileId?: string; archived?: string }>();
+  const params = useLocalSearchParams<{ page?: Page | "conversation" | "inbox-item"; topicId?: string; messageId?: string; newProfileId?: string; archived?: string }>();
   const { session, onSignOut, workspace, section: rootSection, setSection,
     profileId, setProfileId, inboxProfileId, setInboxProfileId, inboxItem: selectedInboxItem, setInboxItem,
     drafts, setDrafts, draftAttachments, setDraftAttachments, showProcess, setShowProcess,
@@ -281,6 +281,7 @@ function Workspace() {
           </Pressable>} />
         <Conversation
           id={id}
+          targetMessageId={typeof params.messageId === "string" ? params.messageId : undefined}
           topic={topic}
           newProfileId={newProfileId}
           showProcess={processVisible}

@@ -209,11 +209,12 @@ function ControlPrompt({
 
 export function Conversation({
   id, topic, newProfileId, workspace, session, draft, onDraftChange, attachments, onAttachmentsChange, onNewTopic, showProcess, onToggleProcess,
-  settingsOpen, onCloseSettings,
+  settingsOpen, onCloseSettings, targetMessageId,
 }: {
   id: string;
   topic?: Topic;
   newProfileId?: string;
+  targetMessageId?: string;
   workspace: ReturnType<typeof useWorkspace>;
   session: Session;
   draft: string;
@@ -232,7 +233,9 @@ export function Conversation({
   const { top: safeAreaTop } = useSafeAreaInsets();
   const messageWidth = Math.min(560, (width - transcriptGutter * 2) * 0.84);
   const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
-  const pinned = useRef(true);
+  const pinned = useRef(!targetMessageId);
+  const focusTarget = useRef(Boolean(targetMessageId));
+  const messageOffsets = useRef(new Map<string, number>());
   const [sending, setSending] = useState(false);
   const enqueueing = useRef(false);
   const [stopping, setStopping] = useState(false);
@@ -305,8 +308,19 @@ export function Conversation({
   }, [colors.foreground, colors.surface]);
 
   function keepLatestVisible() {
-    if (pinned.current) scroll.current?.scrollToEnd({ animated: false });
+    if (focusTarget.current && targetMessageId) {
+      const y = messageOffsets.current.get(targetMessageId);
+      if (y !== undefined) scroll.current?.scrollTo({ y: Math.max(0, y - 8), animated: false });
+    } else if (pinned.current) scroll.current?.scrollToEnd({ animated: false });
   }
+
+  useEffect(() => {
+    focusTarget.current = Boolean(targetMessageId);
+    pinned.current = !targetMessageId;
+    const y = targetMessageId ? messageOffsets.current.get(targetMessageId) : undefined;
+    if (y !== undefined) scroll.current?.scrollTo({ y: Math.max(0, y - 8), animated: false });
+    else if (!targetMessageId) scroll.current?.scrollToEnd({ animated: false });
+  }, [id, targetMessageId]);
 
   useEffect(() => {
     interruptId.current = undefined;
@@ -357,6 +371,7 @@ export function Conversation({
       onDraftChange("");
       if (attachments.length) onAttachmentsChange([]);
       setCommandNotice(undefined);
+      focusTarget.current = false;
       pinned.current = true;
       scroll.current?.scrollToEnd({ animated: true });
     } catch (failure) {
@@ -510,8 +525,11 @@ export function Conversation({
         }
         onContentSizeChange={keepLatestVisible}
         onLayout={keepLatestVisible}
+        onScrollBeginDrag={() => { focusTarget.current = false; pinned.current = false; }}
         onScroll={({ nativeEvent }) => {
-          pinned.current = nativeEvent.contentSize.height - nativeEvent.layoutMeasurement.height - nativeEvent.contentOffset.y < 100;
+          if (!focusTarget.current) {
+            pinned.current = nativeEvent.contentSize.height - nativeEvent.layoutMeasurement.height - nativeEvent.contentOffset.y < 100;
+          }
         }}
         scrollEventThrottle={32}
       >
@@ -538,7 +556,12 @@ export function Conversation({
           const startGroup = messages[index - 1]?.role !== message.role;
           const attachedControls = outgoing && message.submission_id ? historyControls.get(message.submission_id) : undefined;
           return (
-            <View key={message.message_id} style={chat.messageGroup}>
+            <View key={message.message_id}
+              onLayout={({ nativeEvent }) => {
+                messageOffsets.current.set(message.message_id, nativeEvent.layout.y);
+                if (message.message_id === targetMessageId && focusTarget.current) keepLatestVisible();
+              }}
+              style={[chat.messageGroup, message.message_id === targetMessageId && { backgroundColor: colors.tint, borderRadius: 12 }]}>
               <View style={[chat.message, outgoing ? [chat.outgoing, { maxWidth: messageWidth }] : chat.incoming, startGroup && chat.startGroup]}>
                 {!!process?.length && <ProcessTimeline steps={process} final={message.status === "final"} />}
                 {(!!message.text || !!message.attachments?.length) && (

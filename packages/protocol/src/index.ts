@@ -131,6 +131,10 @@ export interface TopicDetail {
   controls: Control[];
 }
 
+export type PushNotificationData =
+  | { inbox_id: string }
+  | { topic_id: string; message_id: string };
+
 export interface Skill {
   name: string;
   description?: string;
