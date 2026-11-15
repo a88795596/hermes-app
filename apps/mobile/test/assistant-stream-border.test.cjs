@@ -4,14 +4,18 @@ const { resolve } = require("node:path");
 const test = require("node:test");
 const ts = require("typescript");
 
-function mount() {
+function mount(variant) {
   let reduced = false, focused = true, callback, cleanup, previous;
+  let size;
   const animations = [];
   const motion = { value: 0, setValue(value) { this.value = value; }, interpolate: (options) => options };
   const jsx = (type, props) => ({ type, props });
   const modules = {
     "react/jsx-runtime": { jsx, jsxs: jsx },
-    react: { useCallback: (fn) => fn },
+    react: {
+      useCallback: (fn) => fn,
+      useState: (initial) => [size ??= initial, (next) => { size = next; }],
+    },
     "expo-router": { useFocusEffect: (fn) => { callback = fn; } },
     "react-native-safe-area-context": { useSafeAreaInsets: () => ({ top: 59, bottom: 34, left: 0, right: 0 }) },
     "../ui/motion": { useReduceMotion: () => reduced },
@@ -47,7 +51,7 @@ function mount() {
     render(nextReduced = reduced, nextFocused = focused) {
       reduced = nextReduced;
       focused = nextFocused;
-      const tree = exported.AssistantStreamBorder();
+      const tree = exported.AssistantStreamBorder(variant ? { variant } : undefined);
       const deps = `${reduced}:${focused}`;
       if (deps !== previous) {
         cleanup?.();
@@ -89,19 +93,55 @@ test("流光复用四边纹理和四角柔光，覆盖安全区但不拦截触�
 });
 
 test("减少动态效果保留静态边框，失焦和卸载停止循环，重新进入恢复", () => {
-  const screen = mount();
-  assert.ok(screen.render(true));
-  assert.equal(screen.animations.length, 0);
-  screen.render(false);
-  assert.equal(screen.animations[0].starts, 1);
-  screen.render(true);
-  assert.equal(screen.animations[0].stops, 1);
-  assert.equal(screen.motion.value, 0);
-  screen.render(false);
-  screen.render(false, false);
-  assert.equal(screen.animations[1].stops, 1);
-  screen.render(false, true);
-  assert.equal(screen.animations[2].starts, 1);
+  for (const variant of [undefined, "composer"]) {
+    const screen = mount(variant);
+    assert.ok(screen.render(true));
+    assert.equal(screen.animations.length, 0);
+    screen.render(false);
+    assert.equal(screen.animations[0].starts, 1);
+    screen.render(true);
+    assert.equal(screen.animations[0].stops, 1);
+    assert.equal(screen.motion.value, 0);
+    screen.render(false);
+    screen.render(false, false);
+    assert.equal(screen.animations[1].stops, 1);
+    screen.render(false, true);
+    assert.equal(screen.animations[2].starts, 1);
+    screen.unmount();
+    assert.equal(screen.animations[2].stops, 1);
+  }
+});
+
+test("录音流光限制在输入框圆角内，随多行尺寸变化且不重启动画", () => {
+  const screen = mount("composer");
+  let tree = screen.render();
+  assert.equal(tree.props.testID, "recording-input-border");
+  assert.equal(tree.props.pointerEvents, "none");
+  assert.equal(tree.props.accessible, false);
+  assert.equal(tree.props.accessibilityElementsHidden, true);
+  assert.equal(tree.props.importantForAccessibility, "no-hide-descendants");
+  assert.deepEqual(tree.props.style, {
+    position: "absolute", top: 0, right: 0, bottom: 0, left: 0, borderRadius: 24, overflow: "hidden",
+  });
+  for (const [width, height] of [[290, 52], [330, 126]]) {
+    tree.props.onLayout({ nativeEvent: { layout: { width, height } } });
+    tree = screen.render();
+    const edges = tree.props.children.slice(0, 4);
+    assert.deepEqual(edges.map((edge) => edge.props.length), [width, height, width, height]);
+    for (const edge of edges) {
+      const vertical = edge.props.side === "left" || edge.props.side === "right";
+      const view = edge.type(edge.props);
+      assert.equal(view.props.style[vertical ? "width" : "height"], 8, "光带仅占边缘，保留文字区域");
+      assert.ok(view.props.children.props.children.length * 384 >= edge.props.length + 384);
+    }
+  }
+  assert.equal(screen.animations.length, 1, "输入框高度变化不能重启流动进度");
+  assert.deepEqual(screen.animations[0].options, {
+    toValue: 1, duration: 9000, easing: "linear", useNativeDriver: true, isInteraction: false,
+  });
+  for (const corner of tree.props.children.slice(4)) {
+    assert.equal(corner.props.style[0].width, 48);
+    assert.equal(corner.props.style[0].height, 48);
+  }
   screen.unmount();
-  assert.equal(screen.animations[2].stops, 1);
 });
