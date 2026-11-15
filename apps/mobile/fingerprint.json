@@ -1,7 +1,7 @@
 {
   "ios": {
     "engine": "hot-updater/interface@1",
-    "hash": "3819a2e940e974310cbad7ae5a6cac782d8a19fb95d1a404d37b1feb3eb41881",
+    "hash": "ed3bca8e1703b3780fb3c7945fc883b7b4e2f2ab9c278693da65f33eaeb6a2ec",
     "sources": [
       {
         "type": "contents",
@@ -74,6 +74,15 @@
           "native-dependency"
         ],
         "hash": "d6b71c6875217143a35f689d18328bdc63ba0fd864e87a9b2306a7649de1f911"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-audio",
+        "contents": "expo-audio@58.0.12",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "d282a2a26d52511f413847b2a8608779456bb6e32415bc976b10cb4b48b618e2"
       },
       {
         "type": "contents",
@@ -173,6 +182,15 @@
           "native-dependency"
         ],
         "hash": "ae981a12f91a2bfb9b874ca79fb95505f887ee579b907f8aaa1e01dd69a0803e"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-haptics",
+        "contents": "expo-haptics@58.0.8",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "fff44519a1b202ada2c226cb004ebbf0e85087c84e2d3055fd311a7d073e6738"
       },
       {
         "type": "contents",
@@ -329,6 +347,15 @@
       },
       {
         "type": "contents",
+        "id": "dependency:expo-video",
+        "contents": "expo-video@58.0.14",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "48a3f979b977c189255a9349f5046326503e62a9f7abb0404000318f88fdb487"
+      },
+      {
+        "type": "contents",
         "id": "dependency:expo-web-browser",
         "contents": "expo-web-browser@58.0.8",
         "reasons": [
@@ -374,6 +401,15 @@
       },
       {
         "type": "contents",
+        "id": "dependency:react-native-webview",
+        "contents": "react-native-webview@14.0.1",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "b6e313fdebf1d901e6145efa1f59e14fb8eeabfd40593615382222bbb09ebf9d"
+      },
+      {
+        "type": "contents",
         "id": "dependency:react-native-worklets",
         "contents": "react-native-worklets@0.13.0",
         "reasons": [
@@ -413,7 +449,7 @@
         "reasons": [
           "extra-source"
         ],
-        "hash": "5439d6903b01016d8cb9cc4d63bbbaa6e5b6afa541a407a1e9c8538433c9099e"
+        "hash": "4dce52ae16cac8ec6e2f95ea36e8dce022e6dd876379a762b2d8499b20e07fc6"
       },
       {
         "type": "file",
@@ -427,7 +463,7 @@
   },
   "android": {
     "engine": "hot-updater/interface@1",
-    "hash": "2b0c6327bfb6957cd18b41e0ef80142132c49eb9801e381195543d4cf8ca5798",
+    "hash": "59fa4e08faa6ab74d407e0dbe469289ea3b21a6a5454904d9d3a52faadf910c6",
     "sources": [
       {
         "type": "contents",
@@ -500,6 +536,15 @@
           "native-dependency"
         ],
         "hash": "d6b71c6875217143a35f689d18328bdc63ba0fd864e87a9b2306a7649de1f911"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-audio",
+        "contents": "expo-audio@58.0.12",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "d282a2a26d52511f413847b2a8608779456bb6e32415bc976b10cb4b48b618e2"
       },
       {
         "type": "contents",
@@ -590,6 +635,15 @@
           "native-dependency"
         ],
         "hash": "e0faf37f712fcaf7f63edb614d0a5ff8e26f4d0d2827089b4df43a81e49b3d57"
+      },
+      {
+        "type": "contents",
+        "id": "dependency:expo-haptics",
+        "contents": "expo-haptics@58.0.8",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "fff44519a1b202ada2c226cb004ebbf0e85087c84e2d3055fd311a7d073e6738"
       },
       {
         "type": "contents",
@@ -737,6 +791,15 @@
       },
       {
         "type": "contents",
+        "id": "dependency:expo-video",
+        "contents": "expo-video@58.0.14",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "48a3f979b977c189255a9349f5046326503e62a9f7abb0404000318f88fdb487"
+      },
+      {
+        "type": "contents",
         "id": "dependency:expo-web-browser",
         "contents": "expo-web-browser@58.0.8",
         "reasons": [
@@ -782,6 +845,15 @@
       },
       {
         "type": "contents",
+        "id": "dependency:react-native-webview",
+        "contents": "react-native-webview@14.0.1",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "b6e313fdebf1d901e6145efa1f59e14fb8eeabfd40593615382222bbb09ebf9d"
+      },
+      {
+        "type": "contents",
         "id": "dependency:react-native-worklets",
         "contents": "react-native-worklets@0.13.0",
         "reasons": [
@@ -821,7 +893,7 @@
         "reasons": [
           "extra-source"
         ],
-        "hash": "5439d6903b01016d8cb9cc4d63bbbaa6e5b6afa541a407a1e9c8538433c9099e"
+        "hash": "4dce52ae16cac8ec6e2f95ea36e8dce022e6dd876379a762b2d8499b20e07fc6"
       },
       {
         "type": "file",
