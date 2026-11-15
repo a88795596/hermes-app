@@ -98,6 +98,31 @@ function conversation(enqueue, draft = "测试消息", { showProcess = false, me
   });
 }
 
+test("其他页面刷新不会启动会话详情的下拉刷新控件", () => {
+  const screen = conversation(async () => {}, "", { workspace: { refreshing: true } });
+  const control = find(screen.render(), (node) => node.type === "ScrollView").props.refreshControl;
+  assert.equal(control.props.refreshing, false);
+});
+
+test("详情自己的下拉刷新等待请求结束，成功和失败都会收起指示器", async () => {
+  for (const fails of [false, true]) {
+    let finish;
+    const pending = new Promise((resolve, reject) => { finish = () => fails ? reject(new Error("刷新失败")) : resolve(); });
+    void pending.catch(() => {});
+    const screen = conversation(async () => {}, "", { workspace: { refreshing: false, refresh: () => pending } });
+    const control = () => find(screen.render(), (node) => node.type === "ScrollView").props.refreshControl;
+    const result = control().props.onRefresh();
+    try {
+      assert.equal(control().props.refreshing, true, "请求未结束时保持本页刷新指示器");
+    } finally {
+      finish();
+      await Promise.resolve(result).catch(() => {});
+      await flush();
+    }
+    assert.equal(control().props.refreshing, false, "请求结束后清理本页刷新指示器");
+  }
+});
+
 const activeMessage = { message_id: "original", role: "user", text: "整理报告", status: "streaming", submission_id: "active-turn" };
 
 test("执行中与空闲时始终使用同一个发送入口，不由前端选择插话目标", async () => {

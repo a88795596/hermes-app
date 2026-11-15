@@ -280,6 +280,33 @@ test("列表滚动和页面失焦收起当前左滑菜单", () => {
   assert.equal(closes, 2);
 });
 
+test("详情页刷新不会启动背后会话列表的下拉刷新控件", () => {
+  const screen = mountWorkspace({ context: { section: "topics", workspace: { refreshing: true } } });
+  const control = findNode(screen.render(), (node) => node.type === "ScrollView").props.refreshControl;
+  assert.equal(control.props.refreshing, false);
+});
+
+test("列表自己的下拉刷新等待请求结束，成功和失败都会收起指示器", async () => {
+  for (const fails of [false, true]) {
+    let finish;
+    const pending = new Promise((resolve, reject) => { finish = () => fails ? reject(new Error("刷新失败")) : resolve(); });
+    void pending.catch(() => {});
+    const screen = mountWorkspace({ context: { section: "topics", workspace: {
+      refreshing: false, refresh: () => pending,
+    } } });
+    const control = () => findNode(screen.render(), (node) => node.type === "ScrollView").props.refreshControl;
+    const result = control().props.onRefresh();
+    try {
+      assert.equal(control().props.refreshing, true, "请求未结束时保持本页刷新指示器");
+    } finally {
+      finish();
+      await Promise.resolve(result).catch(() => {});
+      await flush();
+    }
+    assert.equal(control().props.refreshing, false, "请求结束后清理本页刷新指示器");
+  }
+});
+
 test("单个配置档案仍可打开选择，尚无档案时显示空态且不能新建会话", () => {
   for (const profiles of [[{ profile_id: "default", label: "默认" }], []]) {
     const routes = [];
