@@ -58,7 +58,10 @@ function mount(file, name, props) {
     }
   });
   const render = () => { cursor = 0; return exported[name](props); };
-  return { render, feedback, effects };
+  return { render, feedback, effects, renderChild(predicate) {
+    const child = find(render(), predicate);
+    return child?.type(child.props);
+  } };
 }
 
 function find(node, predicate) {
@@ -88,9 +91,9 @@ test("底部选择框的返回、标题和关闭共用顶栏，忙碌时保留�
   assert.equal(closed, 1);
 });
 
-function conversation(enqueue, draft = "测试消息", { showProcess = false, messages = [], workspace = {}, ...props } = {}) {
+function conversation(enqueue, draft = "测试消息", { messages = [], workspace = {}, ...props } = {}) {
   return mount("conversation", "Conversation", {
-    id: "topic", topic: { status: "ready" }, draft, attachments: [], session: {}, showProcess,
+    id: "topic", topic: { status: "ready" }, draft, attachments: [], session: {},
     workspace: { ready: true, network: "online", connector_online: true, reasoning_supported: true, profiles: [], pending: [],
       detail: { messages }, enqueue, ...workspace },
     onDraftChange() {}, onAttachmentsChange() {},
@@ -186,29 +189,53 @@ test("本地消息保存失败提示错误，禁用的发送不触发触感", as
   assert.deepEqual(disabled.feedback, []);
 });
 
-test("过程开关只控制时间线，已结束回复保留未确认的工具结果", () => {
+test("过程默认收起并展示最新一项，点击可展开全量并再次收起", () => {
   const messages = [{ message_id: "reply", role: "assistant", text: "已整理。", status: "final", process: [
     { kind: "reasoning", text: "先按紧急程度整理。" },
     { kind: "tool", id: "tool", name: "读取笔记", status: "running" },
   ] }];
-  const processLabel = (node) => node.props.accessibilityRole === "header" && node.props.children === "思考";
-  for (const showProcess of [true, false]) {
-    const screen = conversation(async () => {}, "", { showProcess, messages }).render();
-    const timeline = find(screen, (node) => node.props.steps === messages[0].process);
-    const process = timeline?.type(timeline.props);
-    assert.equal(Boolean(find(process, processLabel)), showProcess);
-    assert.equal(Boolean(find(process, (node) => node.props.children === "读取笔记 · 结果未确认")), showProcess);
-    assert.equal(find(screen, (node) => node.type === "AnswerMarkdown").props.text, "已整理。");
+  const screen = conversation(async () => {}, "", { messages });
+  const render = () => screen.renderChild((node) => node.props.steps === messages[0].process);
+  const header = (tree) => find(tree, (node) => node.props.accessibilityRole === "button");
+  for (const expanded of [false, true, false]) {
+    const tree = render();
+    assert.ok(tree, "默认展示服务端返回的过程");
+    assert.equal(header(tree).props.accessibilityState.expanded, expanded);
+    assert.equal(Boolean(find(tree, (node) => node.props.children === "先按紧急程度整理。")), expanded);
+    assert.ok(find(tree, (node) => node.props.children === "读取笔记 · 结果未确认"));
+    header(tree).props.onPress();
+  }
+  assert.equal(find(screen.render(), (node) => node.type === "AnswerMarkdown").props.text, "已整理。");
+  assert.deepEqual(screen.feedback, ["selection", "selection", "selection"]);
+});
+
+test("收起的过程跟随最新流式 item，展开后新 item 仍保留完整列表", () => {
+  const message = { message_id: "reply", role: "assistant", text: "", status: "streaming", process: [
+    { kind: "tool", id: "tool", name: "读取笔记", status: "running" },
+  ] };
+  const screen = conversation(async () => {}, "", { messages: [message] });
+  const render = () => screen.renderChild((node) => node.props.steps === message.process);
+  assert.ok(find(render(), (node) => node.props.children === "读取笔记 · 执行中…"));
+  message.process = [...message.process, { kind: "reasoning", text: "根据笔记整理\n保留完整的第二行。" }];
+  let tree = render();
+  assert.equal(find(tree, (node) => node.props.children === "读取笔记 · 执行中…"), undefined);
+  const latest = find(tree, (node) => node.props.children === "根据笔记整理\n保留完整的第二行。");
+  assert.ok(latest);
+  assert.equal(latest.props.numberOfLines, undefined);
+  find(tree, (node) => node.props.accessibilityRole === "button").props.onPress();
+  message.process = [...message.process, { kind: "tool", id: "save", name: "保存笔记", status: "succeeded" }];
+  tree = render();
+  for (const text of ["读取笔记 · 执行中…", "根据笔记整理\n保留完整的第二行。", "保存笔记 · 已完成"]) {
+    assert.ok(find(tree, (node) => node.props.children === text));
   }
 });
 
-test("已结束的纯附件回复在隐藏过程时仍展示文件", () => {
+test("纯附件回复保留文件，没有过程的回复不显示空模块", () => {
   const attachments = [{ attachment_id: "file", name: "报告.pdf", mime: "application/pdf", size: 10 }];
   const messages = [{ message_id: "delivery", role: "assistant", text: "", status: "final", attachments }];
-  for (const showProcess of [true, false]) {
-    const screen = conversation(async () => {}, "", { showProcess, messages }).render();
-    assert.deepEqual(find(screen, (node) => node.type === "MessageAttachments")?.props.items, attachments);
-  }
+  const screen = conversation(async () => {}, "", { messages }).render();
+  assert.deepEqual(find(screen, (node) => node.type === "MessageAttachments")?.props.items, attachments);
+  assert.equal(find(screen, (node) => Array.isArray(node.props.steps)), undefined);
 });
 
 async function selectModel(result, { aborted = false, currentModel = "old", global = false, onSelected = () => {} } = {}) {

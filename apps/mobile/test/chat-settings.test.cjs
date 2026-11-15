@@ -24,7 +24,7 @@ function renderDrawer(props, reduced = false) {
     assert.ok(name in modules, name);
     return modules[name];
   });
-  return exports.SettingsDrawer({ canWrite: true, reasoningLabel: "高", showProcess: false, ...props });
+  return exports.SettingsDrawer({ canWrite: true, reasoningLabel: "高", ...props });
 }
 
 function find(node, predicate) {
@@ -34,18 +34,16 @@ function find(node, predicate) {
   return find([node.props.children, node.props.trailing], predicate);
 }
 
-test("抽屉集中呈现模型、思考强度和过程开关，并保持各自操作", () => {
+test("抽屉保留模型和思考强度操作，移除过程开关", () => {
   const events = [];
-  const tree = renderDrawer({ showProcess: true, onModel: () => events.push("model"),
-    onReasoning: () => events.push("reasoning"), onToggleProcess: () => events.push("process") });
+  const tree = renderDrawer({ onModel: () => events.push("model"),
+    onReasoning: () => events.push("reasoning") });
   assert.equal(tree.type, "Modal");
   for (const label of ["模型", "思考强度：高"]) {
     find(tree, (node) => node.props.accessibilityLabel === label).props.onPress();
   }
-  const toggle = find(tree, (node) => node.type === "Switch");
-  assert.equal(toggle.props.value, true);
-  toggle.props.onValueChange(false);
-  assert.deepEqual(events, ["model", "reasoning", "process"]);
+  assert.equal(find(tree, (node) => node.type === "Switch"), undefined);
+  assert.deepEqual(events, ["model", "reasoning"]);
   assert.equal(find(tree, (node) => node.type === "SafeAreaView").props.accessibilityViewIsModal, true);
 });
 

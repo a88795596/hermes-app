@@ -104,7 +104,7 @@ function findNode(node, matches) {
 test("仅当前会话回复中显示流光，等待、结束、失败、停止和其他页面不显示", () => {
   for (const status of ["accepted", "queued", "streaming", "final", "failed", "cancelled", "unknown"]) {
     const screen = mountWorkspace({ params: { page: "conversation", topicId: "topic" }, context: {
-      drafts: {}, draftAttachments: {}, showProcess: {}, workspace: {
+      drafts: {}, draftAttachments: {}, workspace: {
         detail: { topic: { topic_id: "topic", title: "会话" }, messages: [{ role: "user", status }] },
       },
     } });
