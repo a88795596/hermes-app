@@ -26,29 +26,32 @@ export const reasoningLabels: Record<ReasoningEffort, string> = {
   none: "关闭", minimal: "最低", low: "低", medium: "中", high: "高", xhigh: "很高", max: "最高", ultra: "极限",
 };
 
-export function ComposerSheet({ title, subtitle, busy, onClose, back, closeLabel, children }: {
+export function ComposerSheet({ title, subtitle, busy, onClose, back, closeLabel, embedded, children }: {
   title: string;
   subtitle?: string;
   busy?: boolean;
   onClose: () => void;
   back?: ReactNode;
   closeLabel?: string;
+  embedded?: boolean;
   children: ReactNode;
 }) {
   const { colors, styles } = useTheme();
   const reduced = useReduceMotion();
   const close = <CloseButton disabled={busy} accessibilityLabel={closeLabel} onPress={onClose} />;
+  const content = <Animated.View style={[menu.content, embedded && menu.embedded, !reduced && motion.reveal]}>
+    {!embedded && <View style={[menu.handle, { backgroundColor: colors.edge }]} />}
+    <View style={menu.header}><PageHeader title={title} leading={back} trailing={close} /></View>
+    {subtitle && <Text style={styles.caption}>{subtitle}</Text>}
+    {children}
+  </Animated.View>;
+  if (embedded) return content;
   return (
     <Modal transparent animationType={reduced ? "none" : "fade"} onRequestClose={() => { if (!busy) onClose(); }}>
       <KeyboardAvoidingView style={menu.backdrop} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <SafeAreaView accessibilityViewIsModal importantForAccessibility="yes" edges={["bottom", "left", "right"]}
           style={[menu.sheet, { backgroundColor: colors.background }]}>
-          <Animated.View style={[menu.content, !reduced && motion.reveal]}>
-            <View style={[menu.handle, { backgroundColor: colors.edge }]} />
-            <View style={menu.header}><PageHeader title={title} leading={back} trailing={close} /></View>
-            {subtitle && <Text style={styles.caption}>{subtitle}</Text>}
-            {children}
-          </Animated.View>
+          {content}
         </SafeAreaView>
       </KeyboardAvoidingView>
     </Modal>
@@ -105,11 +108,13 @@ export function AttachmentMenu({ busy, onClose, onPick }: {
   );
 }
 
-export function ReasoningMenu({ effort, status, unavailable, onClose, onRequest }: {
+export function ReasoningMenu({ effort, status, unavailable, embedded, onClose, onRequest, onBusyChange }: {
   effort: ReasoningEffort | null | undefined;
   status?: "pending" | "unknown";
   unavailable?: string;
+  embedded?: boolean;
   onClose: () => void;
+  onBusyChange?: (busy: boolean) => void;
   onRequest: (id: string, effort: ReasoningEffort | null, signal: AbortSignal) =>
     ReturnType<ReturnType<typeof useWorkspace>["requestReasoning"]>;
 }) {
@@ -131,6 +136,7 @@ export function ReasoningMenu({ effort, status, unavailable, onClose, onRequest 
     const controller = new AbortController();
     pending.current = controller;
     setBusy(true);
+    onBusyChange?.(true);
     setError(undefined);
     try {
       const result = await onRequest(id, next, controller.signal);
@@ -151,12 +157,14 @@ export function ReasoningMenu({ effort, status, unavailable, onClose, onRequest 
       }
     } finally {
       pending.current = undefined;
+      onBusyChange?.(false);
       if (!controller.signal.aborted) setBusy(false);
     }
   }
 
   return (
-    <ComposerSheet title="思考强度" subtitle="仅影响当前话题的后续回复" busy={busy} onClose={onClose}>
+    <ComposerSheet title="思考强度" subtitle="仅影响当前话题的后续回复" busy={busy} embedded={embedded}
+      closeLabel={embedded ? "返回会话设置" : undefined} onClose={onClose}>
       {unavailable && <Text style={styles.muted}>{unavailable}</Text>}
       {waiting && <Text style={styles.muted}>Hermes 正在处理上一次切换。</Text>}
       {status === "unknown" && !error && <Notice>上一次切换尚未确认，请重新选择档位。</Notice>}
@@ -282,6 +290,7 @@ const menu = StyleSheet.create({
   sheet: { width: "100%", maxWidth: 680, maxHeight: "92%", flexShrink: 1, alignSelf: "center",
     borderTopLeftRadius: 28, borderTopRightRadius: 28 },
   content: { paddingHorizontal: 24, paddingTop: 12, paddingBottom: 16, gap: 12, flexShrink: 1 },
+  embedded: { flex: 1, paddingTop: 0 },
   handle: { alignSelf: "center", width: 44, height: 4, borderRadius: 2 },
   header: { marginHorizontal: -24, marginBottom: -6 },
   list: { flexGrow: 0, flexShrink: 1 },

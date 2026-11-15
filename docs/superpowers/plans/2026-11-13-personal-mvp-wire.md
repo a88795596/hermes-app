@@ -20,7 +20,7 @@
 | PUT /topics/:id/archive | `{archived:boolean}` → `Topic`。重复设置同一状态安全，保留原会话和消息。 |
 | POST /topics/:id/submissions | `{submission_id,text,attachments?:{name,mime,size,content_base64}[]}` → `Message` 用户气泡，幂等 202。有附件时可传空正文。 |
 | POST /topics/:id/interrupt | `{request_id,submission_id}` → `{status:"accepted"}`，幂等 202 |
-| POST /topics/:id/model-requests | `{request_id}` 请求目录，`{request_id,provider,model,confirm?}` 选择模型。幂等 202 |
+| POST /topics/:id/model-requests | `{request_id}` 请求目录，`{request_id,provider,model,global?,confirm?}` 选择模型。`global:true` 同时设为当前 profile 默认模型，省略或 `false` 仅影响当前会话。幂等 202 |
 | GET /topics/:id/model-requests/:requestId | 查询模型请求的 `pending`、`ok`、`error` 或 `unknown` 状态。成功时返回目录、选择结果或 Hermes 确认提示 |
 | POST /topics/:id/reasoning-requests | `{request_id,effort}` 切换思考强度；`effort:null` 恢复默认。幂等 202 |
 | GET /topics/:id/reasoning-requests/:requestId | 查询切换的 `pending`、`ok`、`error` 或 `unknown` 状态 |
@@ -57,7 +57,7 @@
 - `submit` 的内部可选 `steer_if_running:true` 开启自动判断。连接器对无附件输入读取 `session.resume`：运行中按返回的代次调用 `session.steer({session_id,text,execution_generation})`，否则使用 `prompt.submit`。含附件的输入、旧 HTTP Runs 和未携带标记的历史命令仍走普通提交。旧连接器忽略该内部标记，保持原提交行为。
 - 原生 `session.steer` 没有幂等键、受理 ID 或可查询回执。连接器先持久保存命令以去重；确认同一代次、epoch 和文本的 `queued` 回执后返回 `command_result` 的 `steering:true,status:"ok"`，不附带 `admission_id`，BFF 将补充消息设为 `final`。`stale_generation`、方法不支持、明确 `rejected,delivered:false` 才允许安全转普通提交；其余拒绝、超时、断线和矛盾响应保留 `unknown`，不重复投递。BFF 只接受开启该策略的普通提交返回 `steering:true`。
 - `respond` 的请求体为 `{control_id,response_id,answer}`。澄清支持文本、复选标签数组的 JSON 字符串和空字符串跳过。连接器按上游请求类型转换。
-- `model_options` 的请求体为 `{}`。`select_model` 的请求体为 `{provider,model,confirm?}`。两者的成功回执携带 `model_result`。
+- `model_options` 的请求体为 `{}`。`select_model` 的请求体为 `{provider,model,global?,confirm?}`，`global` 仅接受布尔值。两者的成功回执携带 `model_result`。HTTP Runs 模式通过 Hermes 原版控制台的 `POST /api/model/set?profile=当前档案`（`scope:main`）保存默认模型，确认成功后才记录会话选择并在 `selected` 回执带 `global:true`；客户端仅凭该回执确认已保存默认值。不会修改其他 profile。Hermes 要求风险确认时返回绑定话题、profile 和模型的凭证，5 分钟内有效且仅可使用一次；连接器重启后须重新选择。保存结果不明返回 `unknown`。旧 Canonical 网关不支持 `global:true`，明确拒绝而不忽略该参数。
 - `select_reasoning` 的请求体为 `{effort}`，仅发给声明 `X-Hermes-Mobile-Reasoning: 1` 的连接器。
 - `watch` 的请求体为 `{}`，使用独立的临时 `command_id`。重连时同步每个已绑定话题。连接器先登记作用域，再恢复上游。BFF 忽略 `watch` 的结果，且不将临时命令写入命令表。
 

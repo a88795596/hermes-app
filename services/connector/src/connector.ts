@@ -254,6 +254,12 @@ export class CanonicalConnector {
     }
     if (command.kind === 'model_options' || command.kind === 'select_model') {
       if (!this.spool.begin(id, digest)) return;
+      if (command.kind === 'select_model' && command.body.global === true) {
+        this.spool.finish(id, { ...result(id, 'error', {
+          error: '当前网关模式不支持保存默认模型，请使用 HTTP Runs 模式。',
+        }) });
+        return;
+      }
       try {
         const catalog = modelCatalog(await session.gateway.rpc('model.options', { session_id: binding.sessionId }));
         let receipt = result(id, 'ok', { model_result: { type: 'catalog', catalog } });
@@ -270,7 +276,8 @@ export class CanonicalConnector {
               receipt = result(id, 'error', { error: '请等待当前回复完成后再切换模型。' });
             } else if (current() && session.gateway.connected) {
               const reply = await session.gateway.rpc('session.mutate', {
-                session_id: binding.sessionId, request_id: id, operation: 'model', payload: command.body,
+                session_id: binding.sessionId, request_id: id, operation: 'model',
+                payload: { provider, model, ...(command.body.confirm && { confirm: command.body.confirm }) },
                 expected_revision: canonicalInteger(snapshot.revision),
                 expected_generation: canonicalInteger(snapshot.executionGeneration),
               }, id);

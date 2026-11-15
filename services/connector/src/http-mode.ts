@@ -1,4 +1,5 @@
 import { setTimeout as delay } from 'node:timers/promises';
+import { randomBytes } from 'node:crypto';
 import type { Command, ConnectorEvent, Control, ModelSelection, ReasoningEffort, TopicQuery, TopicQueryData } from '@hermes-mobile/protocol';
 import { MAX_CLARIFY_CHOICE_BYTES } from '@hermes-mobile/protocol';
 import { attachmentBytes, attachmentFilename, type DownloadAttachment, type ReceiveAttachments } from './attachments.js';
@@ -7,6 +8,7 @@ import { integer, object, string } from './gateway.js';
 import type { JsonObject, WebappAccess } from './gateway.js';
 import { addProcessText, removeStreamedCommentary, updateProcessTool } from './message-process.js';
 import { hasModel, modelCatalog } from './models.js';
+import type { createDashboardManagement } from './management.js';
 import type { Binding, Spool, Turn } from './spool.js';
 import { QueryUnavailable, queryTimeout, runtimeVersion, sessionStatus, skillList, webappSkills } from './topic-query.js';
 import { topicTitleEvent } from './topic-title.js';
@@ -71,9 +73,10 @@ type Options = {
   downloadAttachment: DownloadAttachment;
   receiveAttachments?: ReceiveAttachments;
   webapp?: WebappAccess;
+  manage?: ReturnType<typeof createDashboardManagement>;
 };
 
-export function createHttpConnector({ url, token, send, spool, downloadAttachment, receiveAttachments, webapp }: Options) {
+export function createHttpConnector({ url, token, send, spool, downloadAttachment, receiveAttachments, webapp, manage }: Options) {
   const endpoint = URL.parse(url);
   if (!endpoint || !['http:', 'https:'].includes(endpoint.protocol) ||
       !['127.0.0.1', '[::1]'].includes(endpoint.hostname) || endpoint.username || endpoint.password ||
@@ -84,6 +87,7 @@ export function createHttpConnector({ url, token, send, spool, downloadAttachmen
   const shutdown = new AbortController();
   const watchers = new Map<string, AbortController>();
   const commands = new Set<string>();
+  const modelConfirmations = new Map<string, { selection: string; expires: number }>();
 
   function request(profile: string, path: string, options: RequestInit = {}, timeoutMs = 15_000): Promise<Response> {
     return fetch(new URL(`/p/${encodeURIComponent(profile)}${path}`, origin), {
@@ -412,12 +416,45 @@ export function createHttpConnector({ url, token, send, spool, downloadAttachmen
           if (command.kind === 'model_options') {
             receipt = result(command_id, 'ok', { model_result: { type: 'catalog', catalog } });
           } else {
-            const { provider, model, confirm } = command.body;
-            if (confirm || !hasModel(catalog, { provider, model })) {
+            const { provider, model, confirm, global } = command.body;
+            if (!hasModel(catalog, { provider, model }) || (confirm && !global)) {
               receipt = result(command_id, 'error', { error: '此模型已不可用，请重新打开 /model。' });
+            } else if (global && (!manage || ['all', 'current'].includes(profile_ref))) {
+              receipt = result(command_id, 'error', { error: '无法保存默认模型，请检查当前 profile 的 Hermes 控制台连接。' });
             } else if (current() && !shutdown.signal.aborted) {
-              selection = { topicId: topic_id, provider, model };
-              receipt = result(command_id, 'ok', { model_result: { type: 'selected', selection: { provider, model } } });
+              let savedDefault = !global;
+              if (global && manage) {
+                const identity = JSON.stringify([topic_id, profile_ref, bound.sessionId, provider, model]);
+                for (const [token, pending] of modelConfirmations) {
+                  if (pending.expires <= Date.now()) modelConfirmations.delete(token);
+                }
+                if (confirm && modelConfirmations.get(confirm)?.selection !== identity) {
+                  receipt = result(command_id, 'error', { error: '模型确认已失效，请重新选择模型。' });
+                } else {
+                  if (confirm) modelConfirmations.delete(confirm);
+                  receipt = result(command_id, 'unknown', { error: 'Hermes 无法确认默认模型是否已保存，请检查配置后重试。' });
+                  const response = await manage({ type: 'management_request', request_id: command_id, profile_ref,
+                    operation: 'model.set', input: { scope: 'main', provider, model,
+                      ...(confirm && { confirm_expensive_model: true }) } });
+                  if (!response.ok) {
+                    receipt = result(command_id, response.status >= 500 ? 'unknown' : 'error', { error: response.message });
+                  } else {
+                    const data = object(response.data);
+                    if (data?.confirm_required === true) {
+                      const token = randomBytes(32).toString('hex');
+                      if (modelConfirmations.size >= 64) modelConfirmations.delete(modelConfirmations.keys().next().value!);
+                      modelConfirmations.set(token, { selection: identity, expires: Date.now() + 5 * 60_000 });
+                      receipt = result(command_id, 'ok', { model_result: { type: 'confirmation', confirm: token,
+                        message: string(data.confirm_message) ?? 'Hermes 要求确认此模型变更，是否继续？' } });
+                    } else savedDefault = data?.ok === true;
+                  }
+                }
+              }
+              if (savedDefault) {
+                selection = { topicId: topic_id, provider, model };
+                receipt = result(command_id, 'ok', { model_result: { type: 'selected', selection: { provider, model },
+                  ...(global && { global: true }) } });
+              }
             }
           }
         }

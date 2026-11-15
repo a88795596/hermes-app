@@ -212,12 +212,14 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
 
   api.post(`${prefix}/topics/:id/model-requests`, requireDevice, async (request, reply) => {
     const topicId = pathId(request);
-    const body = record(request.body, ["request_id", "provider", "model", "confirm"]);
+    const body = record(request.body, ["request_id", "provider", "model", "global", "confirm"]);
     const id = uuid(body.request_id, "请求 ID");
     const confirm = body.confirm === undefined ? undefined : string(body.confirm, "模型确认凭证", 64);
     if (confirm !== undefined && !/^[a-f0-9]{64}$/.test(confirm)) invalid("模型确认凭证无效。");
-    const selection = body.provider === undefined && body.model === undefined && confirm === undefined ? undefined : {
+    if (body.global !== undefined && typeof body.global !== "boolean") invalid("模型默认设置必须采用布尔值。");
+    const selection = body.provider === undefined && body.model === undefined && body.global === undefined && confirm === undefined ? undefined : {
       provider: string(body.provider, "模型服务商", 256), model: string(body.model, "模型", 512),
+      ...(body.global === undefined ? {} : { global: body.global }),
       ...(confirm === undefined ? {} : { confirm }),
     };
     const result = await store.transaction((db) => requestModel(db, refs, topicId, id, selection));

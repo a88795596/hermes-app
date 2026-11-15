@@ -61,7 +61,7 @@ async function main(): Promise<void> {
   const canonical = new CanonicalConnector(webapp ?? process.env.HERMES_BIN ?? 'hermes',
     spool, () => socket?.terminate(), downloadAttachment, receiveAttachments);
   const legacy = httpUrl && httpKey ? createHttpConnector({
-    url: httpUrl, token: httpKey, spool, send: () => flush(), downloadAttachment, receiveAttachments, webapp,
+    url: httpUrl, token: httpKey, spool, send: () => flush(), downloadAttachment, receiveAttachments, webapp, manage,
   }) : undefined;
   for (const id of spool.unfinished()) {
     spool.finish(id, { ...result(id, 'unknown', { error: 'Hermes 无法确认执行结果' }) });

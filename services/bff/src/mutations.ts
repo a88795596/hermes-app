@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { DEFAULT_TOPIC_TITLE, topicTitlePreview } from "@hermes-mobile/protocol";
-import type { AttachmentReference, Command, Control, Message, ModelSelection, ReasoningEffort, Topic } from "@hermes-mobile/protocol";
+import type { AttachmentReference, Command, Control, Message, ModelSelectionRequest, ReasoningEffort, Topic } from "@hermes-mobile/protocol";
 import type { PoolClient } from "pg";
 import { profileId, topicData, topicRow } from "./projections.js";
 import { ApiError, conflict, missing } from "./validation.js";
@@ -112,7 +112,7 @@ export async function interrupt(db: PoolClient, refs: Set<string>, topicId: stri
 }
 
 export async function requestModel(
-  db: PoolClient, refs: Set<string>, topicId: string, requestId: string, selection?: ModelSelection & { confirm?: string },
+  db: PoolClient, refs: Set<string>, topicId: string, requestId: string, selection?: ModelSelectionRequest,
 ) {
   const row = await topicRow(db, topicId, refs);
   const kind = selection ? "select_model" : "model_options";
