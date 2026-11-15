@@ -1,6 +1,6 @@
 import { randomUUID } from "expo-crypto";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ActivityIndicator, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { ActivityIndicator, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import Animated from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { reasoningEfforts, type ReasoningEffort, type Skill } from "@hermes-mobile/protocol";
@@ -8,16 +8,16 @@ import type { useWorkspace } from "../sync/use-workspace";
 import { haptic } from "../ui/haptics";
 import { motion, useReduceMotion } from "../ui/motion";
 import { profileLabel } from "../ui/text";
-import { Action, CloseButton, Icon, Notice, useTheme } from "../ui/theme";
+import { Action, CloseButton, Icon, Notice, useTheme, type IconName } from "../ui/theme";
 
 const commands = [
-  { name: "status", label: "查看会话状态" },
-  { name: "model", label: "选择模型" },
-  { name: "stop", label: "停止当前回复" },
-  { name: "skills", label: "浏览技能" },
-  { name: "new", label: "新建会话" },
-  { name: "version", label: "查看 Hermes 版本" },
-] as const;
+  { name: "status", label: "查看会话状态", icon: "chat" },
+  { name: "model", label: "选择模型", icon: "model" },
+  { name: "stop", label: "停止当前回复", icon: "stop" },
+  { name: "skills", label: "浏览技能", icon: "skill" },
+  { name: "new", label: "新建会话", icon: "compose" },
+  { name: "version", label: "查看 Hermes 版本", icon: "activity" },
+] as const satisfies readonly { name: string; label: string; icon: IconName }[];
 
 export type ComposerCommand = (typeof commands)[number]["name"];
 
@@ -25,33 +25,68 @@ export const reasoningLabels: Record<ReasoningEffort, string> = {
   none: "关闭", minimal: "最低", low: "低", medium: "中", high: "高", xhigh: "很高", max: "最高", ultra: "极限",
 };
 
-function ComposerSheet({ title, subtitle, busy, onClose, children }: {
+export function ComposerSheet({ title, subtitle, busy, onClose, back, closeLabel, children }: {
   title: string;
   subtitle?: string;
   busy?: boolean;
   onClose: () => void;
+  back?: ReactNode;
+  closeLabel?: string;
   children: ReactNode;
 }) {
   const { colors, styles } = useTheme();
   const reduced = useReduceMotion();
+  const close = <CloseButton disabled={busy} accessibilityLabel={closeLabel} onPress={onClose} />;
   return (
     <Modal transparent animationType={reduced ? "none" : "fade"} onRequestClose={() => { if (!busy) onClose(); }}>
-      <View style={menu.backdrop}>
-        <SafeAreaView accessibilityViewIsModal edges={["bottom", "left", "right"]}
-          style={[menu.sheet, { backgroundColor: colors.surface }]}>
+      <KeyboardAvoidingView style={menu.backdrop} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        <SafeAreaView accessibilityViewIsModal importantForAccessibility="yes" edges={["bottom", "left", "right"]}
+          style={[menu.sheet, { backgroundColor: colors.background }]}>
           <Animated.View style={[menu.content, !reduced && motion.reveal]}>
-            <View style={menu.header}>
-              <View style={menu.grow}>
-                <Text accessibilityRole="header" style={styles.heading}>{title}</Text>
-                {subtitle && <Text style={styles.caption}>{subtitle}</Text>}
+            <View style={[menu.handle, { backgroundColor: colors.edge }]} />
+            <View>
+              {back && <View style={menu.header}>{back}{close}</View>}
+              <View style={menu.header}>
+                <View style={menu.grow}>
+                  <Text accessibilityRole="header" style={[styles.heading, menu.sheetTitle]}>{title}</Text>
+                  {subtitle && <Text style={styles.caption}>{subtitle}</Text>}
+                </View>
+                {!back && close}
               </View>
-              <CloseButton disabled={busy} onPress={onClose} />
             </View>
             {children}
           </Animated.View>
         </SafeAreaView>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
+  );
+}
+
+export function PickerRow({ title, leading, trailing, filled, selected, toggled, disabled, feedback, onPress }: {
+  title: string;
+  leading?: ReactNode;
+  trailing?: IconName;
+  filled?: boolean;
+  selected: boolean;
+  toggled?: boolean;
+  disabled: boolean;
+  feedback?: false;
+  onPress: () => void;
+}) {
+  const { colors, styles } = useTheme();
+  const [focused, setFocused] = useState(false);
+  return (
+    <Pressable accessibilityRole="button" accessibilityState={{ selected, disabled }} aria-pressed={toggled}
+      disabled={disabled} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+      onPress={() => { if (!disabled) { if (feedback !== false) haptic("selection"); onPress(); } }}
+      style={({ pressed }) => [menu.row, menu.option, {
+        backgroundColor: selected ? colors.tint : filled ? colors.field : "transparent",
+        borderBottomColor: selected || filled ? "transparent" : colors.edge,
+      }, (selected || filled) && menu.roundedOption, focused && styles.focused, (pressed || disabled) && styles.faded]}>
+      {leading}
+      <Text style={[styles.text, menu.grow, selected && menu.emphasis]}>{title}</Text>
+      {trailing && <Icon name={trailing} size={16} color={colors.accent} />}
+    </Pressable>
   );
 }
 
@@ -60,12 +95,18 @@ export function AttachmentMenu({ busy, onClose, onPick }: {
   onClose: () => void;
   onPick: (kind: "image" | "file") => void;
 }) {
-  const { styles } = useTheme();
+  const { colors, styles } = useTheme();
   return (
     <ComposerSheet title="添加附件" busy={busy} onClose={onClose}>
-      <View style={styles.row}>
-        <Action title="图片" icon="photo" disabled={busy} onPress={() => onPick("image")} />
-        <Action title="文件" icon="attachment" disabled={busy} onPress={() => onPick("file")} />
+      <View style={menu.attachments}>
+        {([["image", "图片", "photo"], ["file", "文件", "logs"]] as const).map(([kind, title, icon]) => (
+          <Pressable key={kind} accessibilityRole="button" accessibilityState={{ disabled: busy }} disabled={busy}
+            onPress={() => { haptic("light"); onPick(kind); }}
+            style={({ pressed }) => [styles.button, menu.attachmentChoice, { backgroundColor: colors.field }, (pressed || busy) && styles.faded]}>
+            <Icon name={icon} size={32} color={colors.accent} />
+            <Text style={[styles.heading, styles.center]}>{title}</Text>
+          </Pressable>
+        ))}
       </View>
     </ComposerSheet>
   );
@@ -80,19 +121,20 @@ export function ReasoningMenu({ effort, status, unavailable, onClose, onRequest 
     ReturnType<ReturnType<typeof useWorkspace>["requestReasoning"]>;
 }) {
   const { colors, styles } = useTheme();
-  const { height } = useWindowDimensions();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [attemptedEffort, setAttemptedEffort] = useState<ReasoningEffort | null>();
   const pending = useRef<AbortController>(undefined);
   const attempt = useRef<{ id: string; effort: ReasoningEffort | null }>(undefined);
   useEffect(() => () => pending.current?.abort(), []);
-  const waiting = status === "pending" && !attempt.current;
+  const waiting = status === "pending" && attemptedEffort === undefined;
 
   async function select(next: ReasoningEffort | null) {
-    if (unavailable || waiting || pending.current) return;
     const prior = attempt.current;
+    if (unavailable || pending.current || (status === "pending" && prior?.effort !== next)) return;
     const id = prior?.effort === next ? prior.id : randomUUID();
     attempt.current = { id, effort: next };
+    setAttemptedEffort(next);
     const controller = new AbortController();
     pending.current = controller;
     setBusy(true);
@@ -101,6 +143,7 @@ export function ReasoningMenu({ effort, status, unavailable, onClose, onRequest 
       const result = await onRequest(id, next, controller.signal);
       if (controller.signal.aborted) return;
       attempt.current = undefined;
+      setAttemptedEffort(undefined);
       if (result.status === "ok") {
         if (next !== effort || status) haptic("success");
         onClose();
@@ -129,12 +172,13 @@ export function ReasoningMenu({ effort, status, unavailable, onClose, onRequest 
         <ActivityIndicator color={colors.accent} />
         <Text accessibilityLiveRegion="polite" style={styles.muted}>正在切换思考强度…</Text>
       </View>}
-      <ScrollView style={{ maxHeight: height * 0.58, flexGrow: 0 }} contentContainerStyle={menu.options}>
+      <ScrollView style={menu.list}>
         {[null, ...reasoningEfforts].map((level) => (
-          <Action key={level ?? "default"} title={level === null ? "跟随配置档案" : level === "none" ? "关闭思考" : reasoningLabels[level]}
-            toggled={level === effort} selected={level === effort} icon={level === effort ? "check" : undefined}
-            feedback={level === effort && !status ? false : "selection"}
-            disabled={busy || waiting || !!unavailable || (status === "pending" && attempt.current?.effort !== level)}
+          <PickerRow key={level ?? "default"} title={level === null ? "跟随配置档案" : level === "none" ? "关闭思考" : reasoningLabels[level]}
+            toggled={level === effort} selected={level === effort}
+            leading={level === effort && <Icon name="check" size={17} color={colors.accent} />}
+            feedback={level === effort && !status ? false : undefined}
+            disabled={busy || !!unavailable || (status === "pending" && attemptedEffort !== level)}
             onPress={() => void select(level)} />
         ))}
       </ScrollView>
@@ -148,7 +192,6 @@ function Skills({ call, path, onSelect }: {
   onSelect: (skill: Skill) => void;
 }) {
   const { colors, styles } = useTheme();
-  const { height } = useWindowDimensions();
   const [attempt, setAttempt] = useState(0);
   const [skills, setSkills] = useState<Skill[]>();
   const [error, setError] = useState<string>();
@@ -177,17 +220,20 @@ function Skills({ call, path, onSelect }: {
   return (
     <FlatList
       data={skills}
-      style={{ maxHeight: height * 0.58, flexGrow: 0 }}
+      style={menu.list}
       keyExtractor={(item, index) => `${item.name}:${index}`}
       ListEmptyComponent={<Text style={styles.muted}>此配置档案暂无可用技能。</Text>}
       renderItem={({ item }) => (
         <Pressable accessibilityRole="button" accessibilityLabel={item.name} accessibilityHint="带入输入框"
           onPress={() => { haptic("selection"); onSelect(item); }}
-          style={({ pressed }) => [menu.skill, { borderBottomColor: colors.edge }, pressed && styles.faded]}>
+          style={({ pressed }) => [menu.row, { borderBottomColor: colors.edge }, pressed && styles.faded]}>
+          <View style={[menu.skillIcon, { backgroundColor: colors.tint }]}>
+            <Icon name="skill" size={18} color={colors.accent} />
+          </View>
           <View style={menu.grow}>
             <Text style={styles.heading}>{item.name}</Text>
             {!!item.category && <Text style={styles.caption}>{item.category}</Text>}
-            {!!item.description && <Text style={styles.text}>{item.description}</Text>}
+            {!!item.description && <Text style={[styles.caption, { color: colors.foreground }]}>{item.description}</Text>}
           </View>
           <Icon name="chevron" size={15} color={colors.accent} />
         </Pressable>
@@ -210,7 +256,6 @@ export function ComposerMenu({
   onSkill: (skill: Skill) => void;
 }) {
   const { colors, styles } = useTheme();
-  const { height } = useWindowDimensions();
 
   return (
     <ComposerSheet title={kind === "skills" ? "技能" : "命令"} subtitle={kind === "skills" && profile ? profileLabel(profile) : undefined}
@@ -219,14 +264,17 @@ export function ComposerMenu({
       {kind === "skills" ? <Skills call={call} path={`/topics/${id}`} onSelect={onSkill} /> : (
         <FlatList
           data={commands.filter(({ name }) => name === "new" || (connected && (canStop || name !== "stop")))}
-          style={{ maxHeight: height * 0.58, flexGrow: 0 }}
+          style={menu.list}
           keyExtractor={({ name }) => name}
-          renderItem={({ item: { name, label } }) => (
+          renderItem={({ item: { name, label, icon } }) => (
             <Pressable accessibilityRole="button" accessibilityLabel={`/${name} ${label}`}
               onPress={() => { haptic(name === "stop" ? "warning" : "light"); onCommand(name); }}
-              style={({ pressed }) => [menu.skill, { borderBottomColor: colors.edge }, pressed && styles.faded]}>
-              <Text style={styles.heading}>/{name}</Text>
-              <Text style={[styles.muted, menu.grow]}>{label}</Text>
+              style={({ pressed }) => [menu.row, { borderBottomColor: colors.edge }, pressed && styles.faded]}>
+              <Icon name={icon} size={21} color={colors.accent} />
+              <View style={[menu.grow, menu.commandText]}>
+                <Text style={styles.heading}>/{name}</Text>
+                <Text style={styles.caption}>{label}</Text>
+              </View>
               <Icon name="chevron" size={15} color={colors.accent} />
             </Pressable>
           )}
@@ -237,11 +285,21 @@ export function ComposerMenu({
 }
 
 const menu = StyleSheet.create({
-  backdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0, 0, 0, 0.4)" },
-  sheet: { width: "100%", maxWidth: 680, alignSelf: "center", borderTopLeftRadius: 18, borderTopRightRadius: 18 },
-  content: { padding: 16, gap: 12 },
-  header: { flexDirection: "row", alignItems: "center", gap: 12 },
-  options: { gap: 6 },
+  backdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(53, 40, 32, 0.27)" },
+  sheet: { width: "100%", maxWidth: 680, maxHeight: "92%", flexShrink: 1, alignSelf: "center",
+    borderTopLeftRadius: 28, borderTopRightRadius: 28 },
+  content: { paddingHorizontal: 24, paddingTop: 12, paddingBottom: 16, gap: 12, flexShrink: 1 },
+  handle: { alignSelf: "center", width: 44, height: 4, borderRadius: 2 },
+  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", minHeight: 44, gap: 8 },
+  sheetTitle: { fontSize: 22, lineHeight: 28 },
+  list: { flexGrow: 0, flexShrink: 1 },
   grow: { flex: 1, minWidth: 0 },
-  skill: { minHeight: 44, paddingVertical: 9, flexDirection: "row", alignItems: "center", gap: 12, borderBottomWidth: StyleSheet.hairlineWidth },
+  row: { minHeight: 56, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: 12, borderBottomWidth: StyleSheet.hairlineWidth },
+  option: { paddingHorizontal: 12, borderWidth: 1, borderColor: "transparent" },
+  roundedOption: { borderRadius: 11 },
+  emphasis: { fontWeight: "600" },
+  skillIcon: { width: 40, height: 40, borderRadius: 10, alignItems: "center", justifyContent: "center" },
+  commandText: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", columnGap: 12, rowGap: 2 },
+  attachments: { flexDirection: "row", gap: 12 },
+  attachmentChoice: { flex: 1, flexDirection: "column", justifyContent: "center", minHeight: 108, padding: 12, gap: 8, borderRadius: 16 },
 });

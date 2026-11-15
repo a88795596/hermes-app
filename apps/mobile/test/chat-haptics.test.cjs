@@ -6,6 +6,7 @@ const ts = require("typescript");
 function mount(file, name, props) {
   const values = [], effects = [], feedback = [];
   let cursor = 0;
+  let requestSequence = 0;
   const jsx = (type, props) => ({ type, props });
   const exported = {};
   const source = ts.transpileModule(readFileSync(require.resolve(`../src/chat/${file}.tsx`), "utf8"), {
@@ -33,7 +34,7 @@ function mount(file, name, props) {
       };
       case "react-native-reanimated": return { default: { View: "Animated.View" } };
       case "react-native-safe-area-context": return { SafeAreaView: "SafeAreaView", useSafeAreaInsets: () => ({ top: 0 }) };
-      case "expo-crypto": return { randomUUID: () => "request-id" };
+      case "expo-crypto": return { randomUUID: () => `request-${++requestSequence}` };
       case "expo-web-browser": return { openBrowserAsync: async () => {}, WebBrowserPresentationStyle: { PAGE_SHEET: "pageSheet" } };
       case "@hermes-mobile/protocol": return { MAX_ATTACHMENTS: 5, reasoningEfforts: ["low", "high"] };
       case "../ui/haptics": return { haptic: (kind) => feedback.push(kind) };
@@ -43,7 +44,10 @@ function mount(file, name, props) {
         useTheme: () => ({ colors: {}, styles: {} }), Action: "Action", Card: "Card", CloseButton: "CloseButton",
         EmptyState: "EmptyState", Field: "Field", Icon: "Icon", Notice: "Notice",
       };
-      case "./composer-menu": return { reasoningLabels: {}, AttachmentMenu: "AttachmentMenu", ComposerMenu: "ComposerMenu", ReasoningMenu: "ReasoningMenu" };
+      case "./composer-menu": return {
+        reasoningLabels: {}, AttachmentMenu: "AttachmentMenu", ComposerMenu: "ComposerMenu", ReasoningMenu: "ReasoningMenu",
+        ComposerSheet: "ComposerSheet", PickerRow: "PickerRow",
+      };
       case "./model-picker": return { ModelPicker: "ModelPicker" };
       case "./answer-markdown": return { AnswerMarkdown: "AnswerMarkdown" };
       case "./message-attachments": return { MessageAttachments: "MessageAttachments" };
@@ -65,10 +69,11 @@ const flush = () => new Promise(setImmediate);
 const findSend = (tree) => find(tree, (node) => node.props.accessibilityLabel === "发送");
 const findList = (tree) => find(tree, (node) => node.type === "FlatList");
 
-function conversation(enqueue, draft = "测试消息") {
+function conversation(enqueue, draft = "测试消息", { showProcess = false, messages = [] } = {}) {
   return mount("conversation", "Conversation", {
-    id: "topic", topic: { status: "ready" }, draft, attachments: [], session: {},
-    workspace: { ready: true, network: "online", connector_online: true, reasoning_supported: true, profiles: [], pending: [], enqueue },
+    id: "topic", topic: { status: "ready" }, draft, attachments: [], session: {}, showProcess,
+    workspace: { ready: true, network: "online", connector_online: true, reasoning_supported: true, profiles: [], pending: [],
+      detail: { messages }, enqueue },
     onDraftChange() {}, onAttachmentsChange() {},
   });
 }
@@ -92,6 +97,22 @@ test("本地消息保存失败提示错误，禁用的发送不触发触感", as
   findSend(disabled.render()).props.onPress();
   await flush();
   assert.deepEqual(disabled.feedback, []);
+});
+
+test("过程开关只控制时间线，已结束回复保留未确认的工具结果", () => {
+  const messages = [{ message_id: "reply", role: "assistant", text: "已整理。", status: "final", process: [
+    { kind: "reasoning", text: "先按紧急程度整理。" },
+    { kind: "tool", id: "tool", name: "读取笔记", status: "running" },
+  ] }];
+  const processLabel = (node) => node.props.accessibilityRole === "header" && node.props.children === "思考";
+  for (const showProcess of [true, false]) {
+    const screen = conversation(async () => {}, "", { showProcess, messages }).render();
+    const timeline = find(screen, (node) => node.props.steps === messages[0].process);
+    const process = timeline?.type(timeline.props);
+    assert.equal(Boolean(find(process, processLabel)), showProcess);
+    assert.equal(Boolean(find(process, (node) => node.props.children === "读取笔记 · 结果未确认")), showProcess);
+    assert.equal(find(screen, (node) => node.type === "AnswerMarkdown").props.text, "已整理。");
+  }
 });
 
 async function selectModel(result, { aborted = false, currentModel = "old" } = {}) {
@@ -153,4 +174,26 @@ test("思考强度只在确认完成后提示成功，取消后不触发反馈",
     await flush();
     assert.deepEqual(screen.feedback, expected);
   }
+});
+
+test("思考强度请求超时后只允许查询同一档位的请求", async () => {
+  const requests = [];
+  const props = {
+    effort: "low", onClose() {},
+    async onRequest(id, effort) {
+      requests.push({ id, effort });
+      if (requests.length === 1) throw new Error("Hermes 尚未确认请求");
+      return { status: "ok" };
+    },
+  };
+  const screen = mount("composer-menu", "ReasoningMenu", props);
+  const row = (title) => find(screen.render(), (node) => node.props.title === title).props;
+  row("高").onPress();
+  await flush();
+  props.status = "pending";
+  assert.equal(row("低").disabled, true);
+  assert.equal(row("高").disabled, false);
+  row("高").onPress();
+  await flush();
+  assert.deepEqual(requests, [{ id: "request-1", effort: "high" }, { id: "request-1", effort: "high" }]);
 });

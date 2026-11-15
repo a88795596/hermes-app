@@ -11,7 +11,7 @@ const sourceRoot = pathToFileURL(require.resolve("../src/inbox/inbox.tsx")).href
 // Render the actual inbox, shared controls, and Markdown through React Native Web.
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {
-    if (["expo-symbols", "expo-web-browser", "expo-haptics", "react-native-safe-area-context"].includes(specifier)) {
+    if (["expo-symbols", "expo-web-browser", "expo-haptics", "react-native-safe-area-context", "react-native-reanimated"].includes(specifier)) {
       return { url: `inbox-test:${specifier}`, shortCircuit: true };
     }
     if (context.parentURL?.startsWith(sourceRoot) && specifier.startsWith(".")) {
@@ -31,6 +31,9 @@ const hooks = registerHooks({
     }
     if (url === "inbox-test:react-native-safe-area-context") {
       return { format: "commonjs", shortCircuit: true, source: "exports.SafeAreaView = require('react-native-web').View;" };
+    }
+    if (url === "inbox-test:react-native-reanimated") {
+      return { format: "commonjs", shortCircuit: true, source: "exports.cubicBezier = () => undefined;" };
     }
     if (url === "inbox-test:expo-web-browser") {
       return { format: "commonjs", shortCircuit: true,
@@ -109,6 +112,16 @@ test("按档案只显示匹配消息，空档案仍可切换回全部", () => {
   assert.match(empty, /此档案暂无消息/);
   assert.match(empty, />全部</);
   assert.doesNotMatch(empty, /最新报告|早间提醒|昨天报告/);
+});
+
+test("收件箱的两行摘要提取 Markdown 显示文字，保留代码与原样标点", () => {
+  const text = [
+    "## 重点", "", "- 09:30 **产品_需求**", "- [打开清单](https://example.com/preview)",
+    "- `**原样**` 已保留 \\*星号\\*", "", "```ts", "flag__name = 1", "```",
+  ].join("\n");
+  const html = renderList({ items: [{ ...items[0], text }] });
+  assert.match(html, /-webkit-line-clamp:2[^>]*>重点 09:30 产品_需求 打开清单 \*\*原样\*\* 已保留 \*星号\* flag__name = 1</u);
+  assert.doesNotMatch(html, /https:\/\/example\.com\/preview/u);
 });
 
 test("旧缓存没有标题或档案时仍可在全部中阅读原文", () => {

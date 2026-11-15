@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { Attachment } from "@hermes-mobile/protocol";
 import type { Session } from "../auth/session";
 import { haptic } from "../ui/haptics";
+import { useReduceMotion } from "../ui/motion";
 import { Action, CloseButton, Icon, Notice, useTheme } from "../ui/theme";
 import { AnswerMarkdown } from "./answer-markdown";
 import { attachmentKind, type AttachmentContent } from "./attachment-content";
@@ -11,11 +12,13 @@ import { HtmlPreview } from "./html-preview";
 import { loadAttachment } from "./load-attachment";
 import { MediaPlayer } from "./media-player";
 
-function ReceivedFile({ item, session, tint, onOpenLink }: {
+function ReceivedFile({ item: { attachment_id, name, mime, size }, session, tint, onOpenLink }: {
   item: Attachment; session: Session; tint: string; onOpenLink: (url: string) => void;
 }) {
-  const { colors, styles } = useTheme();
-  const kind = attachmentKind(item);
+  const { colors, dark, styles } = useTheme();
+  const { height, width } = useWindowDimensions();
+  const reduced = useReduceMotion();
+  const kind = attachmentKind({ name, mime });
   const [requested, setRequested] = useState(kind === "image");
   const [attempt, setAttempt] = useState(0);
   const [content, setContent] = useState<AttachmentContent>();
@@ -28,10 +31,11 @@ function ReceivedFile({ item, session, tint, onOpenLink }: {
     if (!requested) return;
     const controller = new AbortController();
     let resource: AttachmentContent | undefined;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Invalidate the revoked file URI before waiting for its replacement.
     setContent(undefined);
     setDocument(undefined);
     setError(undefined);
-    void loadAttachment(session, item, controller.signal).then(async (result) => {
+    void loadAttachment(session, { attachment_id, name, mime, size }, controller.signal).then(async (result) => {
       resource = result;
       if (controller.signal.aborted) return result.dispose();
       const text = kind === "html" || kind === "markdown" ? await result.text() : undefined;
@@ -46,7 +50,7 @@ function ReceivedFile({ item, session, tint, onOpenLink }: {
       if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : "无法读取附件，请重试。");
     });
     return () => { controller.abort(); resource?.dispose(); };
-  }, [requested, attempt, session, item.attachment_id, item.size, item.name, item.mime, kind]);
+  }, [requested, attempt, session, attachment_id, name, mime, size, kind]);
 
   const retry = () => { setError(undefined); setAttempt((value) => value + 1); setRequested(true); };
   const busy = requested && !content && !error;
@@ -60,40 +64,58 @@ function ReceivedFile({ item, session, tint, onOpenLink }: {
   };
   const loading = busy && <View style={layout.loading}><ActivityIndicator color={colors.accent} /><Text style={styles.caption}>正在加载…</Text></View>;
   const failure = error && <View style={layout.error}><Notice>{error}</Notice>{kind !== "file" && <Action title="重试" onPress={retry} />}</View>;
+  const aspectRatio = Math.max(0.5, Math.min(2, dimensions.width / dimensions.height));
 
   return <View style={layout.file}>
     {kind === "image" && content ? (
-      <Pressable accessibilityRole="button" accessibilityLabel={`查看图片：${item.name}`} onPress={show}>
-        <Image source={{ uri: content.uri }} accessibilityLabel={item.name} resizeMode="contain"
+      <Pressable accessibilityRole="button" accessibilityLabel={`查看图片：${name}`} onPress={show}
+        style={({ pressed }) => pressed && styles.faded}>
+        <Image source={{ uri: content.uri }} accessibilityLabel={name} resizeMode="contain"
           onError={() => setError("无法显示图片，请重试。")}
-          style={[layout.image, { aspectRatio: Math.max(0.5, Math.min(2, dimensions.width / dimensions.height)), backgroundColor: colors.field }]} />
+          style={[layout.image, { aspectRatio, minWidth: Math.min(180, width / 2), backgroundColor: colors.field }]} />
       </Pressable>
     ) : (kind === "audio" || kind === "video") && content ? (
-      <MediaPlayer uri={content.uri} kind={kind} name={item.name} />
+      <MediaPlayer uri={content.uri} kind={kind} name={name} />
     ) : (
-      <Pressable accessibilityRole="button" accessibilityLabel={`${label}：${item.name}`} onPress={show}
-        style={({ pressed }) => [layout.row, pressed && styles.faded]}>
-        <Icon name={kind === "image" ? "photo" : "attachment"} size={20} color={tint} />
-        <View style={layout.name}><Text numberOfLines={2} style={[styles.text, { color: tint }]}>{item.name}</Text>
-          <Text style={[styles.caption, { color: tint }]}>{item.size < 1024 * 1024 ? `${Math.ceil(item.size / 1024)} KB` : `${(item.size / 1024 / 1024).toFixed(1)} MB`}</Text></View>
-        <Icon name="chevron" size={12} color={tint} />
+      <Pressable accessibilityRole="button" accessibilityLabel={`${label}：${name}`} onPress={show}
+        style={({ pressed }) => [layout.row, { borderBottomColor: colors.edge }, pressed && styles.faded]}>
+        <View style={[layout.fileIcon, { backgroundColor: colors.tint }]}>
+          <Icon name={kind === "image" ? "photo" : "attachment"} size={18} color={colors.accent} />
+        </View>
+        <View style={layout.name}>
+          <Text numberOfLines={2} style={[styles.heading, layout.fileName, { color: tint }]}>{name}</Text>
+          <Text style={[styles.caption, { color: tint === colors.foreground ? colors.muted : tint }]}>{size < 1024 * 1024 ? `${Math.ceil(size / 1024)} KB` : `${(size / 1024 / 1024).toFixed(1)} MB`}</Text>
+        </View>
+        <Icon name="chevron" size={15} color={tint === colors.foreground ? colors.accent : tint} />
       </Pressable>
     )}
     {!open && loading}
     {!open && failure}
-    <Modal visible={open} animationType="slide" presentationStyle="fullScreen" onRequestClose={() => setOpen(false)}>
-      <SafeAreaView style={[layout.preview, { backgroundColor: colors.surface }]}>
-        <View style={[layout.header, { borderBottomColor: colors.edge }]}>
-          <Text numberOfLines={1} style={[styles.heading, layout.name]}>{item.name}</Text>
-          <CloseButton accessibilityLabel="关闭文件预览" onPress={() => setOpen(false)} />
-        </View>
-        {loading}{failure}
-        {open && content && kind === "image" && <Image source={{ uri: content.uri }} accessibilityLabel={item.name}
-          resizeMode="contain" style={layout.fullImage} />}
-        {open && document !== undefined && kind === "markdown" && <ScrollView contentContainerStyle={layout.markdown}>
-          <AnswerMarkdown text={document} onOpenLink={onOpenLink} />
-        </ScrollView>}
-        {open && document !== undefined && kind === "html" && <HtmlPreview html={document} name={item.name} />}
+    <Modal visible={open} transparent animationType={reduced ? "none" : "slide"} onRequestClose={() => setOpen(false)}>
+      <SafeAreaView style={layout.previewWindow} edges={["top"]}>
+        <SafeAreaView accessibilityViewIsModal importantForAccessibility="yes" edges={["bottom", "left", "right"]}
+          style={[layout.preview, kind === "markdown" && layout.documentSheet, {
+            backgroundColor: colors.background,
+            marginTop: kind === "markdown" ? Math.min(106, height * 0.18) : Math.min(60, height * 0.12),
+          }]}>
+          <View style={[layout.header, { borderBottomColor: colors.edge }]}>
+            {kind === "html" && <View style={[layout.fileIcon, { backgroundColor: colors.tint }]}>
+              <Icon name="logs" size={18} color={colors.accent} />
+            </View>}
+            <Text accessibilityRole="header" numberOfLines={2} style={[styles.heading, layout.name]}>{name}</Text>
+            <CloseButton accessibilityLabel="关闭文件预览" onPress={() => setOpen(false)} />
+          </View>
+          {loading}{failure}
+          {open && content && kind === "image" && <View style={layout.imagePreview}>
+            <Image source={{ uri: content.uri }} accessibilityLabel={name} resizeMode="contain" style={layout.fullImage} />
+          </View>}
+          {open && document !== undefined && kind === "markdown" && <ScrollView contentContainerStyle={layout.markdown}>
+            <AnswerMarkdown text={document} onOpenLink={onOpenLink} />
+          </ScrollView>}
+          {open && document !== undefined && kind === "html" && <View style={layout.html}>
+            <HtmlPreview html={document} name={name} backgroundColor={dark ? "#ffffff" : colors.background} />
+          </View>}
+        </SafeAreaView>
       </SafeAreaView>
     </Modal>
   </View>;
@@ -102,27 +124,36 @@ function ReceivedFile({ item, session, tint, onOpenLink }: {
 export function MessageAttachments({ items, session, tint, onOpenLink }: {
   items: Attachment[]; session?: Session; tint: string; onOpenLink: (url: string) => void;
 }) {
-  const { styles } = useTheme();
+  const { colors, styles } = useTheme();
   return <View style={layout.files}>{items.map((item, index) => item.attachment_id && session ? (
     <ReceivedFile key={item.attachment_id} item={item} session={session} tint={tint} onOpenLink={onOpenLink} />
   ) : (
     <View key={index} style={layout.row}>
-      <Icon name={item.mime.startsWith("image/") ? "photo" : "attachment"} size={15} color={tint} />
-      <Text numberOfLines={2} style={[styles.text, layout.name, { color: tint }]}>{item.name}</Text>
+      <View style={[layout.fileIcon, { backgroundColor: colors.tint }]}>
+        <Icon name={item.mime.startsWith("image/") ? "photo" : "attachment"} size={18} color={colors.accent} />
+      </View>
+      <Text numberOfLines={2} style={[styles.heading, layout.fileName, layout.name, { color: tint }]}>{item.name}</Text>
     </View>
   ))}</View>;
 }
 
 const layout = StyleSheet.create({
-  files: { gap: 10, minWidth: 0 },
-  file: { gap: 6, minWidth: 0, width: "100%" },
-  row: { flexDirection: "row", alignItems: "center", gap: 8, minHeight: 48 },
+  files: { gap: 2, minWidth: 0 },
+  file: { gap: 6, minWidth: 0, width: "100%", paddingBottom: 4 },
+  row: { flexDirection: "row", alignItems: "center", gap: 10, minHeight: 56, paddingVertical: 6, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "transparent" },
+  fileIcon: { width: 36, height: 36, borderRadius: 9, alignItems: "center", justifyContent: "center" },
+  fileName: { fontSize: 16, lineHeight: 22 },
   name: { flex: 1, minWidth: 0 },
-  image: { width: "100%", minWidth: 180, maxHeight: 360, borderRadius: 12 },
+  image: { width: "100%", maxHeight: 360, borderRadius: 16 },
   loading: { padding: 16, flexDirection: "row", gap: 8, alignItems: "center", justifyContent: "center" },
-  error: { padding: 8, gap: 8 },
-  preview: { flex: 1 },
-  header: { flexDirection: "row", alignItems: "center", gap: 12, paddingStart: 16, paddingEnd: 4, borderBottomWidth: StyleSheet.hairlineWidth },
-  fullImage: { flex: 1, width: "100%" },
-  markdown: { padding: 20, maxWidth: 800, width: "100%", alignSelf: "center" },
+  error: { padding: 12, gap: 8 },
+  previewWindow: { flex: 1 },
+  preview: { flex: 1, minHeight: 0 },
+  documentSheet: { borderTopLeftRadius: 24, borderTopRightRadius: 24, overflow: "hidden" },
+  header: { flexDirection: "row", alignItems: "center", minHeight: 56, gap: 8, marginHorizontal: 24,
+    borderBottomWidth: StyleSheet.hairlineWidth },
+  imagePreview: { flex: 1, paddingHorizontal: 16, paddingVertical: 24 },
+  fullImage: { flex: 1, width: "100%", maxWidth: 800, alignSelf: "center", borderRadius: 16 },
+  markdown: { padding: 24, maxWidth: 800, width: "100%", alignSelf: "center" },
+  html: { flex: 1, minHeight: 0, margin: 16 },
 });

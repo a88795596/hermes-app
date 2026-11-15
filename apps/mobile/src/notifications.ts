@@ -12,11 +12,13 @@ export async function enablePushNotifications(session: { origin: string; token: 
     if (Platform.OS === "android") {
       await Notifications.setNotificationChannelAsync("inbox", {
         name: "Hermes 收件箱",
+        // eslint-disable-next-line import/namespace -- Expo exports this runtime enum through its TypeScript barrel.
         importance: Notifications.AndroidImportance.HIGH,
       });
     }
     let permission = await Notifications.getPermissionsAsync();
     if (permission.status !== "granted") permission = await Notifications.requestPermissionsAsync();
+    // eslint-disable-next-line import/namespace -- Expo exports this runtime enum through its TypeScript barrel.
     if (permission.status === "granted" || permission.ios?.status === Notifications.IosAuthorizationStatus.PROVISIONAL) {
       ({ data: token } = await Notifications.getExpoPushTokenAsync({ projectId }));
     }

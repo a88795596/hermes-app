@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ActivityIndicator, Platform, Pressable, StyleSheet, Switch, Text, View, type TextInputProps } from "react-native";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View, type TextInputProps } from "react-native";
 import Animated from "react-native-reanimated";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { ManagementOperation } from "@hermes-mobile/protocol";
 import { ApiError } from "../sync/api";
 import { haptic } from "../ui/haptics";
@@ -8,6 +9,66 @@ import { motion, useReduceMotion } from "../ui/motion";
 import { Action, CloseButton, Field, Icon, Notice, useTheme, type IconName } from "../ui/theme";
 
 export type ManageCall = <T>(operation: ManagementOperation, input?: object, signal?: AbortSignal) => Promise<T>;
+
+export const ManagementContext = createContext<{
+  label: string;
+  onBack: () => void;
+  onTabVisibilityChange?: (visible: boolean) => void;
+}>({ label: "", onBack: () => {} });
+
+export const useManagementContext = () => useContext(ManagementContext);
+
+export function ManagementLayout({ header, children, hideTabs = false }: {
+  header: ReactNode; children: ReactNode; hideTabs?: boolean;
+}) {
+  const { styles } = useTheme();
+  const { onTabVisibilityChange } = useManagementContext();
+  const insets = useSafeAreaInsets();
+  useEffect(() => { onTabVisibilityChange?.(!hideTabs); }, [hideTabs, onTabVisibilityChange]);
+  return <KeyboardAvoidingView style={styles.frame} keyboardVerticalOffset={insets.top} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+    <View style={layout.page}>{header}</View>
+    <ScrollView contentContainerStyle={[styles.content, layout.page]} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
+      {children}
+    </ScrollView>
+  </KeyboardAvoidingView>;
+}
+
+export function ManagementHeader({ title, onBack, backLabel = "管理", trailing, backDisabled }: {
+  title: string; onBack?: () => void; backLabel?: string; trailing?: ReactNode; backDisabled?: boolean;
+}) {
+  const { colors, styles } = useTheme();
+  const context = useManagementContext();
+  return <View style={layout.header}>
+    <View style={layout.navigation}>
+      <Pressable accessibilityRole="button" accessibilityLabel={`返回${backLabel}`} accessibilityState={{ disabled: backDisabled }}
+        disabled={backDisabled} onPress={() => { if (!backDisabled) { haptic("light"); (onBack ?? context.onBack)(); } }}
+        style={({ pressed }) => [layout.back, (pressed || backDisabled) && styles.faded]}>
+        <Icon name="back" size={20} color={colors.accent} /><Text style={[styles.text, { color: colors.accent }]}>{backLabel}</Text>
+      </Pressable>
+      {trailing}
+    </View>
+    <Text style={styles.wordmark}>Hermes</Text>
+    <Text accessibilityRole="header" style={styles.title}>{title}</Text>
+    {!!context.label && <View style={[layout.profile, { backgroundColor: colors.tint }]}>
+      <Icon name="sparkles" size={17} color={colors.accent} /><Text style={styles.label}>{context.label}</Text>
+    </View>}
+  </View>;
+}
+
+export function FormHeader({ title, onCancel, onSave, saveLabel = "保存", disabled, cancelDisabled }: {
+  title: string; onCancel: () => void; onSave: () => void; saveLabel?: string; disabled?: boolean; cancelDisabled?: boolean;
+}) {
+  const { colors, styles } = useTheme();
+  return <View style={[layout.formHeader, { borderBottomColor: colors.edge }]}>
+    <Pressable accessibilityRole="button" accessibilityLabel="取消" accessibilityState={{ disabled: cancelDisabled }} disabled={cancelDisabled}
+      onPress={() => { if (!cancelDisabled) { haptic("light"); onCancel(); } }}
+      style={({ pressed }) => [layout.back, layout.formSide, (pressed || cancelDisabled) && styles.faded]}>
+      <Text style={[styles.text, { color: colors.accent }]}>取消</Text>
+    </Pressable>
+    <Text accessibilityRole="header" style={[styles.heading, layout.formTitle]}>{title}</Text>
+    <Action title={saveLabel} primary disabled={disabled} onPress={onSave} style={layout.formSide} />
+  </View>;
+}
 
 export function useManagementData<T>(call: ManageCall, operation: ManagementOperation, input?: object) {
   const [data, setData] = useState<T>();
@@ -30,6 +91,7 @@ export function useManagementData<T>(call: ManageCall, operation: ManagementOper
     }
   }, [call, input, operation]);
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Changing the remote resource clears its stale loading/error state before fetching.
     void reload();
     return () => pending.current?.abort();
   }, [reload]);
@@ -82,7 +144,7 @@ export function ActionState({ error, message }: { error?: string; message?: stri
 
 export function Group({ children }: { children: ReactNode }) {
   const { colors } = useTheme();
-  return <View style={[layout.group, { backgroundColor: colors.surface }]}>{children}</View>;
+  return <View style={[layout.group, { borderColor: colors.edge }]}>{children}</View>;
 }
 
 export function Row({ title, subtitle, value, icon, onPress, divided, disabled }: {
@@ -98,7 +160,7 @@ export function Row({ title, subtitle, value, icon, onPress, divided, disabled }
       }}
       style={({ pressed }) => [styles.listItem, layout.row, divided && { borderTopColor: colors.edge, borderTopWidth: StyleSheet.hairlineWidth },
         pressed && { backgroundColor: colors.secondary }]}>
-      {icon && <Icon name={icon} size={20} color={colors.accent} />}
+      {icon && <View style={[layout.rowIcon, { backgroundColor: colors.secondary }]}><Icon name={icon} size={23} color={colors.accent} /></View>}
       <View style={layout.grow}>
         <Text style={styles.heading}>{title}</Text>
         {!!subtitle && <Text style={styles.muted} numberOfLines={2}>{subtitle}</Text>}
@@ -130,7 +192,8 @@ export function Toggle({ label, value, onChange, disabled }: {
       haptic("selection");
       onChange(next);
     }}
-      trackColor={{ false: colors.edge, true: colors.accentFill }} />
+      trackColor={{ false: colors.edge, true: colors.accentFill }} thumbColor={Platform.OS === "ios" ? undefined : colors.surface}
+      {...(Platform.OS === "web" ? { activeThumbColor: colors.surface } : {})} />
   </View>;
 }
 
@@ -182,11 +245,20 @@ export const entries = (value: string) => value.split(/[\n,]/u).map((item) => it
 export const mono = Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" });
 
 const layout = StyleSheet.create({
-  group: { borderRadius: 13, overflow: "hidden" },
-  row: { paddingVertical: 11, gap: 12 },
+  page: { width: "100%", maxWidth: 680, alignSelf: "center" },
+  header: { paddingHorizontal: 24, paddingTop: 4, paddingBottom: 12, gap: 8 },
+  navigation: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10, gap: 8 },
+  back: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: 5, flexShrink: 1 },
+  profile: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 13, paddingVertical: 8, borderRadius: 12, marginTop: 2 },
+  formHeader: { minHeight: 72, paddingHorizontal: 24, paddingVertical: 12, gap: 10, flexDirection: "row", alignItems: "center", borderBottomWidth: StyleSheet.hairlineWidth },
+  formTitle: { flex: 1, textAlign: "center" },
+  formSide: { minWidth: 60, maxWidth: "30%" },
+  group: { borderBottomWidth: StyleSheet.hairlineWidth },
+  row: { minHeight: 72, paddingVertical: 16, gap: 14 },
+  rowIcon: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   grow: { flex: 1, minWidth: 0 },
   value: { maxWidth: "34%", textAlign: "right", flexShrink: 1 },
-  field: { gap: 5 },
-  multiline: { minHeight: 94, textAlignVertical: "top" },
-  toggle: { minHeight: 48, justifyContent: "space-between", flexWrap: "nowrap" },
+  field: { gap: 10 },
+  multiline: { minHeight: 120, textAlignVertical: "top" },
+  toggle: { minHeight: 56, justifyContent: "space-between", flexWrap: "nowrap" },
 });

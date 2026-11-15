@@ -12,8 +12,9 @@ const source = compile("../src/workspace-screen.tsx");
 const textExports = {};
 new Function("exports", compile("../src/ui/text.ts"))(textExports);
 const flush = () => new Promise(setImmediate);
+const ManagementScreen = Symbol("ManagementScreen");
 
-function mountSettings(update, message) {
+function mountWorkspace({ update, message, params = {}, router = {}, stack } = {}) {
   const alerts = [], choices = [], statuses = [], feedback = [];
   let checks = 0;
   const exports = {};
@@ -28,10 +29,14 @@ function mountSettings(update, message) {
       };
       case "react-native": return {
         Alert: { alert: (title, message, buttons, options) => alerts.push({ title, message, buttons, options }) },
-        Platform: { OS: "ios" }, StyleSheet: { create: (styles) => styles, hairlineWidth: 1 },
+        Keyboard: { dismiss() {} },
+        Platform: { OS: "ios", select: (options) => options.ios }, StyleSheet: { create: (styles) => styles, hairlineWidth: 1 },
         Pressable: "Pressable", Text: "Text", View: "View", ScrollView: "ScrollView", RefreshControl: "RefreshControl",
       };
-      case "expo-router": return { useRouter: () => ({}), useLocalSearchParams: () => ({}), useFocusEffect() {} };
+      case "expo-router": return {
+        useRouter: () => router, useLocalSearchParams: () => params,
+        useNavigation: () => ({ getState: () => stack }), useFocusEffect() {},
+      };
       case "react-native-reanimated": return { default: { View: "Animated.View" } };
       case "react-native-safe-area-context": return { SafeAreaView: "SafeAreaView" };
       case "./ui/theme": return { useTheme: () => ({ colors: {}, styles: {} }), Icon: "Icon" };
@@ -39,7 +44,9 @@ function mountSettings(update, message) {
       case "./ui/haptics": return { haptic: (kind) => feedback.push(kind) };
       case "./ui/text": return textExports;
       case "./workspace-context": return { useWorkspaceContext: () => ({
-        section: "settings", workspace: { profiles: [], topics: [], pending: [], ready: true, network: "online" },
+        section: "settings", workspace: {
+          profiles: [{ profile_id: "default", label: "默认" }], topics: [], pending: [], ready: true, network: "online",
+        },
       }) };
       case "./updates": return {
         currentUpdate: { id: "running-version" },
@@ -56,26 +63,33 @@ function mountSettings(update, message) {
       case "./chat/conversation":
       case "./chat/topic-list":
       case "./inbox/inbox":
-      case "./manage":
       case "./manage/shared":
       case "./notifications": return {};
+      case "./manage": return { ManagementScreen };
       default: throw new Error(`Unexpected dependency: ${name}`);
     }
   });
   const workspace = exports.default().props.children;
-  function findButton(node) {
-    if (Array.isArray(node)) return node.map(findButton).find(Boolean);
-    if (!node?.props) return;
-    if (node.type === "Pressable" && node.props.accessibilityLabel?.startsWith("热更新版本，")) return node;
-    return findButton(node.props.children);
-  }
-  const button = findButton(workspace.type());
-  assert.ok(button, "设置中应有可点击的热更新版本项");
-  assert.equal(button.props.accessibilityRole, "button");
-  return { alerts, choices, statuses, feedback, press: button.props.onPress, checks: () => checks };
+  return { alerts, choices, statuses, feedback, screen: workspace.type(), checks: () => checks };
 }
 
-test("版本项展示更新说明、时间和 ID；取消可重试，确认前防止重复检查", async () => {
+function findNode(node, matches) {
+  if (Array.isArray(node)) return node.map((child) => findNode(child, matches)).find(Boolean);
+  if (!node?.props) return;
+  if (matches(node)) return node;
+  return findNode(node.props.children, matches);
+}
+
+function mountSettings(update, message) {
+  const { screen: settings, ...state } = mountWorkspace({ update, message });
+  const button = findNode(settings, (node) => node.type === "Pressable" && node.props.accessibilityLabel === "检查更新");
+  assert.ok(button, "设置中应有可点击的检查更新入口");
+  assert.equal(button.props.accessibilityRole, "button");
+  assert.ok(findNode(settings, (node) => node.type === "Text" && node.props.children === "running-version"), "设置中应显示正在运行的热更新版本");
+  return { ...state, press: button.props.onPress };
+}
+
+test("检查更新展示说明、时间和 ID，取消可重试，确认前防止重复检查", async () => {
   const update = { id: "next-version", message: "  新增手动检查热更新  ", publishedAt: 1794700800000 };
   const screen = mountSettings(update);
   screen.press();
@@ -134,4 +148,16 @@ test("缺少说明时仅展示时间和 ID，关闭确认框等同取消", async
     assert.deepEqual(screen.choices, [false]);
     assert.equal(screen.statuses.at(-1), undefined);
   }
+});
+
+test("管理分类返回到已有管理菜单，直接进入分类时补上菜单", () => {
+  const actions = [];
+  const router = { back: () => actions.push("back"), replace: (href) => actions.push(href) };
+  for (const previous of [{ name: "[page]", params: { page: "manage" } }, { name: "index" }]) {
+    const params = { page: "models" };
+    const stack = { index: 1, routes: [previous, { name: "[page]", params }] };
+    const { screen } = mountWorkspace({ params, router, stack });
+    findNode(screen, (node) => node.type === ManagementScreen).props.onBack();
+  }
+  assert.deepEqual(actions, ["back", { pathname: "/[page]", params: { page: "manage" } }]);
 });

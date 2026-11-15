@@ -9,7 +9,7 @@ import type { Session } from "../auth/session";
 import type { useWorkspace } from "../sync/use-workspace";
 import { haptic } from "../ui/haptics";
 import { motion, useReduceMotion } from "../ui/motion";
-import { Action, Card, CloseButton, EmptyState, Field, Icon, Notice, useTheme } from "../ui/theme";
+import { Action, CloseButton, Field, Icon, Notice, useTheme } from "../ui/theme";
 import { AnswerMarkdown } from "./answer-markdown";
 import { pickAttachments } from "./attachments";
 import { AttachmentMenu, ComposerMenu, ReasoningMenu, reasoningLabels, type ComposerCommand } from "./composer-menu";
@@ -40,7 +40,8 @@ const approvalLabels = new Map([
   ["deny", "拒绝"],
 ]);
 
-const transcriptGutter = 13;
+const transcriptGutter = 24;
+const touchSize = Platform.OS === "android" ? 48 : 44;
 const activityLabel: Record<SessionStatus["activity"], string> = {
   idle: "空闲",
   running: "正在响应",
@@ -48,14 +49,48 @@ const activityLabel: Record<SessionStatus["activity"], string> = {
   unknown: "执行状态待确认",
 };
 
-function ControlCard({
+function ProcessTimeline({ steps, final }: { steps: MessageProcessStep[]; final: boolean }) {
+  const { colors, styles } = useTheme();
+  return (
+    <View style={[chat.process, { borderColor: colors.edge }]}>
+      <View style={chat.sectionHeader}>
+        <View style={[chat.sectionIcon, { backgroundColor: colors.tint }]}>
+          <Icon name="sparkle" size={17} color={colors.accent} />
+        </View>
+        <Text accessibilityRole="header" style={[styles.heading, chat.sectionTitle]}>
+          {steps.some((step) => step.kind === "reasoning") ? "思考" : "执行过程"}
+        </Text>
+      </View>
+      <View style={chat.processSteps}>
+        {steps.map((step, index) => {
+          const status = step.kind !== "tool" || (step.status === "running" && final) ? "unknown" : step.status;
+          const complete = status === "succeeded";
+          return (
+            <View key={index} style={chat.processStep}>
+              {index < steps.length - 1 && <View style={[chat.processRail, { backgroundColor: colors.edge }]} />}
+              <View style={[chat.processMarker, {
+                borderColor: status === "failed" ? colors.error : colors.accent,
+                backgroundColor: complete ? colors.accentFill : colors.background,
+              }]}>{complete && <Icon name="check" size={10} color={colors.onAccent} />}</View>
+              <Text selectable style={[styles.text, chat.processText]}>
+                {step.kind === "tool" ? `${step.name} · ${toolStatus[status]}` : step.text}
+              </Text>
+            </View>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+function ControlPrompt({
   control, enabled, onAnswer,
 }: {
   control: Control;
   enabled: boolean;
   onAnswer: (control: Control, id: string, answer: string) => Promise<void>;
 }) {
-  const { styles } = useTheme();
+  const { colors, styles } = useTheme();
   const [text, setText] = useState("");
   const [other, setOther] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
@@ -69,6 +104,7 @@ function ControlCard({
   const showText = clarify && (!control.choices.length || other);
   const multiSelect = clarify && control.multi_select === true;
   const choiceLabel = (choice: string) => clarify ? choice : approvalLabels.get(choice) ?? choice;
+  const secondaryAction = [chat.controlAction, { backgroundColor: "transparent", borderColor: colors.edge }];
 
   async function answer(value: string) {
     if (!canAnswer || answering.current) return;
@@ -109,9 +145,14 @@ function ControlCard({
   }
 
   return (
-    <Card>
-      <Text style={styles.label}>{clarify ? "澄清问题" : "操作审批"}</Text>
-      <Text selectable style={styles.text}>
+    <View style={chat.control}>
+      <View style={chat.sectionHeader}>
+        <View style={[chat.sectionIcon, { backgroundColor: colors.tint }]}>
+          <Icon name={clarify ? "sparkle" : "approval"} size={17} color={colors.accent} />
+        </View>
+        <Text accessibilityRole="header" style={[styles.heading, chat.sectionTitle]}>{clarify ? "澄清问题" : "操作审批"}</Text>
+      </View>
+      <Text selectable style={[styles.text, chat.messageText, clarify && chat.clarifyPrompt]}>
         {control.prompt === "Hermes requires an answer" ? "Hermes 正在等待回答。" : control.prompt}
       </Text>
       {control.status !== "pending" || submitted ? (
@@ -127,9 +168,10 @@ function ControlCard({
         <>
           {multiSelect && !other && <Text style={styles.muted}>可选择一项或多项。</Text>}
           {!other && control.choices.length > 0 && (
-            <View style={styles.row}>
+            <View style={chat.controlActions}>
               {control.choices.map((choice) => (
-                <Action key={choice} title={choiceLabel(choice)} disabled={!canAnswer} selected={multiSelect ? selected.includes(choice) : undefined}
+                <Action key={choice} title={choiceLabel(choice)} disabled={!canAnswer} primary={!clarify && choice === "once"}
+                  selected={multiSelect ? selected.includes(choice) : undefined} style={[chat.controlAction, clarify && chat.controlChoice]}
                   feedback={multiSelect ? "selection" : choice === "deny" ? "warning" : "medium"}
                   icon={selected.includes(choice) ? "check" : undefined} onPress={() => pick(choice)} />
               ))}
@@ -140,26 +182,26 @@ function ControlCard({
               onChangeText={setText} autoFocus={other} />
           )}
           {clarify ? (
-            <View style={styles.row}>
+            <View style={chat.controlActions}>
               {showText && (
-                <Action title="回复" primary disabled={!canAnswer || !text.trim()}
+                <Action title="回复" primary style={chat.controlAction} disabled={!canAnswer || !text.trim()}
                   onPress={() => void answer(multiSelect ? JSON.stringify([text.trim()]) : text.trim())} />
               )}
               {multiSelect && !other && (
-                <Action title="回复" primary disabled={!canAnswer || !selected.length}
+                <Action title="回复" primary style={chat.controlAction} disabled={!canAnswer || !selected.length}
                   onPress={() => void answer(JSON.stringify(selected))} />
               )}
               {control.choices.length > 0 && (
-                <Action title={other ? "显示选项" : "其他"} disabled={!canAnswer} onPress={() => setOther(!other)} />
+                <Action title={other ? "显示选项" : "其他"} style={secondaryAction} disabled={!canAnswer} onPress={() => setOther(!other)} />
               )}
-              <Action title="跳过" disabled={!canAnswer} onPress={() => void answer("")} />
+              <Action title="跳过" style={secondaryAction} disabled={!canAnswer} onPress={() => void answer("")} />
             </View>
           ) : !control.choices.length && <Text style={styles.muted}>暂无可用的审批选项。</Text>}
         </>
       )}
       {control.status === "pending" && !submitted && !enabled && <Text style={styles.muted}>重新连接 Hermes 后即可答复。</Text>}
       {(error ?? control.error) && <Notice>{error ?? control.error}</Notice>}
-    </Card>
+    </View>
   );
 }
 
@@ -183,7 +225,7 @@ export function Conversation({
   const reduced = useReduceMotion();
   const { width } = useWindowDimensions();
   const { top: safeAreaTop } = useSafeAreaInsets();
-  const messageWidth = Math.min(560, (width - transcriptGutter * 2) * 0.86);
+  const messageWidth = Math.min(560, (width - transcriptGutter * 2) * 0.84);
   const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
   const pinned = useRef(true);
   const [sending, setSending] = useState(false);
@@ -427,7 +469,7 @@ export function Conversation({
       )}
       <ScrollView
         ref={scroll}
-        contentContainerStyle={chat.transcript}
+        contentContainerStyle={[chat.column, chat.transcript]}
         keyboardShouldPersistTaps="handled"
         refreshControl={
           <RefreshControl
@@ -455,7 +497,9 @@ export function Conversation({
         {topic?.status === "error" && <Notice>{topic.error ?? "Hermes 无法创建此会话。"}</Notice>}
         {(topic?.status === "ready" || (!topic && newProfileId)) && messages.length === 0 && pending.length === 0 && controls.length === 0 && (
           <View style={chat.empty}>
-            <EmptyState icon="chat" title="开始对话" description="给 Hermes 发送一条消息。" />
+            <Icon name="chat" size={36} color={colors.accent} />
+            <Text accessibilityRole="header" style={[styles.heading, chat.emptyTitle]}>开始对话</Text>
+            <Text style={[styles.muted, chat.emptyDescription]}>给 Hermes 发送一条消息。</Text>
           </View>
         )}
         {messages.map((message, index) => {
@@ -467,34 +511,18 @@ export function Conversation({
           return (
             <View key={message.message_id} style={chat.messageGroup}>
               <View style={[chat.message, outgoing ? [chat.outgoing, { maxWidth: messageWidth }] : chat.incoming, startGroup && chat.startGroup]}>
-                {!!process?.length && (
-                  <View style={[chat.process, { borderStartColor: colors.edge }]}>
-                    {process.map((step, stepIndex) => {
-                      if (step.kind === "tool") {
-                        const status = step.status === "running" && message.status === "final" ? "unknown" : step.status;
-                        return <Text key={stepIndex} style={styles.muted}>{step.name} · {toolStatus[status]}</Text>;
-                      }
-                      return (
-                        <Text key={stepIndex} selectable style={styles.muted}>
-                          {step.kind === "reasoning" && <Text style={styles.label}>思考{"\n"}</Text>}
-                          {step.text}
-                        </Text>
-                      );
-                    })}
-                  </View>
-                )}
+                {!!process?.length && <ProcessTimeline steps={process} final={message.status === "final"} />}
                 {(!!message.text || !!message.attachments?.length) && (
                   <View style={[
-                    chat.bubble,
-                    outgoing ? chat.outgoingBubble : chat.incomingBubble,
-                    { backgroundColor: outgoing ? colors.accentFill : colors.surface },
+                    chat.messageContent,
+                    outgoing ? [chat.outgoingBubble, { backgroundColor: colors.tint }] : chat.incomingBody,
                   ]}>
                     {!!message.attachments?.length && <MessageAttachments items={message.attachments} session={session}
-                      onOpenLink={openLink} tint={outgoing ? colors.onAccent : colors.foreground} />}
+                      onOpenLink={openLink} tint={colors.foreground} />}
                     {!!message.text && (outgoing ? <Text
                       selectable
                       accessibilityLabel={`你：${message.text}`}
-                      style={[styles.text, chat.messageText, { color: colors.onAccent }]}
+                      style={[styles.text, chat.messageText]}
                     >
                       {message.text}
                     </Text> : <AnswerMarkdown text={message.text} onOpenLink={openLink} />)}
@@ -508,14 +536,14 @@ export function Conversation({
                 {message.error && <Notice>{message.error}</Notice>}
               </View>
               {attachedControls?.map((control) => (
-                <ControlCard key={control.control_id} control={control} enabled={canControl} onAnswer={workspace.answer} />
+                <ControlPrompt key={control.control_id} control={control} enabled={canControl} onAnswer={workspace.answer} />
               ))}
             </View>
           );
         })}
         {pending.map((item) => (
           <Animated.View key={item.submission_id} style={[chat.message, chat.outgoing, { maxWidth: messageWidth }, !reduced && motion.reveal]}>
-            <View style={[chat.bubble, chat.outgoingBubble, { backgroundColor: colors.tint }]}>
+            <View style={[chat.messageContent, chat.outgoingBubble, { backgroundColor: colors.tint }]}>
               {!!item.attachments?.length && <MessageAttachments items={item.attachments} onOpenLink={openLink} tint={colors.foreground} />}
               {!!item.text && <Text selectable accessibilityLabel={`你：${item.text}`} style={[styles.text, chat.messageText]}>
                 {item.text}
@@ -540,34 +568,33 @@ export function Conversation({
         ))}
         {trailingControls.map((control) => (
           <Animated.View key={control.control_id} style={!reduced && motion.reveal}>
-            <ControlCard control={control} enabled={canControl} onAnswer={workspace.answer} />
+            <ControlPrompt control={control} enabled={canControl} onAnswer={workspace.answer} />
           </Animated.View>
         ))}
       </ScrollView>
-      <View style={[chat.composer, { borderTopColor: colors.edge }]}>
+      <View style={[chat.column, chat.composer, { borderTopColor: colors.edge }]}>
         {error && <Notice>{error}</Notice>}
         {commandNotice && <Text accessibilityLiveRegion="polite" style={styles.muted}>{commandNotice}</Text>}
         {isModelCommand && !canControl && <Text style={styles.muted}>连接 Hermes 后即可选择模型。</Text>}
         {reasoningBlocked && <Text accessibilityLiveRegion="polite" style={styles.muted}>更新 Hermes 连接器后可继续发送。</Text>}
         {!!attachments.length && attachmentsBlocked && <Notice>更新服务端和连接器后可发送附件。</Notice>}
-        <View style={[styles.row, chat.toolbar]}>
-          <Action compact title="命令" disabled={!canWrite} onPress={() => { Keyboard.dismiss(); setMenu("commands"); }} />
-          <Action compact title={openingSkills ? "正在加载技能…" : "技能"}
+        <ScrollView horizontal accessibilityLabel="会话操作" keyboardShouldPersistTaps="handled"
+          showsHorizontalScrollIndicator={false} style={chat.toolbarScroll} contentContainerStyle={chat.toolbar}>
+          <Action compact icon="command" title="命令" disabled={!canWrite} onPress={() => { Keyboard.dismiss(); setMenu("commands"); }} />
+          <Action compact icon="skill" title={openingSkills ? "正在加载技能…" : "技能"}
             disabled={!canWrite || openingSkills || (topic?.status !== "ready" && !canControl)}
             onPress={() => { Keyboard.dismiss(); void openSkills(); }} />
-          <View style={chat.replyOptions}>
-            <Action compact disclosure title={reasoningLabel === "跟随配置档案" ? "思考强度" : `思考 · ${reasoningLabel}`}
-              accessibilityLabel={`思考强度：${reasoningLabel}`} selected={reasoning !== null && !reasoningLegacy} disabled={!canWrite}
-              onPress={() => { Keyboard.dismiss(); setMenu("reasoning"); }} />
-            <Action compact title={showProcess ? "过程 · 开" : "过程 · 关"} accessibilityLabel="显示回复过程"
-              selected={showProcess} toggled={showProcess} onPress={onToggleProcess} />
-          </View>
+          <Action compact icon="reasoning" disclosure title={reasoningLabel === "跟随配置档案" ? "思考强度" : `思考 · ${reasoningLabel}`}
+            accessibilityLabel={`思考强度：${reasoningLabel}`} selected={reasoning !== null && !reasoningLegacy} disabled={!canWrite}
+            onPress={() => { Keyboard.dismiss(); setMenu("reasoning"); }} />
+          <Action compact icon="process" title={showProcess ? "过程 · 开" : "过程 · 关"} accessibilityLabel="显示回复过程"
+            selected={showProcess} toggled={showProcess} onPress={onToggleProcess} />
           {running && (
             <Action compact title={stopping ? "停止中…" : "停止回复"} icon="stop"
               feedback="warning"
               accessibilityLabel={stopping ? "正在请求停止回复" : undefined} disabled={!canControl || stopping} onPress={() => void stop()} />
           )}
-        </View>
+        </ScrollView>
         {!!attachments.length && (
           <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={chat.attachmentTray}>
             {attachments.map((item, index) => (
@@ -583,18 +610,20 @@ export function Conversation({
             ))}
           </ScrollView>
         )}
-        <View style={[chat.composerRow, { backgroundColor: colors.field, borderColor: draftFocused ? colors.accent : colors.edge }]}>
+        <View style={[chat.composerRow, { backgroundColor: colors.secondary, borderColor: draftFocused ? colors.accent : colors.edge }]}>
           <Pressable accessibilityRole="button" accessibilityLabel="添加附件"
             accessibilityState={{ disabled: attachmentDisabled, busy: picking, expanded: menu === "attachments" }}
             disabled={attachmentDisabled} onPress={() => { haptic("light"); Keyboard.dismiss(); setMenu("attachments"); }}
             style={({ pressed }) => [chat.iconButton, (pressed || attachmentDisabled) && styles.faded]}>
-            {picking ? <ActivityIndicator size="small" color={colors.accent} /> : <Icon name="attachment" size={20} color={colors.accent} />}
+            {picking ? <ActivityIndicator size="small" color={colors.accent} /> : <Icon name="attachment" size={22} color={colors.accent} />}
           </Pressable>
+          <View style={[chat.composerDivider, { backgroundColor: colors.edge }]} />
           <Field
             accessibilityLabel="消息"
             placeholder={attachments.length ? "添加描述…" : "发消息给 Hermes"}
             style={chat.draft}
             multiline
+            numberOfLines={Platform.OS === "web" ? 1 : undefined}
             editable={canWrite && !sending}
             value={draft}
             onChangeText={onDraftChange}
@@ -614,11 +643,11 @@ export function Conversation({
             {({ pressed }) => (
               <View style={[
                 chat.sendCircle,
-                { backgroundColor: sendDisabled ? colors.secondary : colors.accentFill },
+                !sendDisabled && { backgroundColor: colors.accentFill },
                 pressed && chat.pressed,
               ]}>
                 {sending ? <ActivityIndicator size="small" color={colors.muted} /> : (
-                  <Icon name="send" size={18} color={sendDisabled ? colors.muted : colors.onAccent} />
+                  <Icon name="send" size={22} color={sendDisabled ? colors.muted : colors.onAccent} />
                 )}
               </View>
             )}
@@ -646,49 +675,71 @@ export function Conversation({
 }
 
 const chat = StyleSheet.create({
-  transcript: { flexGrow: 1, paddingHorizontal: transcriptGutter, paddingVertical: 11, gap: 6 },
-  empty: { flex: 1, justifyContent: "center" },
+  column: { width: "100%", maxWidth: 768, alignSelf: "center", paddingHorizontal: transcriptGutter },
+  transcript: { flexGrow: 1, paddingTop: 16, paddingBottom: 24, gap: 12 },
+  empty: { flex: 1, justifyContent: "center", alignItems: "center", gap: 8, paddingBottom: 32 },
+  emptyTitle: { textAlign: "center", fontSize: 24, lineHeight: 32, fontWeight: "700", marginTop: 8 },
+  emptyDescription: { textAlign: "center", fontSize: 16, lineHeight: 23 },
   progress: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, marginVertical: 12 },
-  message: { alignSelf: "flex-start", alignItems: "flex-start", gap: 3 },
-  messageGroup: { gap: 6 },
-  process: { borderStartWidth: 1, paddingStart: 10, paddingVertical: 4, gap: 6, alignSelf: "stretch" },
-  incoming: { alignSelf: "stretch", maxWidth: 640 },
+  message: { alignItems: "flex-start", gap: 8 },
+  messageGroup: { gap: 16 },
+  process: { borderBottomWidth: StyleSheet.hairlineWidth, gap: 8, alignSelf: "stretch", marginBottom: 8, paddingBottom: 8 },
+  sectionHeader: { flexDirection: "row", alignItems: "center", gap: 10 },
+  sectionIcon: { height: 32, width: 32, borderRadius: 9, alignItems: "center", justifyContent: "center" },
+  sectionTitle: { flexShrink: 1, fontSize: 17, lineHeight: 25, fontWeight: "700" },
+  processSteps: { paddingStart: 8 },
+  processStep: { flexDirection: "row", alignItems: "flex-start", gap: 12 },
+  processRail: { position: "absolute", top: 12, bottom: -12, start: 7.5, width: 1 },
+  processMarker: { width: 16, height: 16, marginTop: 4, borderRadius: 8, borderWidth: 1,
+    alignItems: "center", justifyContent: "center" },
+  processText: { flex: 1, fontSize: 15, lineHeight: 23, paddingBottom: 8 },
+  control: { alignSelf: "stretch", gap: 12, paddingVertical: 8 },
+  clarifyPrompt: { fontWeight: "600" },
+  controlActions: { flexDirection: "row", flexWrap: "wrap", alignItems: "stretch", gap: 8, marginTop: 4 },
+  controlAction: { flexGrow: 1, minWidth: 68, maxWidth: "100%", borderRadius: 14 },
+  controlChoice: { minHeight: 64, paddingVertical: 12 },
+  incoming: { alignSelf: "stretch" },
   outgoing: { alignSelf: "flex-end", alignItems: "flex-end" },
-  startGroup: { marginTop: 5 },
-  bubble: { borderRadius: 16, paddingHorizontal: 11, paddingVertical: 7, gap: 4 },
-  incomingBubble: { alignSelf: "stretch", borderBottomStartRadius: 5, paddingHorizontal: 14, paddingVertical: 12 },
-  outgoingBubble: { borderBottomEndRadius: 5 },
-  messageText: { fontSize: 14, lineHeight: 20 },
+  startGroup: { marginTop: 8 },
+  messageContent: { gap: 8, maxWidth: "100%" },
+  incomingBody: { alignSelf: "stretch" },
+  outgoingBubble: { borderRadius: 19, paddingHorizontal: 16, paddingVertical: 11 },
+  messageText: { fontSize: 17, lineHeight: 26 },
   outgoingStatus: { textAlign: "right", marginEnd: 3 },
-  composer: { paddingHorizontal: 10, paddingBottom: 6, borderTopWidth: StyleSheet.hairlineWidth, gap: 2 },
-  toolbar: { gap: 8 },
-  replyOptions: { flexDirection: "row", gap: 8 },
+  composer: { paddingVertical: 8, borderTopWidth: StyleSheet.hairlineWidth, gap: 4 },
+  toolbarScroll: { flexGrow: 0 },
+  toolbar: { flexDirection: "row", flexWrap: "nowrap", alignItems: "center", gap: 6 },
   attachmentName: { flexShrink: 1, fontSize: 13 },
   attachmentTray: { gap: 6, paddingVertical: 3 },
   attachmentChip: { flexDirection: "row", gap: 6, alignItems: "center", paddingStart: 10, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth },
   chipName: { maxWidth: 140 },
-  iconButton: { minWidth: 44, height: 44, alignItems: "center", justifyContent: "center" },
+  iconButton: { width: touchSize, height: touchSize, alignItems: "center", justifyContent: "center" },
+  composerDivider: { height: 22, width: StyleSheet.hairlineWidth, marginBottom: (touchSize - 22) / 2 },
   composerRow: {
     flexDirection: "row",
     alignItems: "flex-end",
-    borderRadius: 23,
-    borderWidth: 1,
-    minHeight: 46,
-    paddingStart: 4,
+    borderRadius: 24,
+    borderWidth: StyleSheet.hairlineWidth,
+    minHeight: touchSize + 8,
+    paddingHorizontal: 3,
+    paddingVertical: 3,
   },
   draft: {
+    ...(Platform.OS === "web" && { fieldSizing: "content" }),
     flex: 1,
-    minHeight: 44,
+    minHeight: touchSize,
     maxHeight: 120,
-    fontSize: 14,
+    fontSize: 17,
+    lineHeight: 24,
     borderWidth: 0,
     backgroundColor: "transparent",
-    paddingStart: 9,
+    paddingStart: 12,
     paddingEnd: 4,
-    paddingVertical: 9,
+    paddingVertical: (touchSize - 24) / 2,
     textAlignVertical: "top",
   },
-  sendButton: { minWidth: 44, height: 44, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "transparent", borderRadius: 22 },
-  sendCircle: { width: 29, height: 29, borderRadius: 15, alignItems: "center", justifyContent: "center" },
+  sendButton: { width: touchSize, height: touchSize, alignItems: "center", justifyContent: "center",
+    borderWidth: 1, borderColor: "transparent", borderRadius: touchSize / 2 },
+  sendCircle: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" },
   pressed: { opacity: 0.78 },
 });

@@ -55,14 +55,14 @@ function AudioPlayer({ uri, name, onRetry }: Omit<Props, "kind"> & { onRetry(): 
   }
 
   const progress = status.duration > 0 ? Math.max(0, Math.min(1, status.currentTime / status.duration)) : 0;
-  return <View style={media.audio}>
+  return <View style={[media.audio, { backgroundColor: colors.field }]}>
     <Text style={styles.heading} numberOfLines={2}>{name}</Text>
     <View accessibilityRole="progressbar" accessibilityLabel="播放进度"
       accessibilityValue={{ min: 0, max: status.duration || 0, now: status.currentTime || 0 }}
       style={[media.track, { backgroundColor: colors.secondary }]}>
       <View style={[media.progress, { width: `${progress * 100}%`, backgroundColor: colors.accent }]} />
     </View>
-    <View style={media.time}><Text style={styles.muted}>{formatTime(status.currentTime)}</Text><Text style={styles.muted}>{formatTime(status.duration)}</Text></View>
+    <View style={media.time}><Text style={[styles.caption, media.timestamp]}>{formatTime(status.currentTime)}</Text><Text style={[styles.caption, media.timestamp]}>{formatTime(status.duration)}</Text></View>
     {loading && <View style={styles.row}><ActivityIndicator color={colors.accent} /><Text style={styles.muted}>正在加载音频…</Text></View>}
     {failed ? <><Notice>无法播放此音频，请重试。</Notice><Action title="重试" onPress={onRetry} /></> :
       <View style={styles.row}>
@@ -95,10 +95,11 @@ function formatTime(value: number) {
 }
 
 const media = StyleSheet.create({
-  audio: { flex: 1, justifyContent: "center", padding: 20, gap: 16 },
-  track: { height: 5, borderRadius: 3, overflow: "hidden" },
+  audio: { justifyContent: "center", borderRadius: 16, padding: 16, gap: 12 },
+  track: { height: 4, borderRadius: 2, overflow: "hidden" },
   progress: { height: "100%" },
   time: { flexDirection: "row", justifyContent: "space-between" },
-  videoContainer: { flex: 1, gap: 12 },
-  video: { flex: 1, minHeight: 180, backgroundColor: "black" },
+  timestamp: { fontVariant: ["tabular-nums"] },
+  videoContainer: { gap: 12 },
+  video: { width: "100%", aspectRatio: 16 / 9, minHeight: 180, borderRadius: 16, overflow: "hidden", backgroundColor: "black" },
 });

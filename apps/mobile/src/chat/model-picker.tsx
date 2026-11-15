@@ -1,10 +1,10 @@
 import { randomUUID } from "expo-crypto";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
-import { ActivityIndicator, FlatList, Modal, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import type { ModelCatalog, ModelRequest, ModelResult, ModelSelection } from "@hermes-mobile/protocol";
 import { haptic } from "../ui/haptics";
-import { useReduceMotion } from "../ui/motion";
-import { Action, CloseButton, Notice, useTheme } from "../ui/theme";
+import { Action, Icon, Notice, useTheme } from "../ui/theme";
+import { ComposerSheet, PickerRow } from "./composer-menu";
 
 type Request = ModelSelection & { confirm?: string };
 
@@ -18,7 +18,6 @@ export function ModelPicker({
   onSelected: (result: Extract<ModelResult, { selection: ModelSelection }>) => void;
 }) {
   const { colors, styles } = useTheme();
-  const reduced = useReduceMotion();
   const [catalog, setCatalog] = useState<ModelCatalog>();
   const [providerId, setProviderId] = useState<string>();
   const [confirmation, setConfirmation] = useState<{ selection: Request; message: string }>();
@@ -69,6 +68,7 @@ export function ModelPicker({
 
   const load = useEffectEvent(() => void request());
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- On mount the request's busy and error resets already match initial state.
     load();
     return () => {
       pending.current?.abort();
@@ -83,80 +83,75 @@ export function ModelPicker({
     }));
 
   return (
-    <Modal visible transparent animationType={reduced ? "none" : "fade"} onRequestClose={onClose}>
-      <View style={picker.overlay}>
-        <View accessibilityViewIsModal style={[styles.card, picker.panel, { borderColor: colors.edge }]}>
-          <View style={picker.header}>
-            <Text accessibilityRole="header" style={[styles.heading, picker.heading]}>
-              {confirmation ? "确认切换模型" : provider ? provider.name : "选择服务商"}
-            </Text>
-            <CloseButton onPress={onClose} />
-          </View>
-          {catalog?.model && !confirmation && (
-            <Text style={styles.muted}>当前模型 · {catalog.model}{currentProvider ? `（${currentProvider.name}）` : ""}</Text>
-          )}
-          {unavailable && <Text style={styles.muted}>{unavailable}</Text>}
-          {error && <Notice>{error}</Notice>}
-          {busy && (
-            <View style={styles.row}>
-              <ActivityIndicator color={colors.accent} />
-              <Text accessibilityLiveRegion="polite" style={styles.muted}>{catalog ? "正在切换模型…" : "正在加载服务商…"}</Text>
-            </View>
-          )}
-          {retry && (
-            <Action title="重新查询请求状态" disabled={busy} onPress={() => void request(retry.selection, retry.id)} />
-          )}
-          {error && !retry && !catalog && <Action title="重新加载服务商" disabled={!enabled || busy} onPress={() => void request()} />}
-          {confirmation ? (
-            <>
-              <ScrollView style={picker.list}>
-                <Text style={styles.muted}>请查看 Hermes 提供的风险和费用说明，再确认切换。</Text>
-                <Text selectable style={styles.text}>{confirmation.message}</Text>
-              </ScrollView>
-              <View style={styles.row}>
-                <Action title="返回" disabled={busy} onPress={() => setConfirmation(undefined)} />
-                <Action title="确认切换" primary disabled={!enabled || busy} onPress={() => void request(confirmation.selection)} />
-              </View>
-            </>
-          ) : catalog && (
-            <>
-              {provider && <View style={styles.row}><Action title="返回服务商列表" icon="back" disabled={busy} onPress={() => setProviderId(undefined)} /></View>}
-              <FlatList
-                key={provider?.id ?? "providers"}
-                style={picker.list}
-                data={rows}
-                keyExtractor={(row) => row.id}
-                contentContainerStyle={picker.rows}
-                keyboardShouldPersistTaps="handled"
-                renderItem={({ item }) => (
-                  <Action
-                    title={item.name}
-                    selected={item.selected}
-                    feedback={provider && item.selected ? false : "selection"}
-                    icon={item.selected ? "check" : provider ? undefined : "chevron"}
-                    disabled={busy || Boolean(provider && !enabled)}
-                    onPress={() => provider
-                      ? void request({ provider: provider.id, model: item.id })
-                      : setProviderId(item.id)}
-                  />
-                )}
-                ListEmptyComponent={<Text style={styles.muted}>
-                  {provider ? "此服务商暂无可选模型。" : "此 Hermes 配置档案暂无可用服务商。"}
-                </Text>}
-              />
-            </>
-          )}
+    <ComposerSheet
+      title={confirmation ? "确认切换模型" : provider ? provider.name : "选择服务商"}
+      subtitle={catalog?.model && !confirmation
+        ? `当前模型 · ${catalog.model}${currentProvider ? `（${currentProvider.name}）` : ""}` : undefined}
+      onClose={onClose}
+      back={provider && !confirmation && (
+        <Pressable accessibilityRole="button" accessibilityLabel="返回服务商列表" accessibilityState={{ disabled: busy }}
+          disabled={busy} onPress={() => { haptic("light"); setProviderId(undefined); }}
+          style={({ pressed }) => [picker.back, (pressed || busy) && styles.faded]}>
+          <Icon name="back" size={16} color={colors.accent} />
+          <Text style={[styles.label, { color: colors.accent }]}>服务商</Text>
+        </Pressable>
+      )}
+    >
+      {unavailable && <Text style={styles.muted}>{unavailable}</Text>}
+      {error && <Notice>{error}</Notice>}
+      {busy && (
+        <View style={styles.row}>
+          <ActivityIndicator color={colors.accent} />
+          <Text accessibilityLiveRegion="polite" style={styles.muted}>{catalog ? "正在切换模型…" : "正在加载服务商…"}</Text>
         </View>
-      </View>
-    </Modal>
+      )}
+      {retry && <Action title="重新查询请求状态" disabled={busy} onPress={() => void request(retry.selection, retry.id)} />}
+      {error && !retry && !catalog && <Action title="重新加载服务商" disabled={!enabled || busy} onPress={() => void request()} />}
+      {confirmation ? (
+        <>
+          <ScrollView style={picker.list} contentContainerStyle={picker.rows}>
+            <Text style={styles.muted}>请查看 Hermes 提供的风险和费用说明，再确认切换。</Text>
+            <Text selectable style={styles.text}>{confirmation.message}</Text>
+          </ScrollView>
+          <View style={styles.row}>
+            <Action title="返回" disabled={busy} onPress={() => setConfirmation(undefined)} />
+            <Action title="确认切换" primary disabled={!enabled || busy} onPress={() => void request(confirmation.selection)} />
+          </View>
+        </>
+      ) : catalog && (
+        <FlatList
+          key={provider?.id ?? "providers"}
+          style={picker.list}
+          data={rows}
+          keyExtractor={(row) => row.id}
+          contentContainerStyle={provider ? undefined : picker.rows}
+          keyboardShouldPersistTaps="handled"
+          renderItem={({ item }) => (
+            <PickerRow
+              title={item.name}
+              filled={!provider}
+              selected={item.selected}
+              leading={!provider && <View style={picker.check}>{item.selected && <Icon name="check" size={18} color={colors.accent} />}</View>}
+              trailing={provider ? item.selected ? "check" : undefined : item.selected ? undefined : "chevron"}
+              feedback={provider && item.selected ? false : undefined}
+              disabled={busy || Boolean(provider && !enabled)}
+              onPress={() => provider
+                ? void request({ provider: provider.id, model: item.id })
+                : setProviderId(item.id)}
+            />
+          )}
+          ListEmptyComponent={<Text style={styles.muted}>
+            {provider ? "此服务商暂无可选模型。" : "此 Hermes 配置档案暂无可用服务商。"}
+          </Text>}
+        />
+      )}
+    </ComposerSheet>
   );
 }
 
 const picker = StyleSheet.create({
-  overlay: { flex: 1, backgroundColor: "#0008", justifyContent: "center", alignItems: "center", padding: 18 },
-  panel: { width: "100%", maxWidth: 480, maxHeight: "82%", borderWidth: StyleSheet.hairlineWidth, padding: 14 },
-  header: { flexDirection: "row", gap: 8, alignItems: "center" },
-  heading: { flex: 1 },
+  back: { flexDirection: "row", alignItems: "center", minHeight: 44, gap: 4 },
+  check: { width: 18 },
   list: { flexGrow: 0, flexShrink: 1 },
-  rows: { gap: 6 },
+  rows: { gap: 8 },
 });

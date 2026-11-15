@@ -1,41 +1,41 @@
 import { SymbolView, type AndroidSymbol, type SFSymbol } from "expo-symbols";
 import { useState, type ReactNode } from "react";
-import { Platform, Pressable, StyleSheet, Text, TextInput, View, useColorScheme, type TextInputProps } from "react-native";
+import { Platform, Pressable, StyleSheet, Text, TextInput, View, useColorScheme, type StyleProp, type TextInputProps, type ViewStyle } from "react-native";
 import { errorLabel } from "./text";
 import { haptic, type HapticKind } from "./haptics";
 
 const light = {
-  background: "#f2f2f7",
-  surface: "#ffffff",
-  edge: "#d6d6df",
-  foreground: "#1c1c1e",
-  muted: "#62626e",
-  accent: "#005fcf",
-  accentFill: "#0066d6",
-  onAccent: "#ffffff",
-  tint: "#e8f1ff",
-  secondary: "#e9e9ef",
-  field: "#ececf2",
-  success: "#237646",
-  error: "#b4232a",
-  errorFill: "#fbe8ea",
+  background: "#F7F2EA",
+  surface: "#FFFCF7",
+  edge: "#DDD0C2",
+  foreground: "#352820",
+  muted: "#735F50",
+  accent: "#86553B",
+  accentFill: "#9C6548",
+  onAccent: "#FFFFFF",
+  tint: "#EBDDD0",
+  secondary: "#EFE5DA",
+  field: "#EDE2D7",
+  success: "#776349",
+  error: "#A53F35",
+  errorFill: "#F5E1D9",
 };
 
 const night: typeof light = {
-  background: "#111114",
-  surface: "#1c1c21",
-  edge: "#383840",
-  foreground: "#f5f5f7",
-  muted: "#b2b2be",
-  accent: "#74b5ff",
-  accentFill: "#0066d6",
-  onAccent: "#ffffff",
-  tint: "#202f48",
-  secondary: "#282830",
-  field: "#26262d",
-  success: "#6cdda0",
-  error: "#ff8a90",
-  errorFill: "#392328",
+  background: "#211C18",
+  surface: "#2B241F",
+  edge: "#514238",
+  foreground: "#F5ECE1",
+  muted: "#BEA995",
+  accent: "#D9AB88",
+  accentFill: "#9C6548",
+  onAccent: "#FFFFFF",
+  tint: "#49382D",
+  secondary: "#382E27",
+  field: "#392F28",
+  success: "#C8B493",
+  error: "#EEA08D",
+  errorFill: "#4B2B24",
 };
 
 const symbols = {
@@ -67,6 +67,23 @@ const symbols = {
   link: ["link", "link"],
   close: ["xmark", "close"],
   bell: ["bell", "notifications"],
+  more: ["ellipsis", "more_horiz"],
+  sparkles: ["sparkles", "auto_awesome"],
+  sparkle: ["sparkles", "auto_awesome"],
+  chatActive: ["bubble.left.fill", "chat_bubble"],
+  inboxActive: ["tray.fill", "inbox"],
+  settingsActive: ["gearshape.fill", "settings"],
+  command: ["command", "terminal"],
+  reasoning: ["brain", "psychology"],
+  process: ["list.bullet.rectangle", "account_tree"],
+  approval: ["checkmark.shield", "assignment_turned_in"],
+  key: ["key", "key"],
+  search: ["magnifyingglass", "search"],
+  book: ["book", "menu_book"],
+  layers: ["square.3.layers.3d", "layers"],
+  shield: ["checkmark.shield", "verified_user"],
+  download: ["arrow.down.to.line", "download"],
+  plus: ["plus", "add"],
 } as const satisfies Record<string, readonly [SFSymbol, AndroidSymbol]>;
 
 export type IconName = keyof typeof symbols;
@@ -98,7 +115,7 @@ export function CloseButton({ onPress, disabled, accessibilityLabel = "关闭" }
 }
 
 export function Action({
-  title, onPress, primary, disabled, selected, destructive, icon, compact, disclosure, accessibilityLabel, toggled, feedback,
+  title, onPress, primary, disabled, selected, destructive, icon, compact, disclosure, accessibilityLabel, toggled, feedback, style,
 }: {
   title: string;
   onPress: () => void;
@@ -112,6 +129,7 @@ export function Action({
   accessibilityLabel?: string;
   toggled?: boolean;
   feedback?: HapticKind | false;
+  style?: StyleProp<ViewStyle>;
 }) {
   const { colors, styles } = useTheme();
   const [focused, setFocused] = useState(false);
@@ -140,6 +158,7 @@ export function Action({
       style={({ pressed }) => [
         styles.button,
         compact ? styles.compactButton : fill,
+        style,
         focused && styles.focused,
         (pressed || disabled) && styles.faded,
       ]}
@@ -169,6 +188,14 @@ export function Card({ children }: { children: ReactNode }) {
   return <View style={styles.card}>{children}</View>;
 }
 
+export function SectionLabel({ children }: { children: ReactNode }) {
+  const { colors, styles } = useTheme();
+  return <View style={styles.sectionHeading}>
+    <Text accessibilityRole="header" style={styles.sectionLabel}>{children}</Text>
+    <View style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: colors.edge }} />
+  </View>;
+}
+
 export function Notice({ children }: { children: ReactNode }) {
   const { styles } = useTheme();
   return <Text accessibilityLiveRegion="polite" style={styles.error}>
@@ -192,36 +219,39 @@ function createTheme(colors: typeof light, dark: boolean) {
     colors, dark,
     styles: StyleSheet.create({
       frame: { flex: 1, backgroundColor: colors.background },
-      content: { flexGrow: 1, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 20, gap: 14 },
-      pairContent: { flexGrow: 1, justifyContent: "center", padding: 20, gap: 12 },
-      header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10, paddingHorizontal: 16, paddingVertical: 8 },
-      row: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6 },
-      listItem: { minHeight: 48, paddingHorizontal: 13, paddingVertical: 8, flexDirection: "row", alignItems: "center", gap: 10 },
-      title: { color: colors.foreground, fontSize: 29, lineHeight: 35, fontWeight: "700", letterSpacing: -0.7 },
-      heading: { color: colors.foreground, fontSize: 16, lineHeight: 21, fontWeight: "600", letterSpacing: -0.2 },
-      text: { color: colors.foreground, fontSize: 14, lineHeight: 20 },
-      muted: { color: colors.muted, fontSize: 13, lineHeight: 18 },
-      caption: { color: colors.muted, fontSize: 12, lineHeight: 16 },
-      sectionLabel: { color: colors.muted, fontSize: 12, lineHeight: 16, fontWeight: "600", marginLeft: 12, marginBottom: 5 },
-      label: { color: colors.foreground, fontSize: 13, lineHeight: 18, fontWeight: "600" },
-      error: { color: colors.error, backgroundColor: colors.errorFill, fontSize: 13, lineHeight: 18, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 9 },
-      card: { backgroundColor: colors.surface, borderRadius: 13, padding: 12, gap: 8 },
+      content: { flexGrow: 1, paddingHorizontal: 24, paddingTop: 16, paddingBottom: 32, gap: 24 },
+      pairContent: { flexGrow: 1, justifyContent: "center", padding: 24, gap: 20 },
+      header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12, paddingHorizontal: 24, paddingVertical: 8 },
+      row: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 8 },
+      listItem: { minHeight: 64, paddingHorizontal: 0, paddingVertical: 14, flexDirection: "row", alignItems: "center", gap: 14 },
+      wordmark: { color: colors.foreground, fontFamily: Platform.select({ ios: "Georgia", android: "serif", default: "Georgia, serif" }), fontSize: 23, lineHeight: 30, fontWeight: "600", letterSpacing: -0.5 },
+      title: { color: colors.foreground, fontSize: 30, lineHeight: 39, fontWeight: "700", letterSpacing: -0.6 },
+      heading: { color: colors.foreground, fontSize: 18, lineHeight: 26, fontWeight: "600" },
+      text: { color: colors.foreground, fontSize: 17, lineHeight: 26 },
+      muted: { color: colors.muted, fontSize: 14, lineHeight: 21 },
+      caption: { color: colors.muted, fontSize: 13, lineHeight: 19 },
+      sectionLabel: { color: colors.muted, fontSize: 14, lineHeight: 21, fontWeight: "500" },
+      sectionHeading: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 8 },
+      label: { color: colors.foreground, fontSize: 17, lineHeight: 25, fontWeight: "600" },
+      error: { color: colors.error, backgroundColor: colors.errorFill, fontSize: 14, lineHeight: 22, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12 },
+      card: { backgroundColor: colors.surface, borderRadius: 14, padding: 18, gap: 12 },
       input: {
-        minHeight: 44,
+        minHeight: 50,
         borderWidth: 1,
         borderColor: "transparent",
         backgroundColor: colors.field,
         color: colors.foreground,
-        borderRadius: 9,
-        paddingHorizontal: 10,
-        paddingVertical: 8,
-        fontSize: 14,
+        borderRadius: 12,
+        paddingHorizontal: 16,
+        paddingVertical: 12,
+        fontSize: 17,
+        lineHeight: 24,
       },
       button: {
         minHeight: 44,
-        paddingHorizontal: 11,
-        paddingVertical: 7,
-        borderRadius: 9,
+        paddingHorizontal: 15,
+        paddingVertical: 10,
+        borderRadius: 12,
         flexDirection: "row",
         gap: 6,
         justifyContent: "center",
@@ -232,15 +262,15 @@ function createTheme(colors: typeof light, dark: boolean) {
       },
       buttonPrimary: { backgroundColor: colors.accentFill },
       buttonSelected: { backgroundColor: colors.tint },
-      buttonLabel: { fontSize: 14, fontWeight: "600", flexShrink: 1, textAlign: "center" },
+      buttonLabel: { fontSize: 16, lineHeight: 23, fontWeight: "600", flexShrink: 1, textAlign: "center" },
       closeButton: { minWidth: Platform.OS === "android" ? 48 : 44, minHeight: Platform.OS === "android" ? 48 : 44,
         alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "transparent", borderRadius: 9 },
       compactButton: { minHeight: Platform.OS === "android" ? 48 : 44, minWidth: Platform.OS === "android" ? 48 : 44,
         paddingHorizontal: 0, paddingVertical: 0, backgroundColor: "transparent", borderRadius: 7 },
       compactFace: { flexDirection: "row", alignItems: "center", justifyContent: "center", minHeight: 28, flexShrink: 1,
-        paddingHorizontal: 7, paddingVertical: 3, gap: 3, borderRadius: 7, backgroundColor: colors.secondary },
-      compactLabel: { fontSize: 13 },
-      focused: { borderColor: colors.accent },
+        paddingHorizontal: 10, paddingVertical: 5, gap: 5, borderRadius: 9, backgroundColor: colors.secondary },
+      compactLabel: { fontSize: 14, lineHeight: 20 },
+      focused: { borderColor: colors.accent, ...(Platform.OS === "web" ? { outlineColor: colors.accent } : {}) },
       faded: { opacity: 0.53 },
       empty: { alignItems: "center", gap: 6, paddingHorizontal: 16, paddingVertical: 24, alignSelf: "center", maxWidth: 350 },
       emptyIcon: { alignItems: "center", justifyContent: "center", backgroundColor: colors.tint, width: 44, height: 44, borderRadius: 12, marginBottom: 3 },

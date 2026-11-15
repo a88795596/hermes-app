@@ -1,6 +1,7 @@
 import { openBrowserAsync, WebBrowserPresentationStyle } from "expo-web-browser";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { MarkdownIt } from "react-native-markdown-renderer";
 import { inboxTitle, type InboxItem, type Profile } from "@hermes-mobile/protocol";
 import { AnswerMarkdown } from "../chat/answer-markdown";
 import { MessageAttachments } from "../chat/message-attachments";
@@ -8,33 +9,57 @@ import type { Session } from "../auth/session";
 import { formatTopicTime, groupTopics } from "../chat/topic-groups";
 import { haptic } from "../ui/haptics";
 import { formatDateTime, profileLabel } from "../ui/text";
-import { Action, EmptyState, Icon, Notice, useTheme } from "../ui/theme";
+import { Action, EmptyState, Icon, Notice, SectionLabel, useTheme } from "../ui/theme";
+
+const previewMarkdown = MarkdownIt({ html: false });
+
+function tokenText(token: ReturnType<typeof previewMarkdown.parse>[number]): string {
+  switch (token.type) {
+    case "inline":
+    case "image":
+      return token.children?.map(tokenText).join("") ?? token.content;
+    case "text":
+    case "code_inline":
+    case "code_block":
+    case "fence":
+      return token.content;
+    case "softbreak":
+    case "hardbreak":
+      return " ";
+    default:
+      return "";
+  }
+}
 
 function itemProfile(item: InboxItem, profiles: Profile[]) {
   const profile = profiles.find((profile) => profile.profile_id === item.profile_id);
   return profile ? profileLabel(profile.label) : "未标注档案";
 }
 
-function InboxCard({ item, profile, now, onOpen }: {
+function InboxRow({ item, profile, now, onOpen }: {
   item: InboxItem; profile: string; now: Date; onOpen: (item: InboxItem) => void;
 }) {
   const { colors, styles } = useTheme();
   const [focused, setFocused] = useState(false);
   const title = item.title ?? inboxTitle(item.text || item.attachments?.[0]?.name || "");
-  const preview = item.text.replace(/\s+/gu, " ").trim() || item.attachments?.map(({ name }) => name).join("、") || "";
+  const plainText = useMemo(() => previewMarkdown.parse(item.text, {}).map(tokenText).join(" ").replace(/\s+/gu, " ").trim(), [item.text]);
+  const preview = plainText || item.attachments?.map(({ name }) => name).join("、") || "";
   return (
     <Pressable accessibilityRole="button" accessibilityLabel={`${title}，${profile}，${formatDateTime(item.created_at)}，${Array.from(preview).slice(0, 160).join("")}`}
       accessibilityHint="查看消息全文" onPress={() => { haptic("light"); onOpen(item); }}
       onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
-      style={({ pressed }) => [styles.card, layout.card, focused && styles.focused, pressed && { backgroundColor: colors.secondary }]}>
-      <Text numberOfLines={2} ellipsizeMode="tail" style={styles.heading}>{title}</Text>
-      <Text numberOfLines={2} ellipsizeMode="tail" style={[styles.text, { color: colors.muted }]}>
-        {preview}
-      </Text>
-      <View style={layout.metadata}>
-        <Text numberOfLines={1} style={[styles.caption, layout.profile]}>{profile}</Text>
-        <Text style={styles.caption}>{formatTopicTime(item.created_at, now)}</Text>
-        <Icon name="chevron" size={11} color={colors.muted} />
+      style={({ pressed }) => [layout.row, { borderColor: colors.edge }, focused && styles.focused, pressed && styles.faded]}>
+      <View style={[layout.icon, { backgroundColor: colors.tint }]}>
+        <Icon name={item.attachments?.length ? "attachment" : "chat"} size={21} color={colors.accent} />
+      </View>
+      <View style={layout.rowContent}>
+        <Text numberOfLines={2} ellipsizeMode="tail" style={styles.heading}>{title}</Text>
+        {!!preview && <Text numberOfLines={2} ellipsizeMode="tail" style={styles.muted}>{preview}</Text>}
+        <View style={layout.metadata}>
+          <Text numberOfLines={1} style={[styles.caption, layout.profile]}>{profile}</Text>
+          <Text style={styles.caption}>{formatTopicTime(item.created_at, now)}</Text>
+          <Icon name="chevron" size={11} color={colors.muted} />
+        </View>
       </View>
     </Pressable>
   );
@@ -48,7 +73,6 @@ export function InboxList({ items, profiles, profileId, ready, onProfile, onOpen
   onProfile: (id: string | undefined) => void;
   onOpen: (item: InboxItem) => void;
 }) {
-  const { styles } = useTheme();
   const now = new Date();
   const filtered = profileId ? items.filter((item) => item.profile_id === profileId) : items;
   return <>
@@ -62,10 +86,8 @@ export function InboxList({ items, profiles, profileId, ready, onProfile, onOpen
     </ScrollView>
     {groupTopics(filtered, now).map(({ title, rows }) => (
       <View key={title ?? "undated"}>
-        {title && <Text accessibilityRole="header" style={styles.sectionLabel}>{title}</Text>}
-        <View style={layout.cards}>
-          {rows.map((item) => <InboxCard key={item.inbox_id} item={item} profile={itemProfile(item, profiles)} now={now} onOpen={onOpen} />)}
-        </View>
+        {title && <SectionLabel>{title}</SectionLabel>}
+        {rows.map((item) => <InboxRow key={item.inbox_id} item={item} profile={itemProfile(item, profiles)} now={now} onOpen={onOpen} />)}
       </View>
     ))}
     {ready && !filtered.length && <EmptyState icon="inbox" title={profileId ? "此档案暂无消息" : "暂无消息"} />}
@@ -88,9 +110,9 @@ export function InboxDetail({ item, profiles, session }: { item: InboxItem; prof
     }).catch(() => { haptic("error"); setError("无法打开链接，请稍后重试。"); });
   }, [colors.foreground, colors.surface]);
   return (
-    <View style={[styles.frame, { backgroundColor: colors.surface }]}>
+    <View style={styles.frame}>
       <ScrollView contentContainerStyle={[styles.content, layout.detail]}>
-        <Text selectable accessibilityRole="header" style={[styles.title, layout.detailTitle]}>{item.title ?? inboxTitle(item.text || item.attachments?.[0]?.name || "")}</Text>
+        <Text selectable accessibilityRole="header" style={styles.title}>{item.title ?? inboxTitle(item.text || item.attachments?.[0]?.name || "")}</Text>
         <View style={[layout.detailMetadata, { borderBottomColor: colors.edge }]}>
           <Text selectable style={[styles.label, { color: colors.accent }]}>{itemProfile(item, profiles)}</Text>
           <Text selectable style={styles.caption}>{formatDateTime(item.created_at)}</Text>
@@ -105,13 +127,13 @@ export function InboxDetail({ item, profiles, session }: { item: InboxItem; prof
 
 const layout = StyleSheet.create({
   filterBar: { flexGrow: 0 },
-  filters: { gap: 6, paddingVertical: 1, alignItems: "center" },
-  cards: { gap: 10 },
-  card: { padding: 16, gap: 8, borderWidth: 1, borderColor: "transparent" },
-  metadata: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 4 },
+  filters: { gap: 8, paddingVertical: 1, alignItems: "center" },
+  row: { flexDirection: "row", gap: 14, paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth },
+  icon: { width: 40, height: 40, borderRadius: 11, alignItems: "center", justifyContent: "center" },
+  rowContent: { flex: 1, minWidth: 0, gap: 4 },
+  metadata: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 },
   profile: { flex: 1, minWidth: 0 },
-  detail: { width: "100%", maxWidth: 680, alignSelf: "center", paddingTop: 24, paddingBottom: 32, gap: 18 },
-  detailTitle: { fontSize: 24, lineHeight: 32, letterSpacing: -0.4 },
+  detail: { width: "100%", maxWidth: 680, alignSelf: "center", paddingTop: 24, paddingBottom: 32, gap: 20 },
   detailMetadata: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: 12, rowGap: 6,
     paddingBottom: 18, borderBottomWidth: StyleSheet.hairlineWidth },
 });

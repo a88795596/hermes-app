@@ -19,6 +19,8 @@ function mount() {
     new Function("exports", "require", "setTimeout", "clearTimeout", source)(exports, (name) => {
       if (name === "react/jsx-runtime") return { jsx, jsxs: jsx };
       if (name === "react") return {
+        createContext: (value) => ({ value }),
+        useContext: (context) => context.value,
         useState(initial) {
           const index = cursor++;
           if (!(index in values)) values[index] = typeof initial === "function" ? initial() : initial;
@@ -33,6 +35,7 @@ function mount() {
         Pressable: "Pressable", Switch: "Switch", Text: "Text", View: "View",
       };
       if (name === "react-native-reanimated") return { default: {} };
+      if (name === "react-native-safe-area-context") return { useSafeAreaInsets: () => ({ top: 24, bottom: 0 }) };
       if (name === "../sync/api") return { ApiError };
       if (name === "../ui/haptics") return { haptic: (kind) => feedback.push(kind) };
       if (name === "../ui/motion") return { motion: {}, useReduceMotion: () => true };
@@ -41,6 +44,7 @@ function mount() {
         EmptyState: "EmptyState", Field: "Field", Icon: "Icon", Notice: "Notice",
       };
       if (name === "./shared") return load("shared");
+      if (name === "../chat/composer-menu") return { ComposerSheet: "ComposerSheet" };
       throw new Error(`Unexpected dependency: ${name}`);
     }, (callback) => { timers.push(callback); return timers.length; }, (id) => { if (id) timers[id - 1] = undefined; });
     return exports;
@@ -71,6 +75,20 @@ test("管理列表与开关提供轻触和选择反馈，禁用控件保持静�
   }
   assert.equal(changes, 2);
   assert.deepEqual(screen.feedback, ["light", "selection"]);
+});
+
+test("固定管理工具栏在提交期间拦截取消和返回，键盘避让保留顶部安全区", () => {
+  const screen = mount();
+  let navigation = 0;
+  for (const disabled of [false, true]) {
+    const header = screen.render("shared", "FormHeader", { title: "编辑", onCancel: () => navigation++, onSave() {}, cancelDisabled: disabled });
+    find(header, (node) => node.props.accessibilityLabel === "取消").props.onPress();
+    const detail = screen.render("shared", "ManagementHeader", { title: "详情", onBack: () => navigation++, backDisabled: disabled });
+    find(detail, (node) => node.props.accessibilityLabel === "返回管理").props.onPress();
+  }
+  assert.equal(navigation, 2);
+  assert.deepEqual(screen.feedback, ["light", "light"]);
+  assert.equal(screen.render("shared", "ManagementLayout", { header: null, children: null, hideTabs: true }).props.keyboardVerticalOffset, 24);
 });
 
 test("管理操作防止重复提交且只提示一次失败，读取与排队回执不会提示成功", async () => {
@@ -130,6 +148,42 @@ test("手动测试 MCP 连接根据真实结果提示成功或失败", async () 
     await flush();
     assert.deepEqual(screen.feedback, [ok ? "success" : "error"]);
   }
+});
+
+test("MCP 更新令牌时遮蔽输入，取消清空草稿，提交中只发送一次", async () => {
+  const screen = mount();
+  const requests = [];
+  let finish;
+  const call = async (operation, input) => {
+    if (operation === "mcp.list") return { servers: [{ name: "server", transport: "http", enabled: true, bearer_managed: true }] };
+    requests.push({ operation, input });
+    return new Promise((resolve) => { finish = resolve; });
+  };
+  const render = () => screen.render("mcp", "Mcp", { call });
+  const action = (title) => find(render(), (node) => node.props.title === title).props;
+  const token = () => find(render(), (node) => node.props.label === "新的 Bearer 令牌")?.props;
+  render();
+  screen.effects.forEach((effect) => effect());
+  await flush();
+  find(render(), (node) => node.type?.name === "Row" && node.props.title === "server").props.onPress();
+  action("更新 Bearer 令牌").onPress();
+  assert.equal(token().secureTextEntry, true);
+  token().onChangeText("discard-this");
+  action("取消").onPress();
+  action("更新 Bearer 令牌").onPress();
+  assert.equal(token().value, "");
+  assert.equal(action("保存 Bearer 令牌").disabled, true);
+  assert.deepEqual(requests, []);
+  token().onChangeText(" replacement ");
+  action("保存 Bearer 令牌").onPress();
+  assert.equal(action("保存 Bearer 令牌").disabled, true);
+  assert.equal(render().props.header.props.backDisabled, true);
+  action("保存 Bearer 令牌").onPress();
+  assert.deepEqual(requests, [{ operation: "mcp.token", input: { name: "server", bearer_token: "replacement" } }]);
+  finish();
+  await flush();
+  assert.equal(token(), undefined);
+  assert.deepEqual(screen.feedback, ["success"]);
 });
 
 test("离开安装页面后返回的结果与异常均保持静默", async () => {

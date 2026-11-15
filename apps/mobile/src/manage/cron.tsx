@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react";
-import { Text, View } from "react-native";
+import { useMemo, useState, type ReactNode } from "react";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { haptic } from "../ui/haptics";
 import { formatDateTime } from "../ui/text";
-import { Action, Card, CloseButton, EmptyState, useTheme } from "../ui/theme";
-import { ActionState, Confirm, DataState, EditField, Group, Row, Toggle, entries,
-  useManagementAction, useManagementData, type ManageCall } from "./shared";
+import { Action, EmptyState, Icon, useTheme, type IconName } from "../ui/theme";
+import { ActionState, Confirm, DataState, EditField, FormHeader, Group, ManagementHeader, ManagementLayout, Row, Toggle, entries,
+  useManagementAction, useManagementContext, useManagementData, type ManageCall } from "./shared";
 
 type Job = {
   id: string;
@@ -57,14 +57,13 @@ function scheduleLabel(job: Job) {
   if (schedule && typeof schedule !== "string") {
     if (schedule.kind === "interval" && typeof schedule.minutes === "number") return `每 ${schedule.minutes} 分钟`;
     if (schedule.kind === "once" && schedule.run_at) return `单次 · ${schedule.run_at.replace("T", " ")}`;
-    if (schedule.kind === "cron" && schedule.expr) return schedule.expr;
   }
   return job.schedule_display || scheduleValue(job) || "未设置执行计划";
 }
 function when(value: string | number) { return formatDateTime(typeof value === "number" ? value * 1000 : value); }
 
 export function ScheduledTasks({ call }: { call: ManageCall }) {
-  const { styles } = useTheme();
+  const { colors, styles } = useTheme();
   const jobs = useManagementData<Job[]>(call, "cron.list");
   const action = useManagementAction();
   const [selected, select] = useState<string>();
@@ -74,87 +73,127 @@ export function ScheduledTasks({ call }: { call: ManageCall }) {
 
   function close() { select(undefined); edit(false); showHistory(false); }
 
-  return <>
-    <ActionState {...action} />
-    {editing ? <JobForm job={job} busy={action.busy} onCancel={() => edit(false)} onSave={(values) => void action.run(async () => {
+  if (editing) {
+    return <JobForm job={job} busy={action.busy} onCancel={() => edit(false)} onSave={(values) => void action.run(async () => {
       if (job) await call("cron.edit", { id: job.id, updates: values });
       else await call("cron.create", values);
       haptic("success");
       edit(false);
       await jobs.reload();
       return job ? "任务已更新。" : "任务已创建。";
-    })} /> : job ? <>
-      <View style={styles.row}>
-        <Action icon="back" title="全部任务" disabled={action.busy} onPress={close} />
-        <Action icon="refresh" title="刷新" disabled={jobs.loading || action.busy} onPress={() => void jobs.reload()} />
-      </View>
+    })}><ActionState {...action} /></JobForm>;
+  }
+  if (job && history) return <RunHistory key={job.id} call={call} job={job} onClose={() => showHistory(false)} />;
+  if (job) {
+    return <ManagementLayout key="detail" hideTabs header={<ManagementHeader title={jobName(job)} backLabel="定时任务" onBack={close}
+      backDisabled={action.busy} trailing={<View style={styles.row}>
+        <Action compact icon="refresh" title="刷新" disabled={jobs.loading || action.busy} onPress={() => void jobs.reload()} />
+        <Action compact icon="compose" title="编辑" accessibilityLabel="编辑任务" disabled={action.busy} onPress={() => edit(true)} />
+      </View>} />}>
+      <ActionState {...action} />
       <DataState {...jobs} />
-      <Card>
-        <Text accessibilityRole="header" style={styles.heading}>{jobName(job)}</Text>
-        <Text style={styles.text}>{jobState(job)} · {scheduleLabel(job)}</Text>
-        <Text style={styles.muted}>投递至 · {deliveryLabels.get(job.deliver || "local") ?? job.deliver}</Text>
-        {job.next_run_at && <Text style={styles.muted}>下次运行 · {when(job.next_run_at)}</Text>}
-        {job.last_run_at && <Text style={styles.muted}>上次运行 · {when(job.last_run_at)}
-          {job.last_status ? ` · ${runStates.get(job.last_status) ?? job.last_status}` : ""}</Text>}
-        {job.prompt && <Text selectable style={styles.text}>{job.prompt}</Text>}
-        {job.last_error && <Text selectable style={styles.error}>{job.last_error}</Text>}
-        {job.last_delivery_error && <Text selectable style={styles.error}>{job.last_delivery_error}</Text>}
-        <View style={styles.row}>
-          <Action title="编辑任务" disabled={action.busy} onPress={() => edit(true)} />
-          <Action title={job.enabled ? "暂停" : "恢复"} disabled={action.busy} onPress={() => void action.run(async () => {
+      <View style={[layout.pill, { backgroundColor: colors.tint }]}>
+        <Text style={[styles.caption, { color: colors.accent }]}>{jobState(job)}</Text>
+      </View>
+      <Group>
+        <TaskFact icon="schedule" label="执行计划" value={scheduleLabel(job)} />
+        <TaskFact icon="inbox" label="投递目标" value={deliveryLabels.get(job.deliver || "local") ?? job.deliver ?? ""} />
+        {job.next_run_at && <TaskFact label="下次运行" value={when(job.next_run_at)} />}
+        {job.last_run_at && <TaskFact label="上次运行" value={`${when(job.last_run_at)}${job.last_status ? ` · ${runStates.get(job.last_status) ?? job.last_status}` : ""}`} />}
+        {job.prompt && <TaskFact icon="logs" label="提示词" value={job.prompt} />}
+        <Row title="运行记录" icon="activity" onPress={() => showHistory(true)} />
+      </Group>
+      {job.last_error && <Text selectable style={styles.error}>{job.last_error}</Text>}
+      {job.last_delivery_error && <Text selectable style={styles.error}>{job.last_delivery_error}</Text>}
+      <View style={layout.taskActions}>
+        <Action primary title="立即运行" style={layout.runAction} feedback="medium" disabled={action.busy || !job.enabled}
+          onPress={() => void action.run(async () => {
+            await call("cron.trigger", { id: job.id });
+            await jobs.reload();
+            return "已加入队列，将在 Hermes 调度器下次检查时运行。";
+          })} />
+        <Action title={job.enabled ? "暂停" : "恢复"} style={[layout.pauseAction, { borderColor: colors.accent }]}
+          disabled={action.busy} onPress={() => void action.run(async () => {
             await call(job.enabled ? "cron.pause" : "cron.resume", { id: job.id });
             haptic("success");
             await jobs.reload();
             return job.enabled ? "任务已暂停。" : "任务已恢复。";
           })} />
-          <Action title="立即运行" feedback="medium" disabled={action.busy || !job.enabled} onPress={() => void action.run(async () => {
-            await call("cron.trigger", { id: job.id });
-            await jobs.reload();
-            return "已加入队列，将在 Hermes 调度器下次检查时运行。";
-          })} />
-        </View>
-        {!job.enabled && <Text style={styles.caption}>恢复任务后即可运行。</Text>}
-        <View style={styles.row}>
-          {!history && <Action title="运行记录" onPress={() => showHistory(true)} />}
-          <Confirm title="删除任务" description={`确定删除定时任务「${jobName(job)}」吗？`} disabled={action.busy}
-            onConfirm={() => void action.run(async () => { await call("cron.remove", { id: job.id }); haptic("success"); close(); await jobs.reload(); return "任务已删除。"; })} />
-        </View>
-      </Card>
-      {history && <RunHistory key={job.id} call={call} id={job.id} onClose={() => showHistory(false)} />}
-    </> : <>
-      <View style={styles.row}>
-        <Action primary icon="compose" title="新建任务" disabled={!jobs.data || action.busy} onPress={() => edit(true)} />
-        <Action icon="refresh" title="刷新" disabled={jobs.loading || action.busy} onPress={() => void jobs.reload()} />
       </View>
-      <DataState {...jobs} />
-      {jobs.data?.length ? <Group>
-        {jobs.data.map((item, index) => <Row key={item.id} divided={index > 0} title={jobName(item)}
-          subtitle={scheduleLabel(item)} value={jobState(item)} onPress={() => select(item.id)} />)}
-      </Group> : jobs.data && <EmptyState icon="schedule" title="暂无定时任务" description="创建任务，按计划执行提示词或脚本。" />}
-    </>}
-  </>;
+      {!job.enabled && <Text style={styles.caption}>恢复任务后即可运行。</Text>}
+      <View style={[layout.danger, { borderColor: colors.edge }]}>
+        <Confirm title="删除任务" description={`确定删除定时任务「${jobName(job)}」吗？`} disabled={action.busy}
+          onConfirm={() => void action.run(async () => {
+            await call("cron.remove", { id: job.id });
+            haptic("success");
+            close();
+            await jobs.reload();
+            return "任务已删除。";
+          })} />
+      </View>
+    </ManagementLayout>;
+  }
+  return <ManagementLayout key="list" header={<ManagementHeader title="定时任务" />}>
+    <ActionState {...action} />
+    <View style={styles.row}>
+      <Action primary icon="compose" title="新建任务" disabled={!jobs.data || action.busy} onPress={() => edit(true)} />
+      <Action icon="refresh" title="刷新" disabled={jobs.loading || action.busy} onPress={() => void jobs.reload()} />
+    </View>
+    <DataState {...jobs} />
+    {jobs.data?.length ? <Group>
+      {jobs.data.map((item, index) => <Row key={item.id} divided={index > 0} title={jobName(item)} icon="schedule"
+        subtitle={scheduleLabel(item)} value={jobState(item)} onPress={() => select(item.id)} />)}
+    </Group> : jobs.data && <EmptyState icon="schedule" title="暂无定时任务" />}
+  </ManagementLayout>;
 }
 
-function RunHistory({ call, id, onClose }: { call: ManageCall; id: string; onClose: () => void }) {
-  const { styles } = useTheme();
-  const input = useMemo(() => ({ id }), [id]);
+function TaskFact({ icon, label, value }: { icon?: IconName; label: string; value: string }) {
+  const { colors, styles } = useTheme();
+  return <View style={[layout.fact, { borderColor: colors.edge }]}>
+    {icon ? <>
+      <View style={[layout.icon, { backgroundColor: colors.tint }]}><Icon name={icon} size={20} color={colors.accent} /></View>
+      <View style={layout.grow}>
+        <Text style={styles.caption}>{label}</Text>
+        <Text selectable style={styles.text}>{value}</Text>
+      </View>
+    </> : <>
+      <Text style={styles.muted}>{label}</Text>
+      <Text style={[styles.text, layout.factValue]}>{value}</Text>
+    </>}
+  </View>;
+}
+
+function RunHistory({ call, job, onClose }: { call: ManageCall; job: Job; onClose: () => void }) {
+  const { colors, styles } = useTheme();
+  const input = useMemo(() => ({ id: job.id }), [job.id]);
   const history = useManagementData<{ runs: { id: string; title?: string; started_at: number; ended_at?: number | null; is_active?: boolean }[] }>(call, "cron.runs", input);
-  return <Card>
-    <View style={styles.row}>
-      <Text accessibilityRole="header" style={[styles.heading, { flex: 1 }]}>近期运行记录</Text>
-      <CloseButton accessibilityLabel="关闭运行记录" onPress={onClose} />
-    </View>
+  return <ManagementLayout hideTabs header={<ManagementHeader title="运行记录" backLabel="任务详情" onBack={onClose}
+    trailing={<Action compact icon="refresh" title="刷新" accessibilityLabel="刷新运行记录"
+      disabled={history.loading} onPress={() => void history.reload()} />} />}>
+    <TaskFact icon="schedule" label={jobName(job)} value={scheduleLabel(job)} />
     <DataState {...history} />
-    {history.data?.runs.map((run) => {
+    <View>{history.data?.runs.map((run, index, runs) => {
       const started = when(run.started_at);
-      return <View key={run.id}>
-        <Text style={styles.text}>{run.title || started}</Text>
-        <Text style={styles.caption}>{run.title ? `${started} · ` : ""}{run.is_active ? "运行中" : run.ended_at ? "已结束" : "暂无结束时间"}</Text>
+      return <View key={run.id} style={layout.run}>
+        <View style={layout.track}>
+          <View style={[layout.marker, { backgroundColor: colors.tint }]}>
+            <Icon name={run.is_active ? "activity" : run.ended_at ? "check" : "schedule"} size={14} color={colors.accent} />
+          </View>
+          {index < runs.length - 1 && <View style={[layout.stem, { backgroundColor: colors.edge }]} />}
+        </View>
+        <View style={[layout.runContent, styles.row]}>
+          <View style={layout.grow}>
+            <Text style={styles.heading}>{run.title || started}</Text>
+            {!!run.title && <Text style={styles.caption}>{started}</Text>}
+          </View>
+          <View style={[layout.pill, { backgroundColor: colors.tint }]}>
+            <Text style={styles.caption}>{run.is_active ? "运行中" : run.ended_at ? "已结束" : "暂无结束时间"}</Text>
+          </View>
+        </View>
       </View>;
-    })}
-    {history.data?.runs.length === 0 && <Text style={styles.muted}>Hermes 尚未记录此任务的运行情况。</Text>}
-    <Action icon="refresh" title="刷新运行记录" disabled={history.loading} onPress={() => void history.reload()} />
-  </Card>;
+    })}</View>
+    {history.data?.runs.length === 0 && <EmptyState icon="activity" title="暂无运行记录" />}
+  </ManagementLayout>;
 }
 
 function jobValues(job?: Job) {
@@ -174,41 +213,70 @@ const advancedFields = [
   ["context_from", "引用其他任务的输出", "任务 ID，用英文逗号分隔"], ["enabled_toolsets", "工具集", "工具集名称，用英文逗号分隔"],
 ] as const;
 
-function JobForm({ job, busy, onCancel, onSave }: { job?: Job; busy: boolean; onCancel: () => void; onSave: (values: object) => void }) {
-  const { styles } = useTheme();
+function JobForm({ job, busy, onCancel, onSave, children }: {
+  job?: Job; busy: boolean; onCancel: () => void; onSave: (values: object) => void; children: ReactNode;
+}) {
+  const { colors, styles } = useTheme();
+  const { label: profile } = useManagementContext();
   const [initial] = useState(() => jobValues(job));
   const [draft, set] = useState(initial);
   const [advanced, expand] = useState(false);
   const dirty = (Object.keys(draft) as (keyof typeof draft)[]).filter((key) => draft[key] !== initial[key]);
-  const field = (key: Exclude<keyof typeof draft, "no_agent">, label: string, placeholder?: string, multiline = false) =>
-    <EditField key={key} label={label} placeholder={placeholder} multiline={multiline} editable={!busy}
-      value={draft[key]} onChangeText={(value) => set({ ...draft, [key]: value })} />;
+  const field = (key: Exclude<keyof typeof draft, "no_agent">, label: string, placeholder?: string, multiline = false, help?: string) =>
+    <EditField key={key} label={label} placeholder={placeholder} multiline={multiline} editable={!busy} help={help}
+      value={draft[key]} onChangeText={(value) => set((current) => ({ ...current, [key]: value }))} />;
   function save() {
     const keys = job ? dirty : (["schedule", ...dirty] as const);
     onSave(Object.fromEntries(keys.map((key) => [key,
       key === "skills" || key === "context_from" || key === "enabled_toolsets" ? entries(draft[key])
         : key === "no_agent" ? draft[key] : key === "prompt" ? draft[key] : draft[key].trim()])));
   }
-  return <Card>
-    <Text accessibilityRole="header" style={styles.heading}>{job ? "编辑定时任务" : "新建定时任务"}</Text>
+  return <ManagementLayout hideTabs header={<FormHeader title={job ? "编辑任务" : "新建任务"}
+    saveLabel={busy ? "保存中…" : job ? "保存" : "创建"} cancelDisabled={busy}
+    disabled={busy || !draft.schedule.trim() || (!!job && dirty.length === 0)} onCancel={onCancel} onSave={save} />}>
+    {children}
+    {!!profile && <View style={styles.row}>
+      <View style={[layout.icon, { backgroundColor: colors.tint }]}><Icon name="sparkles" size={19} color={colors.accent} /></View>
+      <Text style={[styles.label, layout.grow]}>{profile}</Text>
+    </View>}
     {field("name", "名称")}
-    {field("schedule", "执行计划", "例如 every 2h 或 0 9 * * *")}
-    <Text style={styles.caption}>执行计划采用 Hermes 主机配置的时区。</Text>
+    {field("schedule", "执行计划", "例如 every 2h 或 0 9 * * *", false, "采用 Hermes 主机时区")}
     {field("prompt", "提示词", "希望 Hermes 执行什么？", true)}
-    {field("deliver", "投递目标", "填写 local 或 hermes_mobile")}
-    <Text style={styles.caption}>填写 local 将结果留在主机，填写 hermes_mobile 将结果发送到已配置的收件箱。</Text>
-    {advanced ? <View style={styles.row}>
-      <Text style={styles.label}>高级选项</Text>
-      <CloseButton accessibilityLabel="关闭高级选项" onPress={() => expand(false)} />
-    </View> : <Action title="高级选项" onPress={() => expand(true)} />}
+    {field("deliver", "投递目标", undefined, false, "local 留在主机 · hermes_mobile 发送至收件箱")}
+    <Pressable accessibilityRole="button" accessibilityState={{ expanded: advanced }} onPress={() => {
+      haptic("light");
+      expand((current) => !current);
+    }} style={({ pressed }) => [layout.disclosure, { borderColor: colors.edge }, pressed && { backgroundColor: colors.tint }]}>
+      <Icon name="manage" size={20} color={colors.accent} />
+      <Text style={[styles.heading, layout.grow]}>高级选项</Text>
+      <View style={advanced ? layout.expanded : undefined}>
+        <Icon name={advanced ? "down" : "chevron"} size={16} color={colors.muted} />
+      </View>
+    </Pressable>
     {advanced && <>
       {advancedFields.map(([key, label, hint]) => field(key, label, hint))}
-      <Toggle label="直接运行脚本，跳过模型" disabled={busy} value={draft.no_agent} onChange={(no_agent) => set({ ...draft, no_agent })} />
+      <Toggle label="直接运行脚本，跳过模型" disabled={busy} value={draft.no_agent} onChange={(no_agent) => set((current) => ({ ...current, no_agent }))} />
     </>}
-    <View style={styles.row}>
-      <Action primary title={busy ? "保存中…" : job ? "保存任务" : "创建任务"}
-        disabled={busy || !draft.schedule.trim() || (job && dirty.length === 0)} onPress={save} />
-      <CloseButton accessibilityLabel="取消" disabled={busy} onPress={onCancel} />
-    </View>
-  </Card>;
+  </ManagementLayout>;
 }
+
+const layout = StyleSheet.create({
+  grow: { flex: 1, minWidth: 0 },
+  fact: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", minHeight: 56,
+    paddingVertical: 12, gap: 12, borderBottomWidth: StyleSheet.hairlineWidth },
+  factValue: { flexShrink: 1, textAlign: "right" },
+  icon: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  pill: { alignSelf: "flex-start", borderRadius: 14, paddingHorizontal: 10, paddingVertical: 4 },
+  taskActions: { flexDirection: "row", alignItems: "stretch", gap: 8, marginTop: 8 },
+  runAction: { flex: 3 },
+  pauseAction: { flex: 2, backgroundColor: "transparent" },
+  danger: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 16 },
+  run: { flexDirection: "row", alignItems: "stretch", gap: 12 },
+  track: { alignItems: "center", paddingTop: 3 },
+  marker: { width: 24, height: 24, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  stem: { width: StyleSheet.hairlineWidth, flex: 1, marginTop: 4 },
+  runContent: { flex: 1, minHeight: 64, minWidth: 0, paddingBottom: 16 },
+  disclosure: { flexDirection: "row", alignItems: "center", minHeight: 56, gap: 12,
+    borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth },
+  expanded: { transform: [{ rotate: "180deg" }] },
+});

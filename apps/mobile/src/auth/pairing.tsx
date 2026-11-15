@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Image, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
 import Animated from "react-native-reanimated";
 import { motion, useReduceMotion } from "../ui/motion";
 import { haptic } from "../ui/haptics";
@@ -36,18 +36,16 @@ export function Pairing({
 
   return (
     <KeyboardAvoidingView style={styles.frame} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-      <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={[styles.pairContent, local.scroll]}>
+      <ScrollView keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={local.scroll}>
         <Animated.View style={[local.content, !reduced && motion.fade]}>
           <View style={local.intro}>
-            <View style={[local.icon, { backgroundColor: colors.tint }]}>
-              <Icon name="lock" size={18} color={colors.accent} />
-            </View>
-            <Text accessibilityRole="header" style={styles.title}>Hermes 移动端</Text>
-            <Text style={styles.muted}>将此设备与 Hermes 移动端服务器配对。</Text>
+            <Image accessible={false} source={require("../../assets/images/hermes-warm.png")} resizeMode="contain" style={local.mascot} />
+            <Text accessibilityElementsHidden importantForAccessibility="no" style={[styles.wordmark, local.wordmark]}>Hermes</Text>
+            <Text accessibilityRole="header" style={[styles.title, styles.center]}>连接你的 Hermes</Text>
           </View>
-          <View style={[local.group, { backgroundColor: colors.surface }]}>
-            <View style={local.field}>
-              <Text style={[styles.sectionLabel, local.fieldLabel]}>服务器地址</Text>
+          <View style={local.group}>
+            <View style={[local.field, { borderColor: colors.edge }]}>
+              <Text style={styles.label}>服务器地址</Text>
               <Field
                 accessibilityLabel="服务器地址"
                 autoCapitalize="none"
@@ -60,22 +58,25 @@ export function Pairing({
                 onChangeText={setAddress}
               />
             </View>
-            <View style={[local.divider, { backgroundColor: colors.edge }]} />
-            <View style={local.field}>
-              <Text style={[styles.sectionLabel, local.fieldLabel]}>配对令牌</Text>
-              <Field
-                accessibilityLabel="配对令牌"
-                autoCapitalize="none"
-                autoComplete="off"
-                autoCorrect={false}
-                editable={!busy}
-                importantForAutofill="no"
-                onChangeText={setToken}
-                onSubmitEditing={() => void submit()}
-                secureTextEntry
-                style={local.input}
-                value={token}
-              />
+            <View style={[local.field, { borderColor: colors.edge }]}>
+              <Text style={styles.label}>配对令牌</Text>
+              <View style={local.token}>
+                <Field
+                  accessibilityLabel="配对令牌"
+                  autoCapitalize="none"
+                  autoComplete="off"
+                  autoCorrect={false}
+                  editable={!busy}
+                  importantForAutofill="no"
+                  onChangeText={setToken}
+                  onSubmitEditing={() => void submit()}
+                  placeholder="••••••••"
+                  secureTextEntry
+                  style={[local.input, local.secret]}
+                  value={token}
+                />
+                <Icon name="lock" size={19} color={colors.muted} />
+              </View>
             </View>
           </View>
           {error && <Notice>{error}</Notice>}
@@ -92,13 +93,14 @@ export function Pairing({
 }
 
 const local = StyleSheet.create({
-  scroll: { alignItems: "center" },
-  content: { gap: 20, width: "100%", maxWidth: 430 },
-  intro: { gap: 6 },
-  icon: { width: 38, height: 38, borderRadius: 10, alignItems: "center", justifyContent: "center", marginBottom: 10 },
-  group: { borderRadius: 14, overflow: "hidden" },
-  field: { paddingHorizontal: 13, paddingTop: 10 },
-  fieldLabel: { marginLeft: 0, marginBottom: 0 },
-  divider: { height: StyleSheet.hairlineWidth, marginLeft: 13 },
-  input: { backgroundColor: "transparent", paddingHorizontal: 3, marginHorizontal: -4, borderRadius: 7, marginVertical: 3 },
+  scroll: { flexGrow: 1, alignItems: "center", paddingHorizontal: 24, paddingTop: 32, paddingBottom: 40 },
+  content: { gap: 32, width: "100%", maxWidth: 430 },
+  intro: { gap: 8, alignItems: "center" },
+  mascot: { width: 212, height: 212, maxWidth: "100%" },
+  wordmark: { fontSize: 26, lineHeight: 32 },
+  group: { gap: 16 },
+  field: { borderBottomWidth: StyleSheet.hairlineWidth, paddingBottom: 2 },
+  token: { flexDirection: "row", alignItems: "center", gap: 8 },
+  input: { backgroundColor: "transparent", paddingHorizontal: 2, marginHorizontal: -3 },
+  secret: { flex: 1, minWidth: 0 },
 });

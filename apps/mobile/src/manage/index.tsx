@@ -1,15 +1,16 @@
-import { useCallback } from "react";
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useCallback, useEffect, useMemo } from "react";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { managementTimeout, type ManagementOperation, type Profile } from "@hermes-mobile/protocol";
 import type { useWorkspace } from "../sync/use-workspace";
 import { profileLabel } from "../ui/text";
-import { Action, EmptyState, useTheme, type IconName } from "../ui/theme";
+import { EmptyState, useTheme, type IconName } from "../ui/theme";
+import { haptic } from "../ui/haptics";
 import { ScheduledTasks } from "./cron";
 import { Models } from "./models";
 import { Logs } from "./logs";
 import { Skills } from "./skills";
 import { Mcp } from "./mcp";
-import { Group, Row, type ManageCall } from "./shared";
+import { Group, ManagementContext, Row, type ManageCall } from "./shared";
 
 const pages = {
   cron: { title: "定时任务", summary: "执行计划与运行记录", icon: "schedule", Screen: ScheduledTasks },
@@ -24,45 +25,45 @@ export type ManagementPage = keyof typeof pages;
 export function ManagementMenu({ profiles, profile, onProfile, onOpen }: {
   profiles: Profile[]; profile?: Profile; onProfile: (id: string) => void; onOpen: (page: ManagementPage) => void;
 }) {
-  const { styles } = useTheme();
+  const { colors, styles } = useTheme();
   if (!profile) return <EmptyState icon="manage" title="暂无 Hermes 配置档案" description="连接服务器后刷新以加载配置档案。" />;
   return <>
-    <View>
-      <Text accessibilityRole="header" style={styles.sectionLabel}>Hermes 配置档案</Text>
-      {profiles.length > 1 ? <View style={styles.row}>
-        {profiles.map((item) => <Action key={item.profile_id} title={profileLabel(item.label)} selected={item.profile_id === profile.profile_id}
-          onPress={() => onProfile(item.profile_id)} />)}
-      </View> : <View style={styles.listItem}><Text style={styles.text}>{profileLabel(profile.label)}</Text></View>}
+    <View style={layout.profileSection}>
+      <Text accessibilityRole="header" style={styles.sectionLabel}>配置档案</Text>
+      <View style={[layout.profiles, { borderColor: colors.edge }]}>
+        {profiles.map((item) => <Pressable key={item.profile_id} accessibilityRole="button" accessibilityLabel={profileLabel(item.label)}
+          accessibilityState={{ selected: item.profile_id === profile.profile_id }}
+          onPress={() => { if (item.profile_id !== profile.profile_id) { haptic("selection"); onProfile(item.profile_id); } }}
+          style={({ pressed }) => [layout.profile, item.profile_id === profile.profile_id && { backgroundColor: colors.tint }, pressed && styles.faded]}>
+          <Text style={styles.label}>{profileLabel(item.label)}</Text>
+        </Pressable>)}
+      </View>
     </View>
     <Group>{(Object.keys(pages) as ManagementPage[]).map((page, index) => <Row key={page} divided={index > 0}
-      title={pages[page].title} subtitle={pages[page].summary} icon={pages[page].icon} onPress={() => onOpen(page)} />)}</Group>
+      title={pages[page].title} icon={pages[page].icon} onPress={() => onOpen(page)} />)}</Group>
   </>;
 }
 
-export function ManagementScreen({ page, profile, request }: {
+export function ManagementScreen({ page, profile, request, onBack, onTabVisibilityChange }: {
   page: ManagementPage; profile: Profile; request: ReturnType<typeof useWorkspace>["call"];
+  onBack: () => void; onTabVisibilityChange?: (visible: boolean) => void;
 }) {
-  const { styles } = useTheme();
-  const { Screen, title } = pages[page];
+  const { Screen } = pages[page];
   const call = useCallback(<T,>(operation: ManagementOperation, input?: object, signal?: AbortSignal) =>
     request<T>(`/profiles/${profile.profile_id}/manage/${operation}`, {
       method: "POST", body: input ? { input } : {}, signal, timeoutMs: managementTimeout(operation) + 8_000,
     }),
   [profile.profile_id, request]);
 
-  return <KeyboardAvoidingView style={layout.frame} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-    <ScrollView contentContainerStyle={[styles.content, layout.page]} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
-      <View style={layout.heading}>
-        <Text accessibilityRole="header" style={styles.title}>{title}</Text>
-        <Text style={styles.muted}>配置档案 · {profileLabel(profile.label)}</Text>
-      </View>
+  const context = useMemo(() => ({ label: profileLabel(profile.label), onBack, onTabVisibilityChange }), [profile.label, onBack, onTabVisibilityChange]);
+  useEffect(() => () => onTabVisibilityChange?.(true), [onTabVisibilityChange]);
+  return <ManagementContext.Provider value={context}>
       <Screen call={call} />
-    </ScrollView>
-  </KeyboardAvoidingView>;
+  </ManagementContext.Provider>;
 }
 
 const layout = StyleSheet.create({
-  frame: { flex: 1 },
-  page: { width: "100%", maxWidth: 680, alignSelf: "center", paddingTop: 16 },
-  heading: { gap: 4 },
+  profileSection: { gap: 12 },
+  profiles: { flexDirection: "row", flexWrap: "wrap", borderWidth: StyleSheet.hairlineWidth, borderRadius: 13, overflow: "hidden", alignSelf: "flex-start" },
+  profile: { minHeight: 46, minWidth: 120, paddingHorizontal: 22, paddingVertical: 10, alignItems: "center", justifyContent: "center", borderRadius: 12 },
 });

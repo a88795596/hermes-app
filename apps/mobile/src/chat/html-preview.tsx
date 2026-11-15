@@ -2,9 +2,9 @@ import { useMemo } from "react";
 import { WebView } from "react-native-webview";
 import { buildPreviewHtml } from "./html-document";
 
-export function HtmlPreview({ html, name }: { html: string; name: string }) {
+export function HtmlPreview({ html, name, backgroundColor }: { html: string; name: string; backgroundColor: string }) {
   const source = useMemo(() => ({ html: buildPreviewHtml(html, name) }), [html, name]);
-  return <WebView source={source} style={{ flex: 1, backgroundColor: "white" }} accessibilityLabel={name}
+  return <WebView source={source} style={{ flex: 1, backgroundColor }} accessibilityLabel={name}
     // Catch every origin here; excluded whitelist origins otherwise open through native Linking.
     originWhitelist={["*"]}
     onShouldStartLoadWithRequest={({ url }) => url === "about:blank" || url === "about:srcdoc"}

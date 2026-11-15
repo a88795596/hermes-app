@@ -20,6 +20,7 @@ export let currentUpdate: { id: string; builtAt?: number } = {
 };
 if (!__DEV__ && baseURL && apiKey) {
   try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- The native updater must not initialize in Expo Go or an unconfigured build.
     const { HotUpdater } = require("@hot-updater/react-native") as typeof import("@hot-updater/react-native");
     hotUpdater = HotUpdater.init({
       baseURL: baseURL.replace(/\/+$/, ""),

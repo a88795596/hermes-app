@@ -38,40 +38,40 @@ function MarkdownLink({ url, color, onOpenLink, children }: {
 
 function markdownTheme(colors: ReturnType<typeof useTheme>["colors"], onOpenLink: (url: string) => void) {
   const line = StyleSheet.hairlineWidth;
-  const headingDivider = { borderBottomColor: colors.edge, borderBottomWidth: line, paddingBottom: 6 };
   const cell = { flex: 1, flexBasis: 0, minWidth: 0, paddingHorizontal: 10, paddingVertical: 7,
     borderColor: colors.edge, borderBottomWidth: line, borderEndWidth: line };
   const style = StyleSheet.create({
-    root: { gap: 12, minWidth: 0 },
-    text: { color: colors.foreground, fontSize: 15, lineHeight: 23 },
+    root: { gap: 16, minWidth: 0 },
+    text: { color: colors.foreground, fontSize: 17, lineHeight: 27 },
     paragraph: { gap: 4 },
-    heading: { fontWeight: "600" },
-    heading1: { fontSize: 24, lineHeight: 30 },
-    heading2: { fontSize: 20, lineHeight: 26 },
-    heading3: { fontSize: 17, lineHeight: 23 },
-    heading4: { fontSize: 16, lineHeight: 22 },
-    heading5: { fontSize: 15, lineHeight: 21 },
-    heading6: { fontSize: 14, lineHeight: 20, color: colors.muted },
-    strong: { fontWeight: "600" },
-    codeInline: { color: colors.foreground, backgroundColor: colors.secondary, borderRadius: 4,
-      fontFamily: monospace, fontSize: 13, paddingHorizontal: 3 },
-    codeFrame: { backgroundColor: colors.field, borderRadius: 6 },
-    codeContent: { padding: 12 },
-    codeBlock: { color: colors.foreground, fontFamily: monospace, fontSize: 13, lineHeight: 20,
+    heading: { fontWeight: "700" },
+    heading1: { fontSize: 26, lineHeight: 34 },
+    heading2: { fontSize: 22, lineHeight: 30 },
+    heading3: { fontSize: 20, lineHeight: 28 },
+    heading4: { fontSize: 18, lineHeight: 26 },
+    heading5: { fontSize: 17, lineHeight: 25 },
+    heading6: { fontSize: 16, lineHeight: 24, color: colors.muted },
+    strong: { fontWeight: "700" },
+    codeInline: { color: colors.foreground, backgroundColor: colors.tint, borderRadius: 4,
+      fontFamily: monospace, fontSize: 15, paddingHorizontal: 4 },
+    codeFrame: { backgroundColor: colors.secondary, borderRadius: 12 },
+    codeContent: { padding: 16 },
+    codeBlock: { color: colors.foreground, fontFamily: monospace, fontSize: 14, lineHeight: 22,
       ...Platform.select({ web: { whiteSpace: "pre", overflowWrap: "normal" } }) },
-    blockquote: { borderStartColor: colors.edge, borderStartWidth: 3, paddingStart: 11, gap: 8 },
+    blockquote: { borderStartColor: colors.edge, borderStartWidth: 2, paddingStart: 14, gap: 8 },
     quoteText: { color: colors.muted },
-    list: { gap: 3 },
-    listRow: { flexDirection: "row", alignItems: "flex-start", gap: 8, paddingStart: 8 },
+    list: { gap: 8 },
+    listRow: { flexDirection: "row", alignItems: "flex-start", gap: 10, paddingStart: 8 },
+    listMarker: { color: colors.accent, fontWeight: "600" },
     listItem: { flex: 1, gap: 4 },
     tableContent: { flexGrow: 1 },
     table: { flexGrow: 1, borderTopWidth: line, borderStartWidth: line, borderColor: colors.edge },
     tableRow: { flexDirection: "row" },
-    tableShade: { backgroundColor: colors.field },
-    tableHeader: { backgroundColor: colors.field },
+    tableShade: { backgroundColor: colors.secondary },
+    tableHeader: { backgroundColor: colors.tint },
     tableHeaderCell: cell,
     tableRowCell: cell,
-    hr: { height: 1, backgroundColor: colors.edge, marginVertical: 3 },
+    hr: { height: line, backgroundColor: colors.edge, marginVertical: 4 },
   });
 
   const codeBlock: RenderFunction = (node) => (
@@ -85,7 +85,7 @@ function markdownTheme(colors: ReturnType<typeof useTheme>["colors"], onOpenLink
   function heading(level: number, size: TextStyle): RenderFunction {
     return function renderHeading(node, children) {
       return (
-        <View key={node.key} style={[node.index > 0 && { marginTop: 2 }, level <= 2 && headingDivider]}>
+        <View key={node.key} style={node.index > 0 && { marginTop: 4 }}>
           <Text selectable accessibilityRole="header" {...{ "aria-level": level }} style={[style.text, style.heading, size]}>
             {children}
           </Text>
@@ -135,7 +135,7 @@ function markdownTheme(colors: ReturnType<typeof useTheme>["colors"], onOpenLink
     list_item(node, children, [parent]) {
       const marker = parent?.type === "ordered_list" ? `${Number(parent.attributes.start ?? 1) + node.index}.` : "•";
       return <View key={node.key} style={style.listRow}>
-        <Text style={[style.text, style.quoteText]}>{marker}</Text>
+        <Text style={[style.text, style.listMarker]}>{marker}</Text>
         <View style={style.listItem}>{children}</View>
       </View>;
     },
