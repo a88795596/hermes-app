@@ -11,11 +11,11 @@ const sourceRoot = pathToFileURL(require.resolve("../src/inbox/inbox.tsx")).href
 // Render the actual inbox, shared controls, and Markdown through React Native Web.
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {
-    if (["expo-symbols", "expo-web-browser"].includes(specifier)) {
+    if (["expo-symbols", "expo-web-browser", "react-native-safe-area-context"].includes(specifier)) {
       return { url: `inbox-test:${specifier}`, shortCircuit: true };
     }
     if (context.parentURL?.startsWith(sourceRoot) && specifier.startsWith(".")) {
-      for (const extension of [".tsx", ".ts"]) {
+      for (const extension of [".web.tsx", ".web.ts", ".tsx", ".ts"]) {
         const url = new URL(specifier + extension, context.parentURL);
         if (existsSync(url)) return { url: url.href, shortCircuit: true };
       }
@@ -25,6 +25,9 @@ const hooks = registerHooks({
   load(url, context, nextLoad) {
     if (url === "inbox-test:expo-symbols") {
       return { format: "commonjs", shortCircuit: true, source: "exports.SymbolView = () => null;" };
+    }
+    if (url === "inbox-test:react-native-safe-area-context") {
+      return { format: "commonjs", shortCircuit: true, source: "exports.SafeAreaView = require('react-native-web').View;" };
     }
     if (url === "inbox-test:expo-web-browser") {
       return { format: "commonjs", shortCircuit: true,
@@ -76,6 +79,24 @@ test("收件箱默认全部在最左，按会话时间分组并在组内从新�
   assert.match(html, /aria-label="早间提醒，默认，[^"]+，第一行 第二行 第三行"/);
 });
 
+test("纯附件消息列出文件并为五类内容提供预览或播放入口", () => {
+  const attachments = [
+    ["图片.png", "image/png"], ["语音.m4a", "audio/mp4"], ["视频.mp4", "video/mp4"],
+    ["报告.md", "text/markdown"], ["页面.html", "text/html"],
+  ].map(([name, mime], index) => ({ name, mime, size: 100, attachment_id: `733ab797-95fd-42ea-b514-63c2b11413a${index}` }));
+  const item = { ...items[0], title: undefined, text: "", attachments };
+  const html = renderToStaticMarkup(createElement(InboxDetail, {
+    item, profiles, session: { origin: "https://mobile.example", token: "private-token" },
+  }));
+  for (const name of ["图片.png", "语音.m4a", "视频.mp4", "报告.md", "页面.html"]) assert.ok(html.includes(name));
+  assert.match(html, /打开音频：语音.m4a/);
+  assert.match(html, /打开视频：视频.mp4/);
+  assert.match(html, /打开预览：报告.md/);
+  assert.match(html, /打开预览：页面.html/);
+  assert.doesNotMatch(html, /private-token/);
+  assert.ok(renderList({ items: [item] }).includes("语音.m4a"));
+});
+
 test("按档案只显示匹配消息，空档案仍可切换回全部", () => {
   const html = renderList({ profileId: "work" });
   assert.match(html, /最新报告/);
@@ -97,7 +118,9 @@ test("旧缓存没有标题或档案时仍可在全部中阅读原文", () => {
 
 test("详情直接展示标题、完整 Markdown 正文、档案和接收时间，不再显示顶部导航栏", () => {
   const text = ["## 正文小节", "", "这是一段较长的消息正文。".repeat(80), "", "**最后一段内容**", "", "[查看文档](https://example.com/docs)"].join("\n");
-  const html = renderToStaticMarkup(createElement(InboxDetail, { item: { ...items[2], text }, profiles }));
+  const html = renderToStaticMarkup(createElement(InboxDetail, {
+    item: { ...items[2], text }, profiles, session: { origin: "https://mobile.example", token: "private-token" },
+  }));
   assert.doesNotMatch(html, /返回收件箱|消息详情/);
   assert.match(html, />最新报告</);
   assert.match(html, /<h2[^>]*>[\s\S]*正文小节[\s\S]*<\/h2>/);

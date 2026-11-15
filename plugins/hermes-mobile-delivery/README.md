@@ -23,7 +23,7 @@ hermes send --to bark '{"title":"早报","subtitle":"今日摘要","markdown":"*
 
 ## 移动端收件箱
 
-`hermes_mobile` 平台通过 HTTP 向应用后端（BFF）投递纯文本。Hermes 插件和 BFF 可以运行在不同容器或主机，只需能通过网络访问投递 API。
+`hermes_mobile` 平台通过 HTTP 向应用后端（BFF）投递文本和文件。Hermes 插件和 BFF 可以运行在不同容器或主机，只需能通过网络访问投递 API。App 可在消息中查看图片，播放音视频，预览 Markdown 和 HTML 文件。
 
 1. 在 BFF 环境中设置 `INBOX_DELIVERY_TOKEN`。可用 `openssl rand -hex 32` 单独生成令牌。如果使用 Compose，将它写入项目的 `.env`，然后运行 `docker compose up -d --build --wait` 应用配置。
 2. 在 Hermes 配置档案的 `.env` 中填入下面三项。`HERMES_MOBILE_INBOX_TOKEN` 使用与 BFF 的 `INBOX_DELIVERY_TOKEN` 相同的值。使用具名配置档案时，将 `HERMES_MOBILE_PROFILE` 设为其准确名称，并把该名称加入 BFF 的 `HERMES_PROFILES`。如果 Hermes 网关正在运行，重启以加载配置。
@@ -34,13 +34,35 @@ hermes send --to bark '{"title":"早报","subtitle":"今日摘要","markdown":"*
    HERMES_MOBILE_INBOX_TOKEN=替换为投递令牌
    ```
 
-跨主机使用 HTTPS，并在反向代理转发 `/internal/inbox/v1/deliveries`。如果 BFF 在同一受信任的容器网络中独立运行，将其 `HOST` 设为 `0.0.0.0`，插件可用 `http://bff:4317/internal/inbox/v1/deliveries`，其中 `bff` 为 BFF 的服务名，端口与 BFF 的 `PORT` 一致。
+跨主机使用 HTTPS，并在反向代理转发 `/internal/inbox/v1/deliveries` 和 `/internal/attachments/v1/`。文件上传使用同一个 BFF 域名和投递令牌，反向代理需允许至少 70 MiB 的 JSON 请求体。如果 BFF 在同一受信任的容器网络中独立运行，将其 `HOST` 设为 `0.0.0.0`，插件可用 `http://bff:4317/internal/inbox/v1/deliveries`，其中 `bff` 为 BFF 的服务名，端口与 BFF 的 `PORT` 一致。
 
 运行 `hermes send --to hermes_mobile "来自 Hermes 的测试消息"` 测试投递，或将定时任务的投递目标设为 `hermes_mobile`。已配置的默认目标也可写作 `hermes_mobile:1`。插件拒绝其他投递目标和会话串 ID。
 
+### 发送文件
+
+插件提供 `mobile-send` 命令，正文可省略，`--file` 可重复指定：
+
+```sh
+hermes mobile-send --file /tmp/chart.png
+hermes mobile-send "日报已生成" --file /tmp/report.md --file /tmp/report.html
+hermes mobile-send --file /tmp/recording.m4a --file /tmp/demo.mp4
+hermes --profile work mobile-send --file /tmp/report.md
+```
+
+每条消息最多 10 个文件，单个文件不超过 50 MiB；文件必须非空、不是符号链接，并通过 Hermes 原生的媒体路径安全检查。图片、音视频和文档保留原始字节，不转码。远程图片 URL 需要先下载为本地文件再投递。
+
+支持 `StandaloneSendPolicy` 的新版原版 Hermes 也可以使用原生媒体命令：
+
+```sh
+hermes send --to hermes_mobile 'MEDIA:/tmp/chart.png'
+hermes send --to hermes_mobile '日报已生成 MEDIA:/tmp/report.md'
+```
+
+较旧的 Hermes 会在调用自定义平台插件前拒绝或丢弃媒体，遇到此情况使用上面的 `hermes mobile-send --file ...`。`hermes send --file` 的含义是读取消息正文，不是上传附件。插件不修改 Hermes 源码。网关原生图片、视频、语音和文档发送方法都已接入，定时任务向插件直接发送的 `MEDIA:` 内容使用 Hermes 自带解析器识别。
+
 ## 投递 API
 
-`POST /internal/inbox/v1/deliveries` 接受 `Authorization: Bearer <投递令牌>` 和 `Content-Type: application/json`。正文包含 UUID `delivery_id`、BFF 允许的 `profile_ref` 和最多 128 KiB 的 UTF-8 文本 `text`，可选 `title` 为最多 256 字节的非空 UTF-8 标题。
+`POST /internal/inbox/v1/deliveries` 接受 `Authorization: Bearer <投递令牌>` 和 `Content-Type: application/json`。正文包含 UUID `delivery_id`、BFF 允许的 `profile_ref` 和最多 128 KiB 的 UTF-8 文本 `text`，可选 `title` 为最多 256 字节的非空 UTF-8 标题。可选 `attachments` 包含最多 10 个已上传文件的引用；有文件时 `text` 可以为空。
 
 ```json
 {
@@ -51,13 +73,17 @@ hermes send --to bark '{"title":"早报","subtitle":"今日摘要","markdown":"*
 }
 ```
 
-Hermes 插件继续投递原始文本。省略 `title` 时，BFF 取正文首个非空行生成最多 64 个字符的标题，去除开头的 Markdown 标题标记；完整 `text` 始终原样保留。移动端列表显示标题和两行正文，详情显示完整内容。收件箱响应同时包含所属 `profile_id`，历史记录也会补齐标题和配置档案，无须迁移队列。
+文件先通过 `PUT /internal/attachments/v1/<附件 UUID>` 上传到同一个 BFF，使用相同鉴权和 JSON 内容类型。正文为 `{ "profile_ref": "default", "name": "report.md", "mime": "text/markdown", "size": 3, "content_base64": "YWJj" }`。成功响应中的 `data` 是 `{ "attachment_id": "附件 UUID", "name": "report.md", "mime": "text/markdown", "size": 3 }`，随后放进投递请求的 `attachments` 数组。插件验证上传回执与本地快照一致后才投递消息。
+
+省略 `title` 时，BFF 生成标题；完整 `text` 保留在消息中。移动端列表显示标题和两行正文，详情显示完整内容与文件。收件箱响应同时包含所属 `profile_id`，历史记录也会补齐标题和配置档案，无须迁移队列。
 
 BFF 在同一个事务中保存收件箱消息和通知任务，然后返回 `204 No Content`。重发同一个投递 ID 和相同内容也会返回 `204`，内容冲突则返回 `409`。鉴权失败返回 `401`。未配置投递令牌或配置档案未加入允许名单时返回 `404`。请求内容校验失败返回 `422`。
 
-Hermes 先接受并保存消息，再通过 API 投递。网关运行时会自动补投待确认的消息。独立运行 `hermes send` 会立即尝试投递这条消息，也可能在消息仍处于队列时返回成功。启动 Hermes 网关会继续投递队列中的消息。每次重试沿用同一投递 ID，收到 `204` 后才移除本地记录。
+Hermes 先把消息和附件字节一起持久化，再通过 API 投递。即使源文件后来被删除，重试仍使用原快照。网关运行时会自动补投待确认的消息。独立运行 `hermes send` 或 `hermes mobile-send` 会立即尝试投递这条消息，也可能在消息仍处于队列时返回成功，此时响应会提示已入队。启动 Hermes 网关会继续投递队列中的消息。每次重试沿用同一投递 ID 和附件 UUID，收到消息投递的 `204` 后才移除本地记录及附件快照。
 
 队列默认放在 Hermes 配置档案数据目录下的 `mobile-delivery/queue.sqlite3`。可通过 `HERMES_MOBILE_SPOOL_PATH` 指定 Hermes 容器内的绝对路径。队列目录和文件仅供运行 Hermes 的用户访问。Docker 部署将队列保存在 Hermes 自己的持久卷即可。
+
+原有纯文本队列可直接升级，插件保留旧表结构并新增附件表。请先升级 BFF，再更新插件；仍有附件待发送时不要降级插件。
 
 ## 从共享队列升级
 

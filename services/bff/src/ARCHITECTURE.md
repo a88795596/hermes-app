@@ -8,4 +8,8 @@
 
 Hermes 投递插件使用独立令牌调用 `POST /internal/inbox/v1/deliveries`，所用配置档案须在 `HERMES_PROFILES` 中。BFF 按投递 ID 去重，并在同一事务写入收件箱和推送任务。提交后才确认投递和通知在线设备刷新。 [投递接口与部署](../../../plugins/hermes-mobile-delivery/README.md)
 
+Hermes 回复与收件箱投递共用持久文件表。连接器或投递插件先用各自的服务令牌调用 `PUT /internal/attachments/v1/:id` 上传单个不超过 50 MiB 的文件，再把返回的 `{attachment_id,name,mime,size}` 加入消息的 `attachments`。每条消息最多 10 个附件；文件字节不会进入 WebSocket 或收件箱 JSON。重复文件 ID 必须具有相同配置档案、元数据和内容摘要。BFF 在写消息前核验文件属于同一配置档案；有附件时允许空正文，收件箱自动标题与推送预览使用首个文件名。
+
+手机通过设备令牌调用 `GET/HEAD /mobile/v1/attachments/:id`。只有已被可见消息或收件箱引用的文件能下载，支持单个字节范围的 206/416 响应。下载携带正确 MIME、`nosniff`、下载文件名和禁止脚本及子资源的 CSP。文件当前以 PostgreSQL `bytea` 保存，没有自动过期或清理；上传成功但消息未投递的文件也会保留。反向代理需允许文件上传路径和约 67 MiB 的 JSON 请求体。
+
 通过设备鉴权的管理请求使用同一份允许名单解析配置档案。桥接层通过当前连接器通道发送请求，并返回对应结果。连接器声明已接入 Hermes 控制台后，管理功能才可用。变更直接写入 Hermes。处理中的管理请求保存在内存里，连接中断时，已发出的写操作结果处于未确认状态。

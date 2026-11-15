@@ -24,11 +24,16 @@ test("收件箱推送包含来源和正文预览，默认时间敏感，长正�
     const deviceId = randomUUID();
     await store.query("INSERT INTO devices (id, token_hash, name) VALUES ($1, $2, $3)", [deviceId, Buffer.from("push-test"), "推送测试"]);
     await store.query("INSERT INTO push_devices (device_id, token) VALUES ($1, $2)", [deviceId, "ExpoPushToken[push_test]"]);
+    const attachment = { attachment_id: randomUUID(), name: "周报.md", mime: "text/markdown", size: 3 };
+    await store.query("INSERT INTO received_attachments (id, profile_ref, metadata, content, sha256) VALUES ($1, $2, $3, $4, $5)",
+      [attachment.attachment_id, "work", attachment, Buffer.from("abc"), "test"]);
     const deliveries = [
       { delivery_id: randomUUID(), profile_ref: "default", text: "明天下午三点开会，请带上周报。" },
       { delivery_id: randomUUID(), profile_ref: "work", text: "## 今日早报\n\n- **部署完成**\n- 查看 [报告](https://example.com/report?token=private) 和 `日志`。" },
       { delivery_id: randomUUID(), profile_ref: "work", text: "🚀".repeat(1_000) },
       { delivery_id: randomUUID(), profile_ref: "work", text: "[".repeat(128 * 1024) },
+      { delivery_id: randomUUID(), profile_ref: "work", text: "", attachments: [attachment] },
+      { delivery_id: randomUUID(), profile_ref: "work", text: "\n\t　", attachments: [attachment] },
     ];
     for (const delivery of deliveries) {
       await store.transaction((db) => applyInboxDelivery(db, delivery, new Set(["default", "work"])));
@@ -46,7 +51,7 @@ test("收件箱推送包含来源和正文预览，默认时间敏感，长正�
     t.mock.timers.tick(3_000);
     await stop();
 
-    assert.equal(sent.length, 4);
+    assert.equal(sent.length, 6);
     const notification = (index: number) => sent.find((item) => item.data.inbox_id === deliveries[index]!.delivery_id)!;
     assert.equal(notification(0).body, "明天下午三点开会，请带上周报。");
     assert.equal(notification(0).title, "Hermes 收件箱");
@@ -54,6 +59,8 @@ test("收件箱推送包含来源和正文预览，默认时间敏感，长正�
     assert.equal(notification(1).body, "今日早报 部署完成 查看 报告 和 日志。");
     assert.equal(notification(2).body, "🚀".repeat(499) + "…");
     assert.equal(notification(3).body, "[".repeat(499) + "…");
+    assert.equal(notification(4).body, "周报.md");
+    assert.equal(notification(5).body, "周报.md");
     for (const item of sent) {
       assert.equal(item.to, "ExpoPushToken[push_test]");
       assert.equal(item.interruptionLevel, "time-sensitive");

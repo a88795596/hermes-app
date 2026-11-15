@@ -5,7 +5,7 @@ import {
 import type { CanonicalAdmission, CanonicalPrompt, ServerRequest, SessionSnapshot } from '@hermes-mobile/hermes-adapter';
 import type { Command, CommandResult, ConnectorEvent, Control, TopicQuery, TopicQueryData } from '@hermes-mobile/protocol';
 import { MAX_CLARIFY_CHOICE_BYTES, MAX_MESSAGE_PROCESS_TEXT_BYTES } from '@hermes-mobile/protocol';
-import { attachmentBytes, attachmentFilename, type DownloadAttachment } from './attachments.js';
+import { attachmentBytes, attachmentFilename, hasReceivedAttachments, type DownloadAttachment, type ReceiveAttachments } from './attachments.js';
 import { Gateway, GatewayRefusal, integer, object } from './gateway.js';
 import type { JsonObject, WebappAccess } from './gateway.js';
 import { addProcessText, redactProcessText, removeStreamedCommentary, updateProcessTool } from './message-process.js';
@@ -62,6 +62,7 @@ export class CanonicalConnector {
   readonly #sessions = new Map<string, Session>();
   readonly #bindings = new Map<string, Binding>();
   readonly #attaching = new Map<string, Promise<Session>>();
+  readonly #receiving = new Set<string>();
   #closed = false;
 
   constructor(
@@ -69,6 +70,7 @@ export class CanonicalConnector {
     readonly spool: Spool,
     readonly onReconnect: () => void,
     readonly downloadAttachment: DownloadAttachment,
+    readonly receiveAttachments?: ReceiveAttachments,
   ) {
     for (const binding of spool.bindings()) this.#bindings.set(binding.topicId, binding);
   }
@@ -571,7 +573,7 @@ export class CanonicalConnector {
     const status = receiptStatus(receipt);
     if (previous?.status === 'streaming' && status === 'queued') return;
     if (previous && ['final', 'failed', 'cancelled'].includes(previous.status) &&
-      (previous.status !== status || previous.text || !receipt.finalText)) return;
+      (previous.status !== status || previous.text || previous.attachments?.length || !receipt.finalText)) return;
     const text = receipt.finalText || previous?.text || '';
     if (previous?.status === status && previous.submissionId === submissionId && previous.text === text
       && status !== 'queued') return;
@@ -727,16 +729,34 @@ export class CanonicalConnector {
   }
 
   #setTurn(session: Session, turn: Turn, key: string[], publishMessage = false, cursor?: Cursor): void {
+    const receivingKey = JSON.stringify([turn.topicId, turn.admissionId]);
+    if (this.#receiving.has(receivingKey)) return;
+    if (turn.status === 'final' && this.receiveAttachments && hasReceivedAttachments(turn.text)) {
+      this.#receiving.add(receivingKey);
+      // 先保留原文及未终结状态；传输中断后可按持久化回执重试。
+      this.#recordTurn(session, { ...turn, status: 'streaming' }, [...key, 'attachments-pending'], false, cursor);
+      void this.receiveAttachments(session.binding.profileRef, turn.topicId, turn.admissionId, turn.text).then((received) => {
+        if (!this.#closed) this.#recordTurn(session, { ...turn, ...received }, key, true);
+      }).catch(() => {
+        if (!this.#closed) session.gateway.close();
+      }).finally(() => { this.#receiving.delete(receivingKey); });
+      return;
+    }
+    this.#recordTurn(session, turn, key, publishMessage, cursor);
+  }
+
+  #recordTurn(session: Session, turn: Turn, key: string[], publishMessage = false, cursor?: Cursor): void {
     const topicId = session.binding.topicId;
     const eventId = (kind: string) => stableId([topicId, kind, ...key]);
     const frames: ConnectorEvent[] = [];
     const text = turn.text.trim() ? boundedText(turn.text, 256 * 1024) : '';
-    if (publishMessage && (text || turn.process?.length)) {
+    if (publishMessage && (text || turn.process?.length || turn.attachments?.length)) {
       frames.push({
         type: 'message', event_id: eventId('message'), topic_id: topicId,
         message_id: stableId([topicId, 'message', turn.admissionId]), text,
         status: turn.status === 'streaming' ? 'streaming' : 'final',
         ...(turn.process?.length ? { process: turn.process } : {}),
+        ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
         ...(turn.submissionId ? { submission_id: turn.submissionId } : {}),
       });
     }

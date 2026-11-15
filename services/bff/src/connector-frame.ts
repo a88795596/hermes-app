@@ -1,6 +1,7 @@
 import type { ConnectorFrame, MessageProcessStep, ModelResult } from "@hermes-mobile/protocol";
 import { MAX_CLARIFY_CHOICE_BYTES, MAX_INBOX_TITLE_BYTES, MAX_MESSAGE_PROCESS_STEPS, MAX_MESSAGE_PROCESS_TEXT_BYTES, MAX_TOPIC_TITLE_BYTES } from "@hermes-mobile/protocol";
 import { invalid, record, string, uuid } from "./validation.js";
+import { receivedAttachmentReferences } from "./received-attachments.js";
 
 const controlStatuses = ["pending", "responding", "closed", "unknown"] as const;
 
@@ -110,10 +111,12 @@ export function connectorFrame(value: unknown): ConnectorFrame {
       } } };
     }
     case "delivery": {
-      const body = record(value, ["type", "event_id", "delivery_id", "profile_ref", "title", "text"]);
+      const body = record(value, ["type", "event_id", "delivery_id", "profile_ref", "title", "text", "attachments"]);
+      const attachments = body.attachments === undefined ? undefined : receivedAttachmentReferences(body.attachments);
       return { type, event_id: uuid(body.event_id, "事件 ID"), delivery_id: uuid(body.delivery_id, "投递 ID"),
         ...(body.title === undefined ? {} : { title: string(body.title, "消息标题", MAX_INBOX_TITLE_BYTES) }),
-        profile_ref: string(body.profile_ref, "配置档案名称", 256), text: string(body.text, "消息正文", 256 * 1024) };
+        ...(attachments?.length ? { attachments } : {}),
+        profile_ref: string(body.profile_ref, "配置档案名称", 256), text: string(body.text, "消息正文", 256 * 1024, !!attachments?.length) };
     }
     case "topic_title": {
       const body = record(value, ["type", "event_id", "topic_id", "session_id", "title"]);
@@ -121,11 +124,12 @@ export function connectorFrame(value: unknown): ConnectorFrame {
         session_id: string(body.session_id, "会话 ID", 512), title: string(body.title, "话题标题", MAX_TOPIC_TITLE_BYTES) };
     }
     case "message": {
-      const body = record(value, ["type", "event_id", "topic_id", "message_id", "submission_id", "text", "status", "process"]);
+      const body = record(value, ["type", "event_id", "topic_id", "message_id", "submission_id", "text", "status", "process", "attachments"]);
       return { type, event_id: uuid(body.event_id, "事件 ID"), topic_id: uuid(body.topic_id, "话题 ID"),
         message_id: uuid(body.message_id, "消息 ID"), text: string(body.text, "消息正文", 256 * 1024, true),
         status: option(body.status, ["streaming", "final"]),
         ...(body.process === undefined ? {} : { process: messageProcess(body.process) }),
+        ...(body.attachments === undefined ? {} : { attachments: receivedAttachmentReferences(body.attachments) }),
         ...(body.submission_id === undefined ? {} : { submission_id: uuid(body.submission_id, "提交 ID") }) };
     }
     case "submission": {

@@ -2,10 +2,12 @@
 
 import asyncio
 from contextlib import suppress
+import json
 import logging
 from pathlib import Path
 import re
 import sqlite3
+from urllib.parse import unquote, urlsplit
 
 from agent.redact import redact_sensitive_text
 from gateway.config import Platform
@@ -14,13 +16,12 @@ from gateway.platforms.base import BasePlatformAdapter, SendResult
 from hermes_cli.config import get_env_value_prefer_dotenv
 from hermes_constants import get_hermes_home
 
-from .inbox import deliver_pending, inbox_endpoint, post_delivery
-from .spool import ack, enqueue
+from .inbox import deliver_one, deliver_pending, inbox_endpoint
+from .spool import enqueue, MAX_ATTACHMENTS
 
 
 PLATFORM = "hermes_mobile"
 HOME_CHANNEL_ENV = "HERMES_MOBILE_HOME_CHANNEL"
-MEDIA_ERROR = "Hermes 移动端仅支持投递文本，附件未保存"
 MAX_TEXT_BYTES = 128 * 1024
 logger = logging.getLogger(__name__)
 
@@ -45,13 +46,11 @@ def register_platform(ctx):
             return {"home_channel": {"chat_id": configured[1], "name": "Hermes 移动端收件箱"}}
         return None
 
-    async def submit(chat_id, message, *, thread_id=None, media_files=None, gateway=False):
+    async def submit(chat_id, message, *, thread_id=None, media_files=None, file_name=None, gateway=False):
         configured = route()
         if not configured or chat_id != configured[1] or thread_id:
             return {"error": "请检查 Hermes 移动端的投递目标、配置档案和 API 凭证"}
-        if media_files:
-            return {"error": MEDIA_ERROR}
-        if not isinstance(message, str) or not message.strip():
+        if not isinstance(message, str) or (not message.strip() and not media_files):
             return {"error": "投递到 Hermes 移动端的文本为空"}
         profile, _, endpoint, token, path = configured
         try:
@@ -66,21 +65,32 @@ def register_platform(ctx):
             return {"error": "投递到 Hermes 移动端的文本含有空字符"}
         if text_size > MAX_TEXT_BYTES:
             return {"error": "投递到 Hermes 移动端的文本超过 128 KiB"}
+        files = []
+        try:
+            if media_files and (not isinstance(media_files, (list, tuple)) or len(media_files) > MAX_ATTACHMENTS):
+                raise ValueError("每条消息最多包含 10 个附件")
+            for source, _is_voice in media_files or []:
+                source = Path(source).expanduser().absolute()
+                if source.is_symlink():
+                    raise ValueError("附件不能是符号链接")
+                safe = BasePlatformAdapter.validate_media_delivery_path(str(source))
+                if not safe:
+                    raise ValueError("附件不存在或不允许投递")
+                files.append((Path(safe), file_name))
+        except (OSError, ValueError, TypeError):
+            return {"error": "附件不存在、不允许投递或超过每条 10 个的限制"}
         try:
             # shortcut: 每次调用生成 UUID，待 Hermes 提供稳定的分段 ID 后可跨调用去重。
-            delivery_id = await asyncio.to_thread(enqueue, path, profile, text)
+            delivery_id = await asyncio.to_thread(enqueue, path, profile, text, files)
         except (OSError, sqlite3.Error, ValueError):
-            return {"error": "Hermes 移动端无法将投递内容保存到本地队列"}
+            return {"error": "无法保存投递队列，请检查磁盘权限、附件名称和单个附件 50 MiB 的限制"}
 
         delivered = False
         if not gateway:
-            status = await asyncio.to_thread(post_delivery, endpoint, token, delivery_id, profile, text)
-            delivered = status == 204
-            if delivered:
-                try:
-                    await asyncio.to_thread(ack, path, delivery_id)
-                except (OSError, sqlite3.Error, ValueError):
-                    logger.warning("Hermes 移动端无法确认本地队列记录（投递 ID %s）", delivery_id)
+            try:
+                delivered = await asyncio.to_thread(deliver_one, path, endpoint, token, profile, delivery_id, text)
+            except (OSError, sqlite3.Error, ValueError):
+                logger.warning("Hermes 移动端无法确认本地队列记录（投递 ID %s）", delivery_id)
         result = {"success": True, "message_id": delivery_id, "delivery_reconciliation": "limited"}
         if not delivered:
             result["note"] = f"消息已进入 Hermes 移动端投递队列（投递 ID {delivery_id}）"
@@ -125,14 +135,52 @@ def register_platform(ctx):
             return {"name": "Hermes 移动端收件箱", "type": "channel", "chat_id": chat_id}
 
         async def send(self, chat_id, content, reply_to=None, metadata=None):
-            result = await submit(chat_id, content, thread_id=(metadata or {}).get("thread_id"), gateway=True)
+            media_files, content = self.extract_media(content) if isinstance(content, str) and "MEDIA:" in content else ([], content)
+            result = await submit(chat_id, content, thread_id=(metadata or {}).get("thread_id"),
+                                  media_files=media_files, gateway=True)
             return SendResult(success=bool(result.get("success")), message_id=result.get("message_id"),
                               error=result.get("error"), raw_response=result)
 
-        async def send_document(self, *args, **kwargs):
-            return SendResult(success=False, error=MEDIA_ERROR)
+        async def send_document(self, chat_id, file_path, caption=None, file_name=None, reply_to=None, metadata=None, **kwargs):
+            result = await submit(chat_id, caption or "", thread_id=(metadata or {}).get("thread_id"),
+                                  media_files=[(file_path, False)], file_name=file_name, gateway=True)
+            return SendResult(success=bool(result.get("success")), message_id=result.get("message_id"),
+                              error=result.get("error"), raw_response=result)
 
-        send_image = send_image_file = send_animation = send_video = send_voice = send_document
+        async def send_image_file(self, chat_id, image_path, caption=None, reply_to=None, metadata=None, **kwargs):
+            return await self.send_document(chat_id, image_path, caption, reply_to=reply_to, metadata=metadata)
+
+        async def send_video(self, chat_id, video_path, caption=None, reply_to=None, metadata=None, **kwargs):
+            return await self.send_document(chat_id, video_path, caption, reply_to=reply_to, metadata=metadata)
+
+        async def send_voice(self, chat_id, audio_path, caption=None, reply_to=None, metadata=None, **kwargs):
+            return await self.send_document(chat_id, audio_path, caption, reply_to=reply_to, metadata=metadata)
+
+        async def send_image(self, chat_id, image_url, caption=None, reply_to=None, metadata=None):
+            try:
+                url = urlsplit(image_url)
+                if url.scheme == "file" and not url.netloc and not url.query and not url.fragment:
+                    return await self.send_image_file(chat_id, unquote(url.path), caption, reply_to, metadata)
+            except ValueError:
+                pass
+            return SendResult(success=False, error="请先将图片保存为本地文件，再通过 Hermes 移动端投递")
+
+        async def send_animation(self, chat_id, animation_url, caption=None, reply_to=None, metadata=None):
+            return await self.send_image(chat_id, animation_url, caption, reply_to, metadata)
+
+    def setup_cli(parser):
+        parser.add_argument("message", nargs="?", default="", help="可选的消息正文")
+        parser.add_argument("--file", action="append", default=[], help="附件路径，可重复指定，最多 10 个")
+
+    def send_cli(args):
+        configured = route()
+        result = asyncio.run(submit(configured[1] if configured else "", args.message,
+                                    media_files=[(file, False) for file in args.file]))
+        print(json.dumps(result, ensure_ascii=False))
+        raise SystemExit(0 if result.get("success") else 1)
+
+    ctx.register_cli_command(name="mobile-send", help="向 Hermes 移动端收件箱发送文本或文件",
+                             setup_fn=setup_cli, handler_fn=send_cli)
 
     options = {}
     if "standalone_send" in PlatformEntry.__dataclass_fields__:

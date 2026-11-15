@@ -4,7 +4,7 @@ import type { PoolClient } from "pg";
 import type { Store } from "./store.js";
 
 type Authenticate = (request: FastifyRequest) => Promise<string>;
-type Job = { inbox_id: string; device_id: string; token: string; attempts: number; profile_ref: string; text: string };
+type Job = { inbox_id: string; device_id: string; token: string; attempts: number; profile_ref: string; text: string; attachment_name: string | null };
 type Ticket = { status: string; details?: { error?: string } };
 
 function bodyPreview(text: string) {
@@ -75,7 +75,8 @@ export function startPushWorker(store: Store, log: FastifyBaseLogger) {
   async function flush() {
     // shortcut: 每个 BFF 实例运行一个推送工作进程。部署多副本前，在数据库中增加任务领取租约。
     const { rows } = await store.query<Job>(`
-      SELECT o.inbox_id, o.device_id, o.attempts, d.token, i.profile_ref, i.data->>'text' AS text
+      SELECT o.inbox_id, o.device_id, o.attempts, d.token, i.profile_ref, i.data->>'text' AS text,
+        i.data->'attachments'->0->>'name' AS attachment_name
       FROM push_outbox o JOIN push_devices d USING (device_id)
       JOIN inbox i ON i.id = o.inbox_id
       WHERE o.next_attempt_at <= now()
@@ -90,7 +91,7 @@ export function startPushWorker(store: Store, log: FastifyBaseLogger) {
         body: JSON.stringify(rows.map((job) => ({
           to: job.token,
           title: job.profile_ref === "default" ? "Hermes 收件箱" : topicTitlePreview(`Hermes · ${job.profile_ref}`),
-          body: bodyPreview(job.text),
+          body: bodyPreview(job.text.trim() || job.attachment_name || ""),
           interruptionLevel: "time-sensitive",
           priority: "high",
           sound: "default",

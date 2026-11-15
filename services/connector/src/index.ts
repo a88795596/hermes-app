@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import WebSocket from 'ws';
 import type { TopicQueryResult } from '@hermes-mobile/protocol';
-import { attachmentDownloader } from './attachments.js';
+import { attachmentDownloader, attachmentReceiver } from './attachments.js';
 import { CanonicalConnector } from './connector.js';
 import type { JsonObject } from './gateway.js';
 import { createHttpConnector } from './http-mode.js';
@@ -57,10 +57,11 @@ async function main(): Promise<void> {
   process.once('SIGTERM', stop);
 
   const downloadAttachment = attachmentDownloader(url, token, shutdown.signal);
+  const receiveAttachments = attachmentReceiver(url, token, webapp, shutdown.signal);
   const canonical = new CanonicalConnector(webapp ?? process.env.HERMES_BIN ?? 'hermes',
-    spool, () => socket?.terminate(), downloadAttachment);
+    spool, () => socket?.terminate(), downloadAttachment, receiveAttachments);
   const legacy = httpUrl && httpKey ? createHttpConnector({
-    url: httpUrl, token: httpKey, spool, send: () => flush(), downloadAttachment, webapp,
+    url: httpUrl, token: httpKey, spool, send: () => flush(), downloadAttachment, receiveAttachments, webapp,
   }) : undefined;
   for (const id of spool.unfinished()) {
     spool.finish(id, { ...result(id, 'unknown', { error: 'Hermes 无法确认执行结果' }) });

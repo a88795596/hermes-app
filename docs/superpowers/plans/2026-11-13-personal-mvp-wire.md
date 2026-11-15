@@ -26,6 +26,7 @@
 | GET /topics/:id/reasoning-requests/:requestId | 查询切换的 `pending`、`ok`、`error` 或 `unknown` 状态 |
 | POST /controls/:id/responses | `{response_id,answer}` → `{status:"responding"}`，幂等 202 |
 | GET /inbox | `InboxItem[]` |
+| GET/HEAD /attachments/:id | 已被可见消息或收件箱引用的文件字节，需要设备令牌。支持单个 `Range: bytes=…`，返回 206 或不可满足时的 416。 |
 | PUT/DELETE /devices/current/push-registration | PUT 提交 `{token}` 注册 Expo 推送令牌，DELETE 移除，均返回 204 |
 | POST /ws-tickets | `{ticket:string}`，短时单次 |
 | GET /events?ticket=… | WS，服务端仅发 `{type:"changed",topic_id?:string}` 和连接就绪变更。移动端重新拉取受影响数据。握手 URL 不写日志。 |
@@ -34,7 +35,13 @@
 
 话题包含 ISO 8601 格式的 `created_at`、`updated_at` 与布尔值 `archived`，旧缓存可能缺少这些字段。归档状态的变化不计入 `updated_at`。话题可附带已确认的 `reasoning_effort`（缺省时使用 Hermes 的默认设置），或 `reasoning_status:"pending"|"unknown"`。
 
-`GET /status` 同时返回当前连接器是否声明 `reasoning_supported` 和 `attachments_supported`。消息的 `attachments` 仅含 `{name,mime,size}` 元数据。
+`GET /status` 同时返回当前连接器是否声明 `reasoning_supported` 和 `attachments_supported`。消息与收件箱的 `attachments` 仅含 `{name,mime,size,attachment_id?}` 元数据。Hermes 发送的文件必须包含 `attachment_id`，历史用户上传的附件可缺省该字段。有附件时正文可为空，收件箱的自动标题和推送预览回退到首个附件名。
+
+## Hermes 文件上传
+
+连接器或投递插件调用 `PUT /internal/attachments/v1/:id`，`id` 为稳定 UUID，使用连接器令牌或独立的收件箱投递令牌。JSON 请求体为 `{profile_ref,name,mime,size,content_base64}`，单个文件最多 50 MiB。服务端校验名称、MIME、内容长度与严格 base64 编码；图片支持 JPEG、PNG、GIF 和 WebP 签名。成功返回 `{data:{attachment_id,name,mime,size},request_id,server_time}`。相同 ID 的相同文件可安全重试，不同内容、元数据或配置档案返回 409。
+
+上传成功后把返回的元数据加入 assistant message 或 `POST /internal/inbox/v1/deliveries` 的可选 `attachments`，每条最多 10 个。消息入库时验证引用确实存在且属于同一配置档案。上传字节存入独立持久表，WebSocket 仅发送引用。未被消息引用的文件不能由手机下载；当前不自动清理文件。反向代理须转发上传路径并允许约 67 MiB 的 JSON 请求。
 
 ## BFF 与连接器
 
@@ -53,7 +60,7 @@
 连接器异步帧含 `event_id`，话题相关的异步帧还含 `topic_id`。BFF 持久化后返回 `{type:"ack",id:event_id}`。
 
 - `{type:"topic_title",event_id,topic_id,session_id,title}` 同步绑定会话的原生标题。BFF 只更新自动命名的话题。
-- `{type:"message",event_id,topic_id,message_id,submission_id?,text,status:"streaming"|"final"}`，同一响应使用稳定的 `message_id`，`text` 为当前完整的累计文本。`final` 优先于迟到的 `streaming` 更新。
+- `{type:"message",event_id,topic_id,message_id,submission_id?,text,attachments?,status:"streaming"|"final"}`，同一响应使用稳定的 `message_id`，`text` 为当前完整的累计文本。`final` 优先于迟到的 `streaming` 更新。省略 `attachments` 时保留该回复已保存的文件；显式空数组清空引用。
 - `{type:"submission",event_id,topic_id,submission_id,status:"queued"|"streaming"|"final"|"failed"|"cancelled"|"unknown",error?}`，更新原用户气泡执行状态，禁止复活已知终态。
 - `{type:"control",event_id,topic_id,control_id,kind,prompt,choices,status,submission_id?,multi_select?}`。连接器按话题映射上游请求 ID。BFF 收到明确的成功回执后才投影已提交的答案。
 - `{type:"delivery",event_id,delivery_id,profile_ref,title?,text}` 供旧版连接器清空升级前的队列，可选标题最多 256 个 UTF-8 字节。新版插件使用 `POST /internal/inbox/v1/deliveries`，HTTP 和旧连接器共用投递 ID 去重。 [收件箱投递 API](../../../plugins/hermes-mobile-delivery/README.md#投递-api)

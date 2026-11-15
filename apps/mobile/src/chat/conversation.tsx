@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState, type ComponentRef } from "rea
 import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import Animated from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { MAX_ATTACHMENTS, type Attachment, type AttachmentUpload, type Control, type Message, type MessageProcessStep, type SessionStatus, type Skill, type Topic } from "@hermes-mobile/protocol";
+import { MAX_ATTACHMENTS, type AttachmentUpload, type Control, type Message, type MessageProcessStep, type SessionStatus, type Skill, type Topic } from "@hermes-mobile/protocol";
+import type { Session } from "../auth/session";
 import type { useWorkspace } from "../sync/use-workspace";
 import { motion, useReduceMotion } from "../ui/motion";
 import { Action, Card, CloseButton, EmptyState, Field, Icon, Notice, useTheme } from "../ui/theme";
@@ -12,6 +13,7 @@ import { AnswerMarkdown } from "./answer-markdown";
 import { pickAttachments } from "./attachments";
 import { AttachmentMenu, ComposerMenu, ReasoningMenu, reasoningLabels, type ComposerCommand } from "./composer-menu";
 import { ModelPicker } from "./model-picker";
+import { MessageAttachments } from "./message-attachments";
 
 const messageStatus: Record<Message["status"], string> = {
   accepted: "已接收",
@@ -158,23 +160,14 @@ function ControlCard({
   );
 }
 
-function MessageAttachments({ items, tint }: { items: Attachment[]; tint: string }) {
-  const { styles } = useTheme();
-  return items.map((item, index) => (
-    <View key={index} style={chat.attachmentLine}>
-      <Icon name={item.mime.startsWith("image/") ? "photo" : "attachment"} size={15} color={tint} />
-      <Text numberOfLines={2} style={[styles.text, chat.attachmentName, { color: tint }]}>{item.name}</Text>
-    </View>
-  ));
-}
-
 export function Conversation({
-  id, topic, newProfileId, workspace, draft, onDraftChange, attachments, onAttachmentsChange, onNewTopic, showProcess, onToggleProcess,
+  id, topic, newProfileId, workspace, session, draft, onDraftChange, attachments, onAttachmentsChange, onNewTopic, showProcess, onToggleProcess,
 }: {
   id: string;
   topic?: Topic;
   newProfileId?: string;
   workspace: ReturnType<typeof useWorkspace>;
+  session: Session;
   draft: string;
   attachments: AttachmentUpload[];
   showProcess: boolean;
@@ -483,7 +476,8 @@ export function Conversation({
                     outgoing ? chat.outgoingBubble : chat.incomingBubble,
                     { backgroundColor: outgoing ? colors.accentFill : colors.surface },
                   ]}>
-                    {!!message.attachments?.length && <MessageAttachments items={message.attachments} tint={outgoing ? colors.onAccent : colors.foreground} />}
+                    {!!message.attachments?.length && <MessageAttachments items={message.attachments} session={session}
+                      onOpenLink={openLink} tint={outgoing ? colors.onAccent : colors.foreground} />}
                     {!!message.text && (outgoing ? <Text
                       selectable
                       accessibilityLabel={`你：${message.text}`}
@@ -509,7 +503,7 @@ export function Conversation({
         {pending.map((item) => (
           <Animated.View key={item.submission_id} style={[chat.message, chat.outgoing, { maxWidth: messageWidth }, !reduced && motion.reveal]}>
             <View style={[chat.bubble, chat.outgoingBubble, { backgroundColor: colors.tint }]}>
-              {!!item.attachments?.length && <MessageAttachments items={item.attachments} tint={colors.foreground} />}
+              {!!item.attachments?.length && <MessageAttachments items={item.attachments} onOpenLink={openLink} tint={colors.foreground} />}
               {!!item.text && <Text selectable accessibilityLabel={`你：${item.text}`} style={[styles.text, chat.messageText]}>
                 {item.text}
               </Text>}
@@ -654,7 +648,6 @@ const chat = StyleSheet.create({
   composer: { paddingHorizontal: 10, paddingBottom: 6, borderTopWidth: StyleSheet.hairlineWidth, gap: 2 },
   toolbar: { gap: 8 },
   replyOptions: { flexDirection: "row", gap: 8 },
-  attachmentLine: { flexDirection: "row", alignItems: "center", gap: 6 },
   attachmentName: { flexShrink: 1, fontSize: 13 },
   attachmentTray: { gap: 6, paddingVertical: 3 },
   attachmentChip: { flexDirection: "row", gap: 6, alignItems: "center", paddingStart: 10, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth },

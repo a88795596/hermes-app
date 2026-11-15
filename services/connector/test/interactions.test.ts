@@ -12,8 +12,9 @@ import { Gateway, type JsonObject } from '../src/gateway.js';
 import { createHttpConnector } from '../src/http-mode.js';
 import { Spool } from '../src/spool.js';
 import { bridgeFrame } from '../src/wire.js';
+import type { ReceiveAttachments } from '../src/attachments.js';
 
-async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: JsonObject[]) {
+async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: JsonObject[], received?: { output: string; receive: ReceiveAttachments }) {
   const calls: { path: string; body: JsonObject }[] = [];
   const frames: JsonObject[] = [];
   const topicId = randomUUID();
@@ -60,7 +61,7 @@ async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: Jso
       await delay(50);
       res.end(runEvents.map((event, seq) => `data: ${JSON.stringify({ ...event, run_id: runId, seq })}\n\n`).join(''));
     } else if (path === `/v1/runs/${runId}`) {
-      res.end(JSON.stringify({ run_id: runId, status: pending ? 'running' : 'completed', output: '已完成',
+      res.end(JSON.stringify({ run_id: runId, status: pending ? 'running' : 'completed', output: received?.output ?? '已完成',
         pending_controls: pending ? [{
           kind: 'clarify', prompt_id: 'ask', execution_generation: 3, question: '要使用哪些环境？',
           choices: ['预发布环境', '生产环境'], multi_select: true,
@@ -80,6 +81,7 @@ async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: Jso
   const filename = join(directory, 'connector.sqlite');
   const options = { url: `http://127.0.0.1:${address.port}`, token: 'test-key', send: (frame: JsonObject) => frames.push(frame),
     webapp: { origin: `http://127.0.0.1:${address.port}`, token: 'dashboard-key' },
+    receiveAttachments: received?.receive,
     downloadAttachment: async (_id: string, number: number) => Buffer.from(number === 1 ? 'YWJj' : png, 'base64') };
   let spool = new Spool(filename);
   const createId = randomUUID();
@@ -108,12 +110,43 @@ async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: Jso
     return frames.find((frame) => frame.type === 'command_result' && frame.command_id === id);
   }
   return { calls, frames, restart, command,
+    turn: () => spool.turn(topicId, runId),
     skills: () => connector.query({ type: 'topic_query', kind: 'skills', request_id: randomUUID(),
       topic_id: topicId, session_id: sessionId, profile_ref: 'default' }),
     disconnectSession: () => { sessionAvailable = false; } };
 }
 
 const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jLG0AAAAASUVORK5CYII=';
+
+test('HTTP Runs 等附件入库后才完成，纯附件回复也发出终态消息', async (t) => {
+  let release!: () => void;
+  let receiving = false;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  t.after(() => release());
+  const attachment = { attachment_id: randomUUID(), name: 'clip.mp4', mime: 'video/mp4', size: 3 };
+  const { command, frames, turn, restart } = await harness(t, 'resolved', [], {
+    output: 'MEDIA:/clip.mp4', receive: async (_profile, _topic, _message, text) => {
+      assert.equal(text, 'MEDIA:/clip.mp4');
+      receiving = true;
+      await gate;
+      return { text: '', attachments: [attachment] };
+    },
+  });
+  const submission_id = randomUUID();
+  await command({ kind: 'submit', body: { submission_id, text: '生成视频' } }, submission_id);
+  for (let tries = 0; tries < 100 && !receiving; tries += 1) await delay(10);
+  assert.equal(receiving, true);
+  assert.notEqual(turn()?.status, 'final');
+  assert(!frames.some((frame) => frame.type === 'submission' && frame.status === 'final'));
+  release();
+  for (let tries = 0; tries < 100 && turn()?.status !== 'final'; tries += 1) await delay(10);
+  assert.equal(turn()?.status, 'final');
+  const final = frames.find((frame) => frame.type === 'message' && frame.status === 'final');
+  assert.equal(final?.text, '');
+  assert.deepEqual(final?.attachments, [attachment]);
+  restart();
+  assert.deepEqual(turn()?.attachments, [attachment]);
+});
 
 test('HTTP Runs 同一轮收到描述、Hermes 本地文件引用和真实图片', async (t) => {
   const { command, calls } = await harness(t);
