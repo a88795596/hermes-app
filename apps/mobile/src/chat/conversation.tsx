@@ -9,12 +9,14 @@ import type { Session } from "../auth/session";
 import type { useWorkspace } from "../sync/use-workspace";
 import { haptic } from "../ui/haptics";
 import { motion, useReduceMotion } from "../ui/motion";
+import { profileLabel } from "../ui/text";
 import { Action, CloseButton, Field, Icon, Notice, useTheme } from "../ui/theme";
 import { AnswerMarkdown } from "./answer-markdown";
 import { pickAttachments } from "./attachments";
 import { AttachmentMenu, ComposerMenu, ReasoningMenu, reasoningLabels, type ComposerCommand } from "./composer-menu";
 import { ModelPicker } from "./model-picker";
 import { MessageAttachments } from "./message-attachments";
+import { SettingsDrawer } from "./settings-drawer";
 
 const messageStatus: Record<Message["status"], string> = {
   accepted: "已接收",
@@ -207,6 +209,7 @@ function ControlPrompt({
 
 export function Conversation({
   id, topic, newProfileId, workspace, session, draft, onDraftChange, attachments, onAttachmentsChange, onNewTopic, showProcess, onToggleProcess,
+  settingsOpen, onCloseSettings,
 }: {
   id: string;
   topic?: Topic;
@@ -217,6 +220,8 @@ export function Conversation({
   attachments: AttachmentUpload[];
   showProcess: boolean;
   onToggleProcess: () => void;
+  settingsOpen: boolean;
+  onCloseSettings: () => void;
   onDraftChange: (value: string) => void;
   onAttachmentsChange: (value: AttachmentUpload[]) => void;
   onNewTopic: () => void;
@@ -237,6 +242,7 @@ export function Conversation({
   const choosingAttachment = useRef(false);
   const [error, setError] = useState<string>();
   const [modelPicker, setModelPicker] = useState(false);
+  const [settingsBusy, setSettingsBusy] = useState(false);
   const [commandNotice, setCommandNotice] = useState<string>();
   const [openingSkills, setOpeningSkills] = useState(false);
   const queryPending = useRef(false);
@@ -281,6 +287,7 @@ export function Conversation({
   const reasoningLabel = reasoningBlocked ? "不可用"
     : reasoningStatus === "pending" ? "切换中" : reasoningStatus === "unknown" ? "待确认"
     : reasoning === null ? "跟随配置档案" : reasoningLabels[reasoning];
+  const currentProfile = workspace.profiles.find((item) => item.profile_id === (topic?.profile_id ?? newProfileId));
 
   const openLink = useCallback((url: string) => {
     haptic("light");
@@ -445,20 +452,39 @@ export function Conversation({
     onDraftChange(`请先用 skill_view 加载技能 ${JSON.stringify(skill.name)}，再处理以下任务。\n\n${draft}`);
   }
 
+  const modelSelection = modelPicker && <ModelPicker
+    embedded={settingsOpen}
+    profileLabel={currentProfile ? profileLabel(currentProfile.label) : undefined}
+    enabled={canControl && !topicBusy}
+    unavailable={topicBusy ? "请等待当前回复结束，再切换模型。"
+      : !canControl ? "重新连接 Hermes 后即可选择模型。" : undefined}
+    onClose={() => setModelPicker(false)}
+    onRequest={async (requestId, selection, signal) => {
+      if (newProfileId && topic?.status !== "ready") await workspace.prepareTopic(id, newProfileId, signal);
+      return workspace.requestModel(id, requestId, selection, signal);
+    }}
+    onSelected={({ selection, type }, global) => {
+      setModelPicker(false);
+      setCommandNotice(type === "deferred" ? `模型切换已排队 · ${selection.model}`
+        : global ? `已选择并设为默认模型 · ${selection.model}` : `已选择模型 · ${selection.model}`);
+    }}
+  />;
+
+  const reasoningSelection = menu === "reasoning" && <ReasoningMenu embedded={settingsOpen}
+    effort={reasoningStatus || reasoningBlocked ? undefined : reasoning}
+    status={reasoningStatus} unavailable={reasoningUnavailable}
+    onBusyChange={setSettingsBusy} onClose={() => setMenu(undefined)}
+    onRequest={async (requestId, effort, signal) => {
+      if (newProfileId && topic?.status !== "ready") await workspace.prepareTopic(id, newProfileId, signal);
+      return workspace.requestReasoning(id, requestId, effort, signal);
+    }} />;
+
   return (
     <KeyboardAvoidingView style={styles.frame} behavior={Platform.OS === "web" ? undefined : "padding"}
       keyboardVerticalOffset={safeAreaTop}>
       {menu === "attachments" ? (
         <AttachmentMenu busy={picking} onClose={() => setMenu(undefined)} onPick={(kind) => void addAttachments(kind)} />
-      ) : menu === "reasoning" ? (
-        <ReasoningMenu effort={reasoningStatus || reasoningBlocked ? undefined : reasoning}
-          status={reasoningStatus} unavailable={reasoningUnavailable}
-          onClose={() => setMenu(undefined)}
-          onRequest={async (requestId, effort, signal) => {
-            if (newProfileId && topic?.status !== "ready") await workspace.prepareTopic(id, newProfileId, signal);
-            return workspace.requestReasoning(id, requestId, effort, signal);
-          }} />
-      ) : menu && (
+      ) : menu && menu !== "reasoning" && (
         <ComposerMenu kind={menu} id={id} call={workspace.call}
           profile={workspace.profiles.find((item) => item.profile_id === (topic?.profile_id ?? newProfileId))?.label}
           connected={canControl}
@@ -584,11 +610,6 @@ export function Conversation({
           <Action compact icon="skill" title={openingSkills ? "正在加载技能…" : "技能"}
             disabled={!canWrite || openingSkills || (topic?.status !== "ready" && !canControl)}
             onPress={() => { Keyboard.dismiss(); void openSkills(); }} />
-          <Action compact icon="reasoning" disclosure title={reasoningLabel === "跟随配置档案" ? "思考强度" : `思考 · ${reasoningLabel}`}
-            accessibilityLabel={`思考强度：${reasoningLabel}`} selected={reasoning !== null && !reasoningLegacy} disabled={!canWrite}
-            onPress={() => { Keyboard.dismiss(); setMenu("reasoning"); }} />
-          <Action compact icon="process" title={showProcess ? "过程 · 开" : "过程 · 关"} accessibilityLabel="显示回复过程"
-            selected={showProcess} toggled={showProcess} onPress={onToggleProcess} />
           {running && (
             <Action compact title={stopping ? "停止中…" : "停止回复"} icon="stop"
               feedback="warning"
@@ -654,22 +675,12 @@ export function Conversation({
           </Pressable>
         </View>
       </View>
-      {modelPicker && (
-        <ModelPicker
-          enabled={canControl && !topicBusy}
-          unavailable={topicBusy ? "请等待当前回复结束，再切换模型。"
-            : !canControl ? "重新连接 Hermes 后即可选择模型。" : undefined}
-          onClose={() => setModelPicker(false)}
-          onRequest={async (requestId, selection, signal) => {
-            if (newProfileId && topic?.status !== "ready") await workspace.prepareTopic(id, newProfileId, signal);
-            return workspace.requestModel(id, requestId, selection, signal);
-          }}
-          onSelected={({ selection, type }) => {
-            setModelPicker(false);
-            setCommandNotice(type === "deferred" ? `模型切换已排队 · ${selection.model}` : `已选择模型 · ${selection.model}`);
-          }}
-        />
-      )}
+      {settingsOpen ? <SettingsDrawer busy={settingsBusy} canWrite={canWrite} reasoningLabel={reasoningLabel}
+        showProcess={showProcess} onToggleProcess={onToggleProcess}
+        onModel={() => setModelPicker(true)} onReasoning={() => setMenu("reasoning")}
+        onClose={() => { setModelPicker(false); setMenu(undefined); onCloseSettings(); }}>
+        {modelSelection || reasoningSelection || undefined}
+      </SettingsDrawer> : modelSelection}
     </KeyboardAvoidingView>
   );
 }

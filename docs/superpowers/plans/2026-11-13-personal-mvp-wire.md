@@ -20,7 +20,7 @@
 | PUT /topics/:id/archive | `{archived:boolean}` → `Topic`。重复设置同一状态安全，保留原会话和消息。 |
 | POST /topics/:id/submissions | `{submission_id,text,attachments?:{name,mime,size,content_base64}[]}` → `Message` 用户气泡，幂等 202。有附件时可传空正文。 |
 | POST /topics/:id/interrupt | `{request_id,submission_id}` → `{status:"accepted"}`，幂等 202 |
-| POST /topics/:id/model-requests | `{request_id}` 请求目录，`{request_id,provider,model,confirm?}` 选择模型。幂等 202 |
+| POST /topics/:id/model-requests | `{request_id}` 请求目录，`{request_id,provider,model,global?,confirm?}` 选择模型。`global:true` 同时设为当前 profile 默认模型，省略或 `false` 仅影响当前会话。幂等 202 |
 | GET /topics/:id/model-requests/:requestId | 查询模型请求的 `pending`、`ok`、`error` 或 `unknown` 状态。成功时返回目录、选择结果或 Hermes 确认提示 |
 | POST /topics/:id/reasoning-requests | `{request_id,effort}` 切换思考强度；`effort:null` 恢复默认。幂等 202 |
 | GET /topics/:id/reasoning-requests/:requestId | 查询切换的 `pending`、`ok`、`error` 或 `unknown` 状态 |
@@ -53,7 +53,7 @@
 - `submit` 的请求体为 `{submission_id,text,attachments?:{name,mime,size,sha256}[]}`。含附件的命令只发给声明 `X-Hermes-Mobile-Attachments: 1` 的连接器。连接器通过机器令牌调用 `GET /internal/connector/v1/submissions/:id/attachments/:position`（序号从 1 开始）获取原始字节并校验摘要。BFF 保存连接器命令结果后清理暂存字节。
 - `interrupt` 的请求体为 `{submission_id}`。连接器核对该提交仍在运行后，按当前已验证的活动代次调用。
 - `respond` 的请求体为 `{control_id,response_id,answer}`。澄清支持文本、复选标签数组的 JSON 字符串和空字符串跳过。连接器按上游请求类型转换。
-- `model_options` 的请求体为 `{}`。`select_model` 的请求体为 `{provider,model,confirm?}`。两者的成功回执携带 `model_result`。
+- `model_options` 的请求体为 `{}`。`select_model` 的请求体为 `{provider,model,global?,confirm?}`，`global` 仅接受布尔值。两者的成功回执携带 `model_result`。HTTP Runs 模式通过 Hermes 原版控制台的 `POST /api/model/set?profile=当前档案`（`scope:main`）保存默认模型，确认成功后才记录会话选择并在 `selected` 回执带 `global:true`；客户端仅凭该回执确认已保存默认值。不会修改其他 profile。Hermes 要求风险确认时返回绑定话题、profile 和模型的凭证，5 分钟内有效且仅可使用一次；连接器重启后须重新选择。保存结果不明返回 `unknown`。旧 Canonical 网关不支持 `global:true`，明确拒绝而不忽略该参数。
 - `select_reasoning` 的请求体为 `{effort}`，仅发给声明 `X-Hermes-Mobile-Reasoning: 1` 的连接器。
 - `watch` 的请求体为 `{}`，使用独立的临时 `command_id`。重连时同步每个已绑定话题。连接器先登记作用域，再恢复上游。BFF 忽略 `watch` 的结果，且不将临时命令写入命令表。
 

@@ -81,9 +81,11 @@ export function bridgeFrame(source: string): BridgeFrame {
       break;
     case 'select_model':
       if (text(body.provider, 256) && text(body.model, 512) &&
+        (body.global === undefined || typeof body.global === 'boolean') &&
         (body.confirm === undefined || (typeof body.confirm === 'string' && /^[a-f0-9]{64}$/.test(body.confirm)))) {
         return { ...base, session_id, kind: 'select_model', body: {
           provider: body.provider, model: body.model, ...(body.confirm === undefined ? {} : { confirm: body.confirm }),
+          ...(body.global === undefined ? {} : { global: body.global }),
         } };
       }
       break;

@@ -61,6 +61,7 @@ function Workspace() {
   const updateInFlight = useRef(false);
   const [updateStatus, setUpdateStatus] = useState<string>();
   const [profilesExpanded, setProfilesExpanded] = useState(false);
+  const [chatSettingsOpen, setChatSettingsOpen] = useState(false);
   const [managementTabsVisible, setManagementTabsVisible] = useState(true);
   const updateDisabled = Platform.OS === "web" || !!updateStatus;
   const params = useLocalSearchParams<{ page?: Page | "conversation" | "inbox-item"; topicId?: string; newProfileId?: string; archived?: string }>();
@@ -267,12 +268,19 @@ function Workspace() {
     const processVisible = showProcess[id] ?? false;
     return (
       <View style={styles.frame}>
-        <PageHeader title={chatTitle} leading={<BackLink title={archived ? "已归档会话" : "话题列表"} onPress={goBack} />} />
+        <PageHeader title={chatTitle} leading={<BackLink title={archived ? "已归档会话" : "话题列表"} onPress={goBack} />}
+          trailing={<Pressable accessibilityRole="button" accessibilityLabel="会话设置" accessibilityState={{ expanded: chatSettingsOpen }}
+            onPress={() => { haptic("light"); Keyboard.dismiss(); setChatSettingsOpen(true); }}
+            style={({ pressed }) => [layout.backLink, pressed && styles.faded]}>
+            <Icon name="settings" size={22} color={colors.accent} />
+          </Pressable>} />
         <Conversation
           id={id}
           topic={topic}
           newProfileId={newProfileId}
           showProcess={processVisible}
+          settingsOpen={chatSettingsOpen}
+          onCloseSettings={() => setChatSettingsOpen(false)}
           onToggleProcess={() => setShowProcess((current) => ({ ...current, [id]: !current[id] }))}
           workspace={workspace}
           session={session}

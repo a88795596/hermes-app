@@ -42,7 +42,8 @@ function modelResult(value: unknown): ModelResult {
   }
   if (body.type === "selected" || body.type === "deferred") {
     const selection = record(body.selection, ["provider", "model"]);
-    return { type: body.type, selection: {
+    if (body.global !== undefined && typeof body.global !== "boolean") invalid("模型默认设置回执无效。");
+    return { type: body.type, ...(body.global === undefined ? {} : { global: body.global }), selection: {
       provider: string(selection.provider, "模型提供商", 256), model: string(selection.model, "模型", 512),
     } };
   }

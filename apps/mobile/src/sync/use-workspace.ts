@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
-import type { AttachmentUpload, Control, InboxItem, Message, MobileNotice, ModelRequest, ModelSelection, Profile, ReasoningEffort, ReasoningRequest, Topic, TopicDetail } from "@hermes-mobile/protocol";
+import type { AttachmentUpload, Control, InboxItem, Message, MobileNotice, ModelRequest, ModelSelectionRequest, Profile, ReasoningEffort, ReasoningRequest, Topic, TopicDetail } from "@hermes-mobile/protocol";
 import type { Session } from "../auth/session";
 import { openCache, type Cache } from "../db/cache";
 import { ApiError, request } from "./api";
@@ -525,7 +525,7 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
     sessionEnded,
     finishSession,
     answer,
-    requestModel: (id: string, requestId: string, selection: ModelSelection & { confirm?: string } | undefined, signal: AbortSignal) =>
+    requestModel: (id: string, requestId: string, selection: ModelSelectionRequest | undefined, signal: AbortSignal) =>
       waitForRequest<Exclude<ModelRequest, { status: "pending" }>>(`/topics/${id}/model-requests`, requestId, selection, signal),
     requestReasoning,
   };

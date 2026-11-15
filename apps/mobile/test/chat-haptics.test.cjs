@@ -50,6 +50,7 @@ function mount(file, name, props) {
         ComposerSheet: "ComposerSheet", PickerRow: "PickerRow",
       };
       case "./model-picker": return { ModelPicker: "ModelPicker" };
+      case "./settings-drawer": return { SettingsDrawer: "SettingsDrawer" };
       case "./answer-markdown": return { AnswerMarkdown: "AnswerMarkdown" };
       case "./message-attachments": return { MessageAttachments: "MessageAttachments" };
       case "./attachments": return { pickAttachments: async () => [] };
@@ -64,7 +65,7 @@ function find(node, predicate) {
   if (Array.isArray(node)) return node.map((child) => find(child, predicate)).find(Boolean);
   if (!node?.props) return;
   if (predicate(node)) return node;
-  return find([node.props.children, node.props.leading, node.props.trailing], predicate);
+  return find([node.props.children, node.props.leading, node.props.trailing, node.props.back], predicate);
 }
 const flush = () => new Promise(setImmediate);
 const findSend = (tree) => find(tree, (node) => node.props.accessibilityLabel === "发送");
@@ -142,9 +143,9 @@ test("已结束的纯附件回复在隐藏过程时仍展示文件", () => {
   }
 });
 
-async function selectModel(result, { aborted = false, currentModel = "old" } = {}) {
+async function selectModel(result, { aborted = false, currentModel = "old", global = false, onSelected = () => {} } = {}) {
   const screen = mount("model-picker", "ModelPicker", {
-    enabled: true, onClose() {}, onSelected() {},
+    enabled: true, onClose() {}, onSelected,
     onRequest: async (_id, selection) => selection ? result : {
       status: "ok", model_result: { type: "catalog", catalog: { provider: "p", model: currentModel, providers: [{ id: "p", name: "Provider", models: ["new"] }] } },
     },
@@ -157,6 +158,7 @@ async function selectModel(result, { aborted = false, currentModel = "old" } = {
   list.props.renderItem({ item: list.props.data[0] }).props.onPress();
   list = findList(screen.render());
   list.props.renderItem({ item: list.props.data[0] }).props.onPress();
+  find(screen.render(), (node) => node.props.title === (global ? "设为默认模型" : "仅当前会话")).props.onPress();
   if (aborted) cleanup.forEach((dispose) => dispose?.());
   await flush();
   return screen.feedback;
@@ -170,6 +172,13 @@ test("仅已生效的模型切换提示成功，排队与取消请求保持静�
   assert.deepEqual(await selectModel({ status: "ok", model_result: { type: "selected", selection } }, { currentModel: "new" }), []);
 });
 
+test("旧服务端未回执 Global 时不宣告默认模型保存成功", async () => {
+  const feedback = await selectModel({ status: "ok", model_result: {
+    type: "selected", selection: { provider: "p", model: "new" },
+  } }, { global: true, onSelected: () => assert.fail("缺少默认模型保存回执不能报成功") });
+  assert.deepEqual(feedback, ["warning"]);
+});
+
 test("模型风险确认与明确失败使用对应提示，自动加载失败不振动", async () => {
   assert.deepEqual(await selectModel({ status: "ok", model_result: { type: "confirmation", confirm: "token", message: "费用变化" } }), ["warning"]);
   assert.deepEqual(await selectModel({ status: "error", error: "切换失败" }), ["error"]);
@@ -181,6 +190,83 @@ test("模型风险确认与明确失败使用对应提示，自动加载失败�
   screen.effects.forEach((effect) => effect());
   await flush();
   assert.deepEqual(screen.feedback, []);
+});
+
+test("选定模型后先确认范围，仅设为默认时发送 Global，取消不提交", async () => {
+  for (const global of [false, true, undefined]) {
+    const writes = [], selected = [];
+    const screen = mount("model-picker", "ModelPicker", {
+      enabled: true, profileLabel: "日常助手", onClose() {},
+      onSelected: (...args) => selected.push(args),
+      onRequest: async (_id, selection) => {
+        if (!selection) return { status: "ok", model_result: { type: "catalog", catalog: {
+          provider: "p", model: "old", providers: [{ id: "p", name: "Provider", models: ["new"] }],
+        } } };
+        writes.push(selection);
+        return { status: "ok", model_result: { type: "selected", global: selection.global, selection: { provider: "p", model: "new" } } };
+      },
+    });
+    screen.render();
+    screen.effects.forEach((effect) => effect());
+    await flush();
+    for (let i = 0; i < 2; i++) {
+      const list = findList(screen.render());
+      list.props.renderItem({ item: list.props.data[0] }).props.onPress();
+    }
+    assert.deepEqual(writes, [], "选择模型不能跳过范围确认直接修改配置");
+    assert.ok(find(screen.render(), (node) => node.type === "Text"
+      && JSON.stringify(node.props.children).includes("日常助手")));
+    if (global === undefined) {
+      find(screen.render(), (node) => node.props.accessibilityLabel === "返回模型列表").props.onPress();
+      assert.ok(findList(screen.render()), "取消范围选择后回到模型列表");
+      assert.deepEqual(writes, []);
+    } else {
+      find(screen.render(), (node) => node.props.title === (global ? "设为默认模型" : "仅当前会话")).props.onPress();
+      await flush();
+      assert.deepEqual(writes, [{ provider: "p", model: "new", global }]);
+      assert.equal(selected[0][1], global);
+    }
+  }
+});
+
+test("默认模型的费用确认和网络重试保留 Global 与原请求编号", async () => {
+  const writes = [], selected = [];
+  const props = {
+    enabled: true, onClose() {}, onSelected: (...args) => selected.push(args),
+    onRequest: async (id, selection) => {
+      if (!selection) return { status: "ok", model_result: { type: "catalog", catalog: {
+        provider: "p", model: "old", providers: [{ id: "p", name: "Provider", models: ["new"] }],
+      } } };
+      writes.push({ id, ...selection });
+      if (writes.length === 1) return { status: "ok", model_result: {
+        type: "confirmation", confirm: "expense-token", message: "费用变化",
+      } };
+      if (writes.length === 2) throw new Error("网络中断");
+      return { status: "ok", model_result: { type: "selected", global: true, selection: { provider: "p", model: "new" } } };
+    },
+  };
+  const screen = mount("model-picker", "ModelPicker", props);
+  screen.render();
+  screen.effects.forEach((effect) => effect());
+  await flush();
+  for (let i = 0; i < 2; i++) {
+    const list = findList(screen.render());
+    list.props.renderItem({ item: list.props.data[0] }).props.onPress();
+  }
+  find(screen.render(), (node) => node.props.title === "设为默认模型").props.onPress();
+  await flush();
+  assert.deepEqual(selected, []);
+  find(screen.render(), (node) => node.props.title === "确认切换").props.onPress();
+  await flush();
+  assert.deepEqual(selected, []);
+  assert.equal(find(screen.render(), (node) => node.props.title === "确认切换").props.disabled, true);
+  props.enabled = false;
+  find(screen.render(), (node) => node.props.title === "重新查询请求状态").props.onPress();
+  await flush();
+  assert.ok(writes.every((selection) => selection.global === true));
+  assert.deepEqual(writes[1], writes[2], "重试必须使用带相同确认凭证的原请求");
+  assert.equal(writes[1].confirm, "expense-token");
+  assert.equal(selected[0][1], true);
 });
 
 test("思考强度只在确认完成后提示成功，取消后不触发反馈", async () => {

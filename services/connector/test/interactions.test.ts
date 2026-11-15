@@ -10,6 +10,7 @@ import type { Command } from '@hermes-mobile/protocol';
 import { CanonicalConnector } from '../src/connector.js';
 import { Gateway, type JsonObject } from '../src/gateway.js';
 import { createHttpConnector } from '../src/http-mode.js';
+import { createDashboardManagement } from '../src/management.js';
 import { Spool } from '../src/spool.js';
 import { bridgeFrame } from '../src/wire.js';
 import type { ReceiveAttachments } from '../src/attachments.js';
@@ -22,6 +23,8 @@ async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: Jso
   const runId = 'run_' + '1'.repeat(32);
   let pending = !runEvents;
   let sessionAvailable = true;
+  let modelWriteStatus = 200;
+  let modelWarning = false;
   const server = createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -39,6 +42,12 @@ async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: Jso
     } else if (path === `/api/skills?profile=${profileRef}`) {
       assert.equal(req.headers.authorization, 'Bearer dashboard-key');
       res.end(JSON.stringify([{ name: 'example', category: 'dev', description: '示例技能', enabled: true }]));
+    } else if (path === `/api/model/set?profile=${profileRef}`) {
+      assert.equal(req.headers['x-hermes-session-token'], 'dashboard-key');
+      res.statusCode = modelWriteStatus;
+      res.end(JSON.stringify(modelWarning && !body.confirm_expensive_model
+        ? { ok: false, confirm_required: true, confirm_message: '此模型价格较高，是否继续？' }
+        : { ok: modelWriteStatus === 200 }));
     } else if (path === '/api/model/options?include_unconfigured=false') {
       res.end(JSON.stringify({
         provider: 'nous', model: 'default-model',
@@ -81,6 +90,7 @@ async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: Jso
   const filename = join(directory, 'connector.sqlite');
   const options = { url: `http://127.0.0.1:${address.port}`, token: 'test-key', send: (frame: JsonObject) => frames.push(frame),
     webapp: { origin: `http://127.0.0.1:${address.port}`, token: 'dashboard-key' },
+    manage: createDashboardManagement(`http://127.0.0.1:${address.port}`, 'dashboard-key'),
     receiveAttachments: received?.receive,
     downloadAttachment: async (_id: string, number: number) => Buffer.from(number === 1 ? 'YWJj' : png, 'base64') };
   let spool = new Spool(filename);
@@ -95,13 +105,13 @@ async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: Jso
     server.closeAllConnections();
     rmSync(directory, { recursive: true, force: true });
   });
-  function restart() {
+  function restart(withManagement = true) {
     connector.close();
     spool.close();
     spool = new Spool(filename);
-    connector = createHttpConnector({ ...options, spool });
+    connector = createHttpConnector({ ...options, spool, manage: withManagement ? options.manage : undefined });
   }
-  async function command(payload: Pick<Command, 'kind' | 'body'>, id = randomUUID() as string) {
+  async function command(payload: { kind: Command['kind']; body: unknown }, id = randomUUID() as string) {
     const frame = bridgeFrame(JSON.stringify({
       ...payload, type: 'command', command_id: id, topic_id: topicId, profile_ref: profileRef, session_id: sessionId,
     }));
@@ -110,6 +120,7 @@ async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: Jso
     return frames.find((frame) => frame.type === 'command_result' && frame.command_id === id);
   }
   return { calls, frames, restart, command,
+    modelWrite: (status = 200, warning = false) => { modelWriteStatus = status; modelWarning = warning; },
     turn: () => spool.turn(topicId, runId),
     skills: () => connector.query({ type: 'topic_query', kind: 'skills', request_id: randomUUID(),
       topic_id: topicId, session_id: sessionId, profile_ref: profileRef }),
@@ -250,6 +261,66 @@ test('HTTP 模式的模型选择器返回已配置的服务商目录，并在重
     session_id: 'mobile_test', input: '你好', ...selection,
     instructions: undefined,
   });
+  assert.equal(calls.some((call) => call.path.startsWith('/api/model/set')), false);
+});
+
+test('Global 模型选择只保存当前 profile 默认值，重复请求不会重复写入', async (t) => {
+  const { command, calls, restart } = await harness(t, 'resolved', undefined, undefined, 'work');
+  const selection = { provider: 'custom:local', model: 'local-model', global: true };
+  const id = randomUUID();
+  const payload = { kind: 'select_model' as const, body: selection };
+  assert.deepEqual((await command(payload, id))?.model_result,
+    { type: 'selected', selection: { provider: selection.provider, model: selection.model }, global: true });
+  restart();
+  assert.equal((await command(payload, id))?.status, 'ok');
+  assert.deepEqual(calls.filter((call) => call.path.startsWith('/api/model/set')), [{
+    path: '/api/model/set?profile=work', body: { scope: 'main', provider: 'custom:local', model: 'local-model' },
+  }]);
+  assert.equal(((await command({ kind: 'model_options', body: {} }))?.model_result as JsonObject)?.type, 'catalog');
+  const submission_id = randomUUID();
+  await command({ kind: 'submit', body: { submission_id, text: '继续' } }, submission_id);
+  assert.equal(calls.find((call) => call.path === '/v1/runs')?.body.model, 'local-model');
+});
+
+test('Global 模型写入需要风险确认，凭证绑定选择且不能复用', async (t) => {
+  const { command, calls, modelWrite } = await harness(t, 'resolved', undefined, undefined, 'work');
+  modelWrite(200, true);
+  const selection = { provider: 'custom:local', model: 'local-model', global: true };
+  const prompt = (await command({ kind: 'select_model', body: selection }))?.model_result as JsonObject;
+  assert.equal(prompt.type, 'confirmation');
+  assert.match(String(prompt.confirm), /^[a-f0-9]{64}$/);
+  assert.equal((await command({ kind: 'select_model', body: { ...selection, model: 'default-model', provider: 'nous', confirm: prompt.confirm } }))?.status, 'error');
+  assert.equal((await command({ kind: 'select_model', body: { ...selection, global: false, confirm: prompt.confirm } }))?.status, 'error');
+  assert.equal((await command({ kind: 'select_model', body: { ...selection, confirm: prompt.confirm } }))?.status, 'ok');
+  assert.equal((await command({ kind: 'select_model', body: { ...selection, confirm: prompt.confirm } }))?.status, 'error');
+  assert.deepEqual(calls.filter((call) => call.path.startsWith('/api/model/set')).map((call) => call.body.confirm_expensive_model), [undefined, true]);
+});
+
+test('Global 写入失败不能报告成功或改变会话模型，global 只接受布尔值', async (t) => {
+  const { command, modelWrite } = await harness(t);
+  for (const global of ['true', 1, null]) {
+    await assert.rejects(command({ kind: 'select_model', body: { provider: 'nous', model: 'default-model', global } }));
+  }
+  modelWrite(503);
+  const failed = await command({ kind: 'select_model', body: { provider: 'custom:local', model: 'local-model', global: true } });
+  assert.equal(failed?.status, 'unknown');
+  assert.equal(failed?.model_result, undefined);
+  const catalog = (await command({ kind: 'model_options', body: {} }))?.model_result as JsonObject;
+  assert.equal((catalog.catalog as JsonObject).model, 'default-model');
+});
+
+test('Global 确认在重启后失效，缺少控制台配置时不写入或切换模型', async (t) => {
+  const { command, calls, modelWrite, restart } = await harness(t);
+  modelWrite(200, true);
+  const selection = { provider: 'custom:local', model: 'local-model', global: true };
+  const prompt = (await command({ kind: 'select_model', body: selection }))?.model_result as JsonObject;
+  restart();
+  assert.equal((await command({ kind: 'select_model', body: { ...selection, confirm: prompt.confirm } }))?.status, 'error');
+  restart(false);
+  assert.equal((await command({ kind: 'select_model', body: selection }))?.status, 'error');
+  assert.equal(calls.filter((call) => call.path.startsWith('/api/model/set')).length, 1);
+  const catalog = (await command({ kind: 'model_options', body: {} }))?.model_result as JsonObject;
+  assert.equal((catalog.catalog as JsonObject).model, 'default-model');
 });
 
 test('HTTP Runs 保留话题的思考强度，恢复默认后不再覆盖 Hermes 配置', async (t) => {
@@ -309,6 +380,14 @@ test('Canonical Gateway 按话题绑定的会话和当前版本切换思考强�
   assert.deepEqual(mutations, [{ session_id: sessionId, request_id: id, operation: 'reasoning',
     payload: { effort: 'none' }, expected_revision: 4, expected_generation: 2 }]);
   assert.equal(JSON.parse(spool.command(id)!.result!).status, 'ok');
+
+  const modelId = randomUUID();
+  await connector.command({ ...command, command_id: modelId, kind: 'select_model',
+    body: { provider: 'nous', model: 'example', global: true } }, () => true);
+  const modelResult = JSON.parse(spool.command(modelId)!.result!);
+  assert.equal(modelResult.status, 'error');
+  assert.match(modelResult.error, /HTTP Runs/);
+  assert.equal(mutations.length, 1);
 
   deferred = true;
   const deferredId = randomUUID();

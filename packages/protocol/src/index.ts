@@ -91,6 +91,11 @@ export interface ModelSelection {
   model: string;
 }
 
+export interface ModelSelectionRequest extends ModelSelection {
+  global?: boolean;
+  confirm?: string;
+}
+
 export interface ModelCatalog extends ModelSelection {
   providers: { id: string; name: string; models: string[] }[];
 }
@@ -100,7 +105,7 @@ export const MAX_CONTROL_ANSWER_BYTES = 192 * 1024;
 
 export type ModelResult =
   | { type: "catalog"; catalog: ModelCatalog }
-  | { type: "selected" | "deferred"; selection: ModelSelection }
+  | { type: "selected" | "deferred"; selection: ModelSelection; global?: boolean }
   | { type: "confirmation"; confirm: string; message: string };
 
 export type ModelRequest =
@@ -203,7 +208,7 @@ export type Command = CommandEnvelope & (
   | { kind: "interrupt"; body: { submission_id: string } }
   | { kind: "respond"; body: { control_id: string; response_id: string; answer: string } }
   | { kind: "model_options"; body: Record<string, never> }
-  | { kind: "select_model"; body: ModelSelection & { confirm?: string } }
+  | { kind: "select_model"; body: ModelSelectionRequest }
   | { kind: "select_reasoning"; body: { effort: ReasoningEffort | null } }
   | { kind: "watch"; body: Record<string, never> }
 );
