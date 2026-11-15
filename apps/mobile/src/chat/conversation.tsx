@@ -676,7 +676,7 @@ export function Conversation({
 
 const chat = StyleSheet.create({
   column: { width: "100%", maxWidth: 768, alignSelf: "center", paddingHorizontal: transcriptGutter },
-  transcript: { flexGrow: 1, paddingTop: 16, paddingBottom: 24, gap: 12 },
+  transcript: { flexGrow: 1, paddingTop: 8, paddingBottom: 24, gap: 12 },
   empty: { flex: 1, justifyContent: "center", alignItems: "center", gap: 8, paddingBottom: 32 },
   emptyTitle: { textAlign: "center", fontSize: 24, lineHeight: 32, fontWeight: "700", marginTop: 8 },
   emptyDescription: { textAlign: "center", fontSize: 16, lineHeight: 23 },

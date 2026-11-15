@@ -139,7 +139,7 @@ const layout = StyleSheet.create({
   metadata: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 },
   profile: { flex: 1, minWidth: 0 },
   back: { width: 48, minHeight: 48, alignItems: "center", justifyContent: "center" },
-  detail: { width: "100%", maxWidth: 680, alignSelf: "center", paddingTop: 16, paddingBottom: 32, gap: 20 },
+  detail: { width: "100%", maxWidth: 680, alignSelf: "center", paddingTop: 8, paddingBottom: 32, gap: 20 },
   detailMetadata: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: 12, rowGap: 6,
     paddingBottom: 18, borderBottomWidth: StyleSheet.hairlineWidth },
 });

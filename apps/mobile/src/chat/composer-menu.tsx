@@ -283,7 +283,7 @@ const menu = StyleSheet.create({
     borderTopLeftRadius: 28, borderTopRightRadius: 28 },
   content: { paddingHorizontal: 24, paddingTop: 12, paddingBottom: 16, gap: 12, flexShrink: 1 },
   handle: { alignSelf: "center", width: 44, height: 4, borderRadius: 2 },
-  header: { marginHorizontal: -24 },
+  header: { marginHorizontal: -24, marginBottom: -6 },
   list: { flexGrow: 0, flexShrink: 1 },
   grow: { flex: 1, minWidth: 0 },
   row: { minHeight: 56, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: 12, borderBottomWidth: StyleSheet.hairlineWidth },

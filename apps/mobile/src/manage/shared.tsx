@@ -28,7 +28,7 @@ export function ManagementLayout({ header, children, hideTabs = false }: {
   useEffect(() => { onTabVisibilityChange?.(!hideTabs); }, [hideTabs, onTabVisibilityChange]);
   return <KeyboardAvoidingView style={styles.frame} keyboardVerticalOffset={insets.top} behavior={Platform.OS === "ios" ? "padding" : undefined}>
     <View style={layout.page}>{header}</View>
-    <ScrollView contentContainerStyle={[styles.content, layout.page]} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
+    <ScrollView contentContainerStyle={[styles.content, layout.page, layout.content]} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
       {children}
     </ScrollView>
   </KeyboardAvoidingView>;
@@ -237,6 +237,7 @@ export const mono = Platform.select({ ios: "Menlo", android: "monospace", defaul
 
 const layout = StyleSheet.create({
   page: { width: "100%", maxWidth: 680, alignSelf: "center" },
+  content: { paddingTop: 8 },
   back: { minWidth: 48, minHeight: 48, alignItems: "center", justifyContent: "center" },
   group: { borderBottomWidth: StyleSheet.hairlineWidth },
   row: { minHeight: 72, paddingVertical: 16, gap: 14 },

@@ -456,8 +456,8 @@ export default function WorkspaceScreen() {
 
 const layout = StyleSheet.create({
   clip: { overflow: "hidden" },
-  page: { width: "100%", maxWidth: 680, alignSelf: "center", paddingTop: 20 },
-  wordmark: { fontSize: 18, lineHeight: 24 },
+  page: { width: "100%", maxWidth: 680, alignSelf: "center", paddingTop: 10 },
+  wordmark: { fontSize: 18, lineHeight: 24, fontWeight: "700" },
   brand: { flexShrink: 1 },
   grow: { flex: 1, minWidth: 0 },
   compose: { width: 48, height: 48, borderRadius: 12, alignItems: "center", justifyContent: "center" },

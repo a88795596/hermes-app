@@ -152,8 +152,8 @@ const layout = StyleSheet.create({
   preview: { flex: 1, minHeight: 0 },
   documentSheet: { borderTopLeftRadius: 24, borderTopRightRadius: 24, overflow: "hidden" },
   header: { borderBottomWidth: StyleSheet.hairlineWidth },
-  imagePreview: { flex: 1, paddingHorizontal: 16, paddingVertical: 24 },
+  imagePreview: { flex: 1, paddingHorizontal: 16, paddingVertical: 24, paddingTop: 12 },
   fullImage: { flex: 1, width: "100%", maxWidth: 800, alignSelf: "center", borderRadius: 16 },
-  markdown: { padding: 24, maxWidth: 800, width: "100%", alignSelf: "center" },
-  html: { flex: 1, minHeight: 0, margin: 16 },
+  markdown: { padding: 24, paddingTop: 12, maxWidth: 800, width: "100%", alignSelf: "center" },
+  html: { flex: 1, minHeight: 0, margin: 16, marginTop: 8 },
 });

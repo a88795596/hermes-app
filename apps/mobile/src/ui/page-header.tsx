@@ -32,5 +32,5 @@ const layout = StyleSheet.create({
   leading: { alignItems: "flex-start" },
   trailing: { alignItems: "flex-end" },
   title: { position: "absolute", top: 4, bottom: 4, minWidth: 0, justifyContent: "center" },
-  titleText: { fontSize: 16, lineHeight: 22, textAlign: "center" },
+  titleText: { fontSize: 18, lineHeight: 24, fontWeight: "700", textAlign: "center" },
 });
