@@ -82,7 +82,7 @@ function all(node, predicate) {
 }
 const swipes = (list) => all(list.render(), (node) => node.type === "Swipeable");
 const openButton = (node) => all(node, (child) => child.type === "Pressable")[0];
-const action = (list, swipe) => list.resolve(swipe.props.renderRightActions({ value: 1 }, { value: -80 }));
+const action = (list, swipe) => list.resolve(swipe.props.renderRightActions({ value: 1 }, { value: -96 }));
 
 test("左滑只展示归档，第二行打开关闭第一行，晚到的关闭回调不清除当前行", () => {
   const list = mountList();

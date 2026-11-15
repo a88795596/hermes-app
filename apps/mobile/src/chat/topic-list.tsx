@@ -28,7 +28,7 @@ interface TopicListProps {
   ref?: Ref<TopicListHandle>;
 }
 
-const actionWidth = 80;
+const actionWidth = 96;
 const rearrange = LinearTransition.duration(180);
 
 function ArchiveAction({ translation, visible, busy, title, onPress }: {
@@ -136,5 +136,5 @@ const layout = StyleSheet.create({
   details: { flex: 1, minWidth: 0, gap: 3 },
   restore: { minHeight: 44, justifyContent: "center", paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, borderWidth: 1 },
   action: { width: actionWidth, paddingVertical: 6, paddingLeft: 8 },
-  archive: { flex: 1, flexDirection: "column", paddingHorizontal: 8, gap: 6 },
+  archive: { flex: 1, paddingHorizontal: 8, gap: 6 },
 });
