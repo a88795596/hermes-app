@@ -38,6 +38,7 @@ async function mount({ ready = true, call = async () => ({ topic, messages: [{ m
   const router = { canDismiss: () => true, dismissAll: () => routes.push("dismiss"), replace: (route) => routes.push(route),
     push: (route) => routes.push(route) };
   const workspace = { ready: true, network: "online", call, sessionEnded: false };
+  const alertApi = { alert: (...args) => alerts.push(args) };
   const exports = {};
   new Function("exports", "require", source)(exports, (name) => {
     if (name === "react") return react;
@@ -50,7 +51,8 @@ async function mount({ ready = true, call = async () => ({ topic, messages: [{ m
       observeNotificationOpens(callback, onError) { open = callback; errors = onError; return () => { open = undefined; }; },
     };
     if (name === "./sync/use-workspace") return { useWorkspace: () => workspace };
-    if (name === "react-native") return { Alert: { alert: (...args) => alerts.push(args) } };
+    if (name === "react-native") return {};
+    if (name === "./ui/alerts") return { useAlert: () => alertApi };
     if (name === "./ui/theme") return { useTheme: () => ({ colors: {}, styles: {} }) };
     return {};
   });

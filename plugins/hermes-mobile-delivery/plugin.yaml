@@ -2,7 +2,7 @@ name: hermes-mobile-delivery
 label: Hermes 移动端
 kind: platform
 version: 0.0.0
-description: 向 Hermes 移动端会话、收件箱和 Bark 投递 Hermes Agent 的消息。
+description: 向 Hermes 移动端会话、收件箱和 Bark 投递消息，并设置移动端配置档案头像。
 requires_env:
   - name: HERMES_MOBILE_INBOX_URL
     description: 应用后端收件箱投递 API 的完整 URL。

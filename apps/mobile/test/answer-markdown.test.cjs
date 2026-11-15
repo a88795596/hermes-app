@@ -25,7 +25,7 @@ const hooks = registerHooks({
       return { url: tableComponent.href, shortCircuit: true };
     }
     if (context.parentURL === tableComponent.href
-      && ["expo-screen-orientation", "react-native-safe-area-context", "../ui/haptics", "../ui/page-header"].includes(specifier)) {
+      && ["expo-screen-orientation", "react-native-safe-area-context", "../ui/haptics", "../ui/page-header", "../ui/overlay", "../ui/alerts"].includes(specifier)) {
       return { url: "markdown-test:fullscreen", shortCircuit: true };
     }
     return nextResolve(specifier === "react-native" ? "react-native-web" : specifier, context);
@@ -41,7 +41,7 @@ const hooks = registerHooks({
         foreground: "#352820", edge: "#DDD0C2", tint: "#EBDDD0", secondary: "#EFE5DA", accent: "#86553B", muted: "#735F50",
       }, styles: {} }); exports.Icon = () => null;` };
     }
-    if (url === "markdown-test:fullscreen") return { format: "commonjs", shortCircuit: true, source: "module.exports = {};" };
+    if (url === "markdown-test:fullscreen") return { format: "commonjs", shortCircuit: true, source: "exports.useAlert = () => ({ alert() {} });" };
     if (![component.href, tableComponent.href].includes(url)) return nextLoad(url, context);
     const source = ts.transpileModule(readFileSync(new URL(url), "utf8"), {
       compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, esModuleInterop: true },

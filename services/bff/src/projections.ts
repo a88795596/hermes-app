@@ -24,8 +24,20 @@ export function profileId(ref: string) {
   return `${id.slice(0, 8)}-${id.slice(8, 12)}-8${id.slice(13, 16)}-${variant}${id.slice(17, 20)}-${id.slice(20, 32)}`;
 }
 
-export function profiles(refs: Set<string>): Profile[] {
-  return [...refs].map((ref) => ({ profile_id: profileId(ref), label: ref }));
+export async function profiles(db: Pick<Store, "query">, refs: Set<string>): Promise<Profile[]> {
+  const { rows } = await db.query<{ profile_ref: string; alias: string | null; avatar_sha256: string | null; is_default: boolean }>(
+    "SELECT profile_ref, alias, avatar_sha256, is_default FROM profile_preferences WHERE profile_ref = ANY($1)", [[...refs]],
+  );
+  const preferences = new Map(rows.map((row) => [row.profile_ref, row]));
+  return [...refs].map((ref) => {
+    const id = profileId(ref);
+    const saved = preferences.get(ref);
+    return { profile_id: id, label: ref,
+      ...(saved?.alias ? { alias: saved.alias } : {}),
+      ...(saved?.avatar_sha256 ? { avatar_url: `/mobile/v1/profiles/${id}/avatar?v=${saved.avatar_sha256}` } : {}),
+      ...(saved?.is_default ? { is_default: true } : {}),
+    };
+  });
 }
 
 export function topicData(row: TopicRow): Topic {

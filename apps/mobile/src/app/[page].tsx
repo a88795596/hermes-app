@@ -2,7 +2,7 @@ import { Redirect, useLocalSearchParams } from "expo-router";
 import { useWorkspaceContext } from "../workspace-context";
 import WorkspaceScreen from "../workspace-screen";
 
-const pages = ["manage", "connection", "archive", "cron", "models", "logs", "skills", "mcp", "conversation", "inbox-item"];
+const pages = ["manage", "profiles", "connection", "archive", "cron", "models", "logs", "skills", "mcp", "conversation", "inbox-item"];
 
 export default function SecondaryPage() {
   const { page, topicId } = useLocalSearchParams();

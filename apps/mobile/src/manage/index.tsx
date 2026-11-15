@@ -31,11 +31,11 @@ export function ManagementMenu({ profiles, profile, onProfile, onOpen }: {
     <View style={layout.profileSection}>
       <Text accessibilityRole="header" style={styles.sectionLabel}>配置档案</Text>
       <View style={[layout.profiles, { borderColor: colors.edge }]}>
-        {profiles.map((item) => <Pressable key={item.profile_id} accessibilityRole="button" accessibilityLabel={profileLabel(item.label)}
+        {profiles.map((item) => <Pressable key={item.profile_id} accessibilityRole="button" accessibilityLabel={profileLabel(item)}
           accessibilityState={{ selected: item.profile_id === profile.profile_id }}
           onPress={() => { if (item.profile_id !== profile.profile_id) { haptic("selection"); onProfile(item.profile_id); } }}
           style={({ pressed }) => [layout.profile, item.profile_id === profile.profile_id && { backgroundColor: colors.tint }, pressed && styles.faded]}>
-          <Text style={styles.label}>{profileLabel(item.label)}</Text>
+          <Text style={styles.label}>{profileLabel(item)}</Text>
         </Pressable>)}
       </View>
     </View>
@@ -55,7 +55,7 @@ export function ManagementScreen({ page, profile, request, onBack, onTabVisibili
     }),
   [profile.profile_id, request]);
 
-  const context = useMemo(() => ({ label: profileLabel(profile.label), onBack, onTabVisibilityChange }), [profile.label, onBack, onTabVisibilityChange]);
+  const context = useMemo(() => ({ label: profileLabel(profile), onBack, onTabVisibilityChange }), [profile, onBack, onTabVisibilityChange]);
   useEffect(() => () => onTabVisibilityChange?.(true), [onTabVisibilityChange]);
   return <ManagementContext.Provider value={context}>
       <Screen call={call} />

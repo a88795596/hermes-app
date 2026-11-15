@@ -6,6 +6,18 @@ export interface PairingResult {
 export interface Profile {
   profile_id: string;
   label: string;
+  alias?: string;
+  avatar_url?: string;
+  is_default?: boolean;
+}
+
+export const MAX_PROFILE_AVATAR_BYTES = 2 * 1024 * 1024;
+export const MAX_PROFILE_ALIAS_LENGTH = 64;
+
+export interface ProfilePreferencesUpdate {
+  alias?: string | null;
+  avatar?: AttachmentUpload | null;
+  is_default?: boolean;
 }
 
 export interface Topic {

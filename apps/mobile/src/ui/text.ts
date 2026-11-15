@@ -1,4 +1,6 @@
-export function profileLabel(label: string) {
+export function profileLabel(profile: string | { label: string; alias?: string }) {
+  if (typeof profile !== "string" && profile.alias) return profile.alias;
+  const label = typeof profile === "string" ? profile : profile.label;
   return label === "default" ? "默认" : label;
 }
 

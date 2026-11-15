@@ -1,12 +1,13 @@
 import { randomUUID } from "expo-crypto";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ActivityIndicator, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import Animated from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { reasoningEfforts, type ReasoningEffort, type Skill } from "@hermes-mobile/protocol";
 import type { useWorkspace } from "../sync/use-workspace";
 import { haptic } from "../ui/haptics";
 import { motion, useReduceMotion } from "../ui/motion";
+import { OverlayModal } from "../ui/overlay";
 import { PageHeader } from "../ui/page-header";
 import { profileLabel } from "../ui/text";
 import { Action, CloseButton, Field, Icon, Notice, useTheme, type IconName } from "../ui/theme";
@@ -47,14 +48,14 @@ export function ComposerSheet({ title, subtitle, busy, onClose, back, closeLabel
   </Animated.View>;
   if (embedded) return content;
   return (
-    <Modal transparent animationType={reduced ? "none" : "fade"} onRequestClose={() => { if (!busy) onClose(); }}>
+    <OverlayModal animationType={reduced ? "none" : "fade"} onRequestClose={() => { if (!busy) onClose(); }}>
       <KeyboardAvoidingView style={menu.backdrop} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <SafeAreaView accessibilityViewIsModal importantForAccessibility="yes" edges={["bottom", "left", "right"]}
           style={[menu.sheet, { backgroundColor: colors.background }]}>
           {content}
         </SafeAreaView>
       </KeyboardAvoidingView>
-    </Modal>
+    </OverlayModal>
   );
 }
 
@@ -300,7 +301,7 @@ export function ComposerMenu({
 }
 
 const menu = StyleSheet.create({
-  backdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(53, 40, 32, 0.27)" },
+  backdrop: { flex: 1, justifyContent: "flex-end" },
   sheet: { width: "100%", maxWidth: 680, maxHeight: "92%", flexShrink: 1, alignSelf: "center",
     borderTopLeftRadius: 28, borderTopRightRadius: 28 },
   content: { paddingHorizontal: 24, paddingTop: 12, paddingBottom: 16, gap: 12, flexShrink: 1 },

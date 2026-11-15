@@ -34,7 +34,7 @@ function tokenText(token: ReturnType<typeof previewMarkdown.parse>[number]): str
 
 function itemProfile(item: InboxItem, profiles: Profile[]) {
   const profile = profiles.find((profile) => profile.profile_id === item.profile_id);
-  return profile ? profileLabel(profile.label) : "未标注档案";
+  return profile ? profileLabel(profile) : "未标注档案";
 }
 
 function InboxRow({ item, profile, now, onOpen }: {
@@ -80,7 +80,7 @@ export function InboxList({ items, profiles, profileId, ready, onProfile, onOpen
     <ScrollView horizontal showsHorizontalScrollIndicator={false} style={layout.filterBar} contentContainerStyle={layout.filters}>
       <Action title="全部" selected={!profileId} toggled={!profileId} feedback={profileId ? "selection" : false} onPress={() => onProfile(undefined)} />
       {profiles.map((profile) => (
-        <Action key={profile.profile_id} title={profileLabel(profile.label)} selected={profileId === profile.profile_id} toggled={profileId === profile.profile_id}
+        <Action key={profile.profile_id} title={profileLabel(profile)} selected={profileId === profile.profile_id} toggled={profileId === profile.profile_id}
           feedback={profileId === profile.profile_id ? false : "selection"}
           onPress={() => onProfile(profile.profile_id)} />
       ))}

@@ -46,6 +46,7 @@ async function mountSkills(skills) {
     "react-native-reanimated": { __esModule: true, default: { View: "Animated.View" } },
     "react-native-safe-area-context": { SafeAreaView: "SafeAreaView" },
     "@hermes-mobile/protocol": { reasoningEfforts: [] },
+    "../ui/overlay": { OverlayModal: "Modal" },
     "../ui/haptics": { haptic() {} },
     "../ui/motion": {},
     "../ui/page-header": { PageHeader: "PageHeader" },

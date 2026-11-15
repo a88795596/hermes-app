@@ -3,7 +3,7 @@ const { readFileSync } = require("node:fs");
 const test = require("node:test");
 const ts = require("typescript");
 
-function mountPreview({ kind = "markdown", dark = false, glass = true, reduced = false } = {}) {
+function mountPreview({ kind = "markdown", dark = false, reduced = false } = {}) {
   const jsx = (type, props) => ({ type, props });
   const state = [];
   let cursor = 0;
@@ -24,8 +24,8 @@ function mountPreview({ kind = "markdown", dark = false, glass = true, reduced =
       StyleSheet: { create: (styles) => styles, absoluteFill: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 }, hairlineWidth: 1 },
       useWindowDimensions: () => ({ width: 390, height: 844 }),
     },
-    "expo-glass-effect": { GlassView: "GlassView", isGlassEffectAPIAvailable: () => glass },
     "react-native-safe-area-context": { SafeAreaView: "SafeAreaView" },
+    "../ui/overlay": { OverlayModal: "Modal" },
     "../ui/haptics": { haptic() {} },
     "../ui/motion": { useReduceMotion: () => reduced },
     "../ui/page-header": { PageHeader: "PageHeader" },
@@ -58,24 +58,16 @@ function find(node, predicate) {
 }
 const flatten = (style) => Object.assign({}, ...[style].flat(Infinity));
 
-test("文件预览的玻璃遮罩覆盖整个窗口，位于清晰面板后且不拦截操作", () => {
+test("文件预览使用共享弹出层，内容面板清晰并保留关闭与横屏支持", () => {
   for (const kind of ["markdown", "html", "image"]) for (const dark of [false, true]) {
     const render = mountPreview({ kind, dark });
     find(render(), (node) => node.type === "Pressable").props.onPress();
     const modal = find(render(), (node) => node.type === "Modal");
     assert.equal(modal.props.visible, true);
-    const window = modal.props.children;
-    const [backdrop, panel] = window.props.children;
-    assert.equal(backdrop.props.pointerEvents, "none");
-    assert.equal(backdrop.props.accessibilityElementsHidden, true);
-    assert.equal(backdrop.props.importantForAccessibility, "no-hide-descendants");
-    assert.deepEqual(["top", "right", "bottom", "left"].map((edge) => flatten(backdrop.props.style)[edge]), [0, 0, 0, 0]);
-    assert.ok(find(backdrop, (node) => /^rgba\(/.test(flatten(node.props.style).backgroundColor)));
-    const glass = find(backdrop, (node) => node.type === "GlassView");
-    assert.ok(glass);
-    assert.equal(glass.props.colorScheme, dark ? "dark" : "light");
-    assert.equal(find(panel, (node) => node.type === "GlassView"), undefined);
-    assert.equal(panel.props.accessibilityViewIsModal, true);
+    assert.equal(modal.props.animationType, "slide");
+    assert.deepEqual(modal.props.supportedOrientations, ["portrait", "landscape-left", "landscape-right"]);
+    const panel = find(modal, (node) => node.props.accessibilityViewIsModal === true);
+    assert.equal(panel.props.importantForAccessibility, "yes");
     assert.equal(flatten(panel.props.style).backgroundColor, "sheet");
     assert.ok(flatten(panel.props.style).borderTopWidth > 0);
     assert.ok(flatten(panel.props.style).borderTopLeftRadius > 0);
@@ -84,13 +76,11 @@ test("文件预览的玻璃遮罩覆盖整个窗口，位于清晰面板后且�
   }
 });
 
-test("不支持玻璃效果时仍有遮罩，减少动态效果和系统返回继续生效", () => {
-  const render = mountPreview({ glass: false, reduced: true });
+test("共享预览弹出层保留减少动态效果和系统返回", () => {
+  const render = mountPreview({ reduced: true });
   find(render(), (node) => node.type === "Pressable").props.onPress();
   const modal = find(render(), (node) => node.type === "Modal");
   assert.equal(modal.props.animationType, "none");
-  assert.equal(find(modal, (node) => node.type === "GlassView"), undefined);
-  assert.ok(find(modal, (node) => /^rgba\(/.test(flatten(node.props.style).backgroundColor)));
   modal.props.onRequestClose();
   assert.equal(find(render(), (node) => node.type === "Modal").props.visible, false);
 });

@@ -1,13 +1,16 @@
 import { lockAsync, OrientationLock } from "expo-screen-orientation";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Alert, Modal, Platform, Pressable, ScrollView, StyleSheet, View } from "react-native";
+import { Platform, Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { haptic } from "../ui/haptics";
+import { OverlayModal } from "../ui/overlay";
 import { PageHeader } from "../ui/page-header";
+import { useAlert } from "../ui/alerts";
 import { CloseButton, Icon, Notice, useTheme } from "../ui/theme";
 
 export function MarkdownTable({ columns, children }: { columns: number; children: ReactNode }) {
   const { colors, styles } = useTheme();
+  const alert = useAlert();
   const [open, setOpen] = useState(false);
   const [orientationError, setOrientationError] = useState<string>();
   const active = useRef(false);
@@ -18,10 +21,10 @@ export function MarkdownTable({ columns, children }: { columns: number; children
     return () => {
       active.current = false;
       void lockAsync(OrientationLock.PORTRAIT_UP).catch(() => {
-        Alert.alert("无法恢复竖屏", "请重新打开应用后重试。");
+        alert.alert("无法恢复竖屏", "请重新打开应用后重试。");
       });
     };
-  }, [open]);
+  }, [alert, open]);
 
   function show() {
     if (!active.current) return;
@@ -47,16 +50,16 @@ export function MarkdownTable({ columns, children }: { columns: number; children
       </Pressable>
     </View>
     {grid}
-    {open && <Modal presentationStyle="fullScreen" animationType="none" onRequestClose={close} onShow={show}
+    {open && <OverlayModal animationType="none" onRequestClose={close} onShow={show}
       supportedOrientations={["portrait", "landscape-left", "landscape-right"]}>
       <SafeAreaProvider>
-        <SafeAreaView style={styles.frame} accessibilityViewIsModal importantForAccessibility="yes">
+        <SafeAreaView style={[styles.frame, { backgroundColor: "transparent" }]} accessibilityViewIsModal importantForAccessibility="yes">
           <PageHeader title="表格" trailing={<CloseButton accessibilityLabel="关闭表格全屏" onPress={close} />} />
           {orientationError && <Notice>{orientationError}</Notice>}
           <ScrollView contentContainerStyle={table.fullscreenContent}>{grid}</ScrollView>
         </SafeAreaView>
       </SafeAreaProvider>
-    </Modal>}
+    </OverlayModal>}
   </View>;
 }
 

@@ -1,9 +1,10 @@
 import { useState, type ComponentProps } from "react";
-import { Keyboard, KeyboardAvoidingView, Modal, Platform, StyleSheet, Text, View } from "react-native";
+import { Keyboard, KeyboardAvoidingView, Platform, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { haptic } from "../ui/haptics";
 import { useReduceMotion } from "../ui/motion";
 import { Action, CloseButton, Field, Icon, useTheme, type IconName } from "../ui/theme";
+import { OverlayModal } from "../ui/overlay";
 import { PageHeader } from "../ui/page-header";
 import {
   ActionState, Confirm, DataState, EditField, FormHeader, Group, ManagementHeader, ManagementLayout, Row,
@@ -187,7 +188,7 @@ function ModelCatalog({ call, disabled, onClose, onChoose }: {
       trailing={<CloseButton accessibilityLabel="关闭模型目录" disabled={disabled} onPress={onClose} />} />
   </View>;
 
-  return <Modal transparent animationType={reduced ? "none" : "fade"} onRequestClose={() => { if (!disabled) onClose(); }}>
+  return <OverlayModal animationType={reduced ? "none" : "fade"} onRequestClose={() => { if (!disabled) onClose(); }}>
     <KeyboardAvoidingView style={layout.backdrop} behavior={Platform.OS === "ios" ? "padding" : undefined}>
       <SafeAreaView accessibilityViewIsModal importantForAccessibility="yes" edges={["bottom", "left", "right"]}
         style={[layout.sheet, { backgroundColor: colors.background }]}>
@@ -215,7 +216,7 @@ function ModelCatalog({ call, disabled, onClose, onChoose }: {
         </ManagementLayout>
       </SafeAreaView>
     </KeyboardAvoidingView>
-  </Modal>;
+  </OverlayModal>;
 }
 
 function ModelKeys({ call, onClose }: { call: ManageCall; onClose: () => void }) {
@@ -287,7 +288,7 @@ const layout = StyleSheet.create({
   technical: { fontFamily: mono },
   searchField: { paddingStart: 46 },
   searchIcon: { position: "absolute", start: 16, top: 0, bottom: 0, justifyContent: "center" },
-  backdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(53, 40, 32, 0.27)" },
+  backdrop: { flex: 1, justifyContent: "flex-end" },
   sheet: { width: "100%", maxWidth: 680, height: "61%", alignSelf: "center",
     borderTopLeftRadius: 28, borderTopRightRadius: 28, overflow: "hidden" },
   sheetHeader: { gap: 8, paddingTop: 12 },

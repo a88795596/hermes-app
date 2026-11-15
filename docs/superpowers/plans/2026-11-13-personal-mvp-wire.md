@@ -13,6 +13,8 @@
 | POST /pairings/redeem | `{pairing_token,device_name}` → `{token,device_id}` |
 | DELETE /auth/session | 撤销自己的凭据，204 |
 | GET /profiles | `Profile[]`，通过 BFF 的 `HERMES_PROFILES` 配置。值为逗号分隔的真实配置档案名称，默认为 `default` |
+| PUT /profiles/:id/preferences | `{alias?:string\|null,avatar?:AttachmentUpload\|null,is_default?:boolean}` → 更新后的全部 `Profile[]`，省略字段保持原值 |
+| GET /profiles/:id/avatar?v=… | 当前头像图片字节，需要设备令牌；URL 中的内容摘要随头像更换而变化 |
 | GET /status | `{connector_online:boolean}` |
 | GET /topics | `Topic[]` 按 `updated_at` 倒序。默认仅返回未归档话题，`?include_archived=true` 返回全部。 |
 | POST /topics | `{request_id,profile_id,title?}` → `Topic`，幂等 202。省略标题时先显示首条消息的预览，再同步 Hermes 原生标题。 |
@@ -33,7 +35,11 @@
 
 Expo 通知载荷 `PushNotificationData` 为 `{inbox_id}` 或 `{topic_id,message_id}`。会话首次进入成功 `final` 时按提交和设备排队；发送时优先定位该轮可见的最终助手消息，没有可见回复则定位用户消息。收件箱与会话通知共用投递重试，点击后客户端在路由就绪、配对有效时读取目标并导航，消息定位不会自动改变已读状态。
 
-话题 `Topic` 的结构为 `{topic_id,profile_id,title,status:"creating"|"ready"|"error",error?:string}`。配置档案 `Profile` 的结构为 `{profile_id,label}`。消息 `Message` 的结构为 `{message_id,role:"user"|"assistant",text,status:"accepted"|"queued"|"streaming"|"final"|"failed"|"unknown"|"cancelled",submission_id?:string,error?:string}`。交互 `Control` 的结构为 `{control_id,kind:"approval"|"clarify",prompt,choices:string[],status:"pending"|"responding"|"closed"|"unknown",submission_id?,multi_select?,answer?,error?}`。收件箱条目 `InboxItem` 的结构为 `{inbox_id,profile_id,title,text,created_at}`。旧版服务端或移动端缓存可能缺少 `profile_id`、`title`；新版响应从已保存的配置档案补齐 `profile_id`，无标题时从正文首个非空行生成简短标题，原始 `text` 不变。
+话题 `Topic` 的结构为 `{topic_id,profile_id,title,status:"creating"|"ready"|"error",error?:string}`。配置档案 `Profile` 的结构为 `{profile_id,label,alias?:string,avatar_url?:string,is_default?:boolean}`，`label` 保留 Hermes 原始配置档案名。消息 `Message` 的结构为 `{message_id,role:"user"|"assistant",text,status:"accepted"|"queued"|"streaming"|"final"|"failed"|"unknown"|"cancelled",submission_id?:string,error?:string}`。交互 `Control` 的结构为 `{control_id,kind:"approval"|"clarify",prompt,choices:string[],status:"pending"|"responding"|"closed"|"unknown",submission_id?,multi_select?,answer?,error?}`。收件箱条目 `InboxItem` 的结构为 `{inbox_id,profile_id,title,text,created_at}`。旧版服务端或移动端缓存可能缺少 `profile_id`、`title`；新版响应从已保存的配置档案补齐 `profile_id`，无标题时从正文首个非空行生成简短标题，原始 `text` 不变。
+
+档案个性化设置只作用于 Hermes 移动端渠道，并在同一 BFF 的全部设备间共享。别名去除首尾空白后最多 64 个 Unicode 字符，空白字符串或 `null` 清除别名。头像请求复用 `AttachmentUpload` 的 `{name,mime,size,content_base64}`，支持 JPEG、PNG、GIF 和 WebP，最多 2 MiB；`avatar:null` 清除头像。设置 `is_default:true` 会原子取消其他档案的首页默认标记；`false` 只取消当前档案。没有有效默认档案时客户端选择首个可用档案。设置独立持久化于 BFF，Connector 同步和重启均不覆盖，写入后通过 `changed` 通知各设备刷新。
+
+插件可调用 `PUT /internal/profiles/v1/avatar`，使用连接器令牌或独立收件箱投递令牌，JSON 为 `{profile_ref,avatar:AttachmentUpload}`，成功返回 `{data:Profile,request_id,server_time}`。目标必须在 `HERMES_PROFILES` 中；此接口仅更新头像，不改变别名或首页默认值。图片字节复用移动端上传校验，凭证不得传给图片 URL；设备读取头像仍使用自己的 Bearer 令牌。反向代理须转发此路径并允许约 3 MiB 的 JSON 请求。
 
 话题包含 ISO 8601 格式的 `created_at`、`updated_at` 与布尔值 `archived`，旧缓存可能缺少这些字段。归档状态的变化不计入 `updated_at`。话题可附带已确认的 `reasoning_effort`（缺省时使用 Hermes 的默认设置），或 `reasoning_status:"pending"|"unknown"`。
 

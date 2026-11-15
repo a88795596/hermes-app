@@ -1,7 +1,7 @@
 import { useGlobalSearchParams, useRootNavigationState, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { ActivityIndicator, Alert, View } from "react-native";
+import { ActivityIndicator, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { AttachmentUpload, InboxItem, TopicDetail } from "@hermes-mobile/protocol";
 import { Pairing } from "./auth/pairing";
@@ -10,6 +10,7 @@ import { enablePushNotifications, observeNotificationOpens, pushAvailable } from
 import { pairDevice } from "./sync/api";
 import { useWorkspace } from "./sync/use-workspace";
 import { useTheme } from "./ui/theme";
+import { useAlert } from "./ui/alerts";
 
 export type Section = "topics" | "inbox" | "settings";
 
@@ -41,6 +42,7 @@ function SignedInWorkspace({ session, onSignOut, children }: {
   session: Session; onSignOut: () => Promise<void>; children: ReactNode;
 }) {
   const router = useRouter();
+  const alert = useAlert();
   const rootKey = useRootNavigationState()?.key;
   const navigationInitialized = useRef(false);
   useEffect(() => {
@@ -98,10 +100,10 @@ function SignedInWorkspace({ session, onSignOut, children }: {
         router.push({ pathname: "/[page]", params: { page: "inbox-item" } });
       }
     }, (failure) => {
-      if (active) Alert.alert("无法打开通知", failure instanceof Error ? failure.message : "请稍后重试。");
+      if (active) alert.alert("无法打开通知", failure instanceof Error ? failure.message : "请稍后重试。");
     });
     return () => { active = false; controller.abort(); stop(); };
-  }, [call, rootKey, ready, router, sessionEnded, setError, setInboxItem, setInboxProfileId, setProfileId, setSection]);
+  }, [alert, call, rootKey, ready, router, sessionEnded, setError, setInboxItem, setInboxProfileId, setProfileId, setSection]);
   return <WorkspaceContext value={value}>{children}</WorkspaceContext>;
 }
 

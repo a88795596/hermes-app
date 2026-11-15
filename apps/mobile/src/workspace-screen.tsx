@@ -1,7 +1,7 @@
 import { randomUUID } from "expo-crypto";
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useRef, useState } from "react";
-import { Alert, BackHandler, Keyboard, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+import { BackHandler, Keyboard, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import Animated from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { DEFAULT_TOPIC_TITLE, topicTitlePreview } from "@hermes-mobile/protocol";
@@ -13,9 +13,13 @@ import { InboxDetail, InboxList } from "./inbox/inbox";
 import { ManagementMenu, ManagementScreen, type ManagementPage } from "./manage";
 import { Group, Row } from "./manage/shared";
 import { enablePushNotifications, pushAvailable } from "./notifications";
+import { ProfileAvatar } from "./profiles/avatar";
+import { ProfileSettings } from "./profiles/settings";
+import { selectProfile } from "./profiles/selection";
 import type { Pending } from "./sync/use-workspace";
 import { motion, useReduceMotion } from "./ui/motion";
 import { PageHeader } from "./ui/page-header";
+import { useAlert } from "./ui/alerts";
 import { haptic } from "./ui/haptics";
 import { formatDateTime, profileLabel } from "./ui/text";
 import { Action, Card, EmptyState, Icon, Notice, SectionLabel, useTheme, type IconName } from "./ui/theme";
@@ -27,7 +31,7 @@ const sections = {
   inbox: { title: "收件箱", icon: "inbox", activeIcon: "inboxActive" },
   settings: { title: "设置", icon: "settings", activeIcon: "settingsActive" },
 } as const;
-type Page = Section | "manage" | "connection" | "archive" | ManagementPage;
+type Page = Section | "profiles" | "manage" | "connection" | "archive" | ManagementPage;
 const tabs = Object.keys(sections) as Section[];
 
 function BackLink({ title, onPress }: { title: string; onPress: () => void }) {
@@ -56,6 +60,7 @@ function ConnectionRow({ icon, label, value, online }: { icon: IconName; label: 
 }
 
 function Workspace() {
+  const alert = useAlert();
   const { colors, styles } = useTheme();
   const router = useRouter();
   const navigation = useNavigation();
@@ -77,7 +82,7 @@ function Workspace() {
     ? { id: params.topicId, newProfileId: typeof params.newProfileId === "string" ? params.newProfileId : undefined } : undefined;
   const inboxItem = params.page === "inbox-item" ? selectedInboxItem : undefined;
   const topicId = chat?.id ?? null;
-  const profile = workspace.profiles.find((item) => item.profile_id === profileId) ?? workspace.profiles[0];
+  const profile = selectProfile(workspace.profiles, profileId);
   const topic = workspace.detail?.topic.topic_id === topicId
     ? workspace.detail.topic : workspace.topics.find((item) => item.topic_id === topicId);
   const pendingTopics = new Map<string, Pending>();
@@ -90,8 +95,8 @@ function Workspace() {
   const topicListPage = page === "topics" || archived;
   const section = page === "topics" || page === "inbox" ? page : "settings";
   const settingsPage = page === "topics" || page === "inbox" || page === "settings" ? undefined : page;
-  const managementPage = settingsPage === "manage" || settingsPage === "connection" || settingsPage === "archive" ? undefined : settingsPage;
-  const pageTitle = archived ? "已归档会话" : settingsPage === "connection" ? "连接" : settingsPage ? "管理" : sections[section].title;
+  const managementPage = settingsPage === "manage" || settingsPage === "profiles" || settingsPage === "connection" || settingsPage === "archive" ? undefined : settingsPage;
+  const pageTitle = settingsPage === "profiles" ? "配置档案" : archived ? "已归档会话" : settingsPage === "connection" ? "连接" : settingsPage ? "管理" : sections[section].title;
   const rows: TopicListRow[] = topicListPage ? workspace.topics
     .filter((item) => Boolean(item.archived) === archived && (archived || !profile || item.profile_id === profile.profile_id))
     .map((item) => ({
@@ -99,7 +104,7 @@ function Workspace() {
       status: item.status === "creating" ? "创建中…" : item.status === "error" ? "创建失败" : "",
       created_at: item.created_at, updated_at: item.updated_at,
       profileLabel: archived && workspace.profiles.length > 1
-        ? profileLabel(workspace.profiles.find((profile) => profile.profile_id === item.profile_id)?.label ?? "") : undefined,
+        ? profileLabel(workspace.profiles.find((profile) => profile.profile_id === item.profile_id) ?? "") : undefined,
     })) : [];
   if (page === "topics") {
     const remoteIds = new Set(workspace.topics.map((topic) => topic.topic_id));
@@ -183,7 +188,7 @@ function Workspace() {
     try {
       const message = await checkUpdateManually((update) => new Promise<boolean>((resolve) => {
         setUpdateStatus("等待确认…");
-        Alert.alert("发现热更新", [update.message?.trim(),
+        alert.alert("发现热更新", [update.message?.trim(),
           `时间：${update.publishedAt === undefined ? "未知" : formatDateTime(update.publishedAt)}`,
           `ID：${update.id}`,
         ].filter(Boolean).join("\n\n"), [
@@ -193,15 +198,15 @@ function Workspace() {
       }), () => new Promise<boolean>((resolve) => {
         if (downloadRequested) haptic("success");
         setUpdateStatus("等待确认…");
-        Alert.alert("热更新已下载", "是否立即重启应用以应用更新？", [
+        alert.alert("热更新已下载", "是否立即重启应用以应用更新？", [
           { text: "稍后", style: "cancel", onPress: () => resolve(false) },
           { text: "立即重启", onPress: () => { setUpdateStatus("重启中…"); resolve(true); } },
         ], { cancelable: true, onDismiss: () => resolve(false) });
       }));
-      if (message) Alert.alert("热更新", message);
+      if (message) alert.alert("热更新", message);
     } catch (failure) {
       haptic("error");
-      Alert.alert("热更新失败", failure instanceof Error ? failure.message : "请稍后重试。");
+      alert.alert("热更新失败", failure instanceof Error ? failure.message : "请稍后重试。");
     } finally {
       updateInFlight.current = false;
       setUpdateStatus(undefined);
@@ -316,11 +321,11 @@ function Workspace() {
     <>
       {page === "topics" ? (
         <PageHeader
-          leading={<Pressable accessibilityRole="button" accessibilityLabel={`选择配置档案${profile ? `，${profileLabel(profile.label)}` : ""}`}
+          leading={<Pressable accessibilityRole="button" accessibilityLabel={`选择配置档案${profile ? `，${profileLabel(profile)}` : ""}`}
             accessibilityState={{ expanded: profilesExpanded }}
             onPress={() => { haptic("light"); setProfilesExpanded(true); }}
             style={({ pressed }) => [layout.avatar, { backgroundColor: colors.tint }, pressed && styles.faded]}>
-            <Text style={[styles.heading, { color: colors.accent }]}>{Array.from(profileLabel(profile?.label ?? "H"))[0]}</Text>
+            <ProfileAvatar profile={profile} session={session} size={48} />
           </Pressable>}
           title={<Pressable accessibilityRole="button" accessibilityLabel={connection + "。打开连接设置"}
             onPress={() => { haptic("light"); showPage("connection"); }}
@@ -366,7 +371,8 @@ function Workspace() {
         {page === "settings" && (
           <>
             <Group>
-              <Row title="管理" icon="manage" onPress={() => showPage("manage")} />
+              <Row title="配置档案" icon="settings" onPress={() => showPage("profiles")} />
+              <Row divided title="管理" icon="manage" onPress={() => showPage("manage")} />
               <Row divided title="连接" value={connection} icon="link" onPress={() => showPage("connection")} />
               <Row divided title="已归档会话" icon="archive" onPress={() => showPage("archive")} />
             </Group>
@@ -395,6 +401,7 @@ function Workspace() {
             </View>
           </>
         )}
+        {page === "profiles" && <ProfileSettings profiles={workspace.profiles} session={session} onSave={workspace.saveProfilePreferences} />}
         {(page === "manage" || managementPage) && (
           <ManagementMenu profiles={workspace.profiles} profile={profile} onProfile={setProfileId} onOpen={showPage} />
         )}
@@ -445,7 +452,7 @@ function Workspace() {
         <ComposerSheet title="选择配置档案" closeLabel="关闭配置档案选择" onClose={() => setProfilesExpanded(false)}>
           <ScrollView style={layout.profileList}>
             {workspace.profiles.map((item) => (
-              <PickerRow key={item.profile_id} title={profileLabel(item.label)} selected={item.profile_id === profile?.profile_id}
+              <PickerRow key={item.profile_id} title={profileLabel(item)} leading={<ProfileAvatar profile={item} session={session} size={40} />} selected={item.profile_id === profile?.profile_id}
                 trailing={item.profile_id === profile?.profile_id ? "check" : undefined} disabled={false}
                 feedback={item.profile_id === profile?.profile_id ? false : undefined}
                 onPress={() => { setProfileId(item.profile_id); setProfilesExpanded(false); }} />

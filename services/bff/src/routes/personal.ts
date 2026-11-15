@@ -9,6 +9,7 @@ import { registerBridge } from "../bridge.js";
 import { applyInboxDelivery } from "../ingress.js";
 import { createTopic, findProfile, interrupt, requestModel, requestReasoning, respond, setTopicArchived, submit } from "../mutations.js";
 import { detail, modelRequest, profileId, profiles, reasoningRequest, topicRow, topics } from "../projections.js";
+import { registerProfilePreferences } from "../profile-preferences.js";
 import { registerPushRoutes } from "../push.js";
 import { receivedAttachmentReferences, registerReceivedAttachments } from "../received-attachments.js";
 import type { Store } from "../store.js";
@@ -62,6 +63,7 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
   const bridge = registerBridge(api, store, refs, config.connectorToken, changed);
   registerPushRoutes(api, store, authenticate);
   registerReceivedAttachments(api, store, refs, config, authenticate);
+  registerProfilePreferences(api, store, refs, config, authenticate, changed);
 
   api.setErrorHandler((error, request, reply) => {
     if (error instanceof ApiError) {
@@ -96,7 +98,7 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
     return reply.code(204).send();
   });
 
-  api.get(`${prefix}/profiles`, requireDevice, (request) => success(request, profiles(refs)));
+  api.get(`${prefix}/profiles`, requireDevice, async (request) => success(request, await profiles(store, refs)));
   api.post(`${prefix}/profiles/:id/manage/:operation`, requireDevice, async (request) => {
     const params = record(request.params);
     const profile_ref = findProfile(refs, pathId(request));

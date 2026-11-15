@@ -38,6 +38,7 @@ function mount(file, name, props, speech) {
       case "expo-crypto": return { randomUUID: () => `request-${++requestSequence}` };
       case "expo-web-browser": return { openBrowserAsync: async () => {}, WebBrowserPresentationStyle: { PAGE_SHEET: "pageSheet" } };
       case "@hermes-mobile/protocol": return { MAX_ATTACHMENTS: 5, reasoningEfforts: ["low", "high"] };
+      case "../ui/overlay": return { OverlayModal: "Modal" };
       case "../ui/haptics": return { haptic: (kind) => feedback.push(kind) };
       case "../ui/motion": return { motion: {}, useReduceMotion: () => true };
       case "../ui/text": return { profileLabel: (label) => label };

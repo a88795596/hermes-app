@@ -1,9 +1,10 @@
 import type { ReactNode } from "react";
-import { Modal, Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import Animated from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { haptic } from "../ui/haptics";
 import { motion, useReduceMotion } from "../ui/motion";
+import { OverlayModal } from "../ui/overlay";
 import { PageHeader } from "../ui/page-header";
 import { CloseButton, Icon, useTheme } from "../ui/theme";
 
@@ -21,9 +22,9 @@ export function SettingsDrawer({ busy, canWrite, reasoningLabel, onClose, onMode
   const { width } = useWindowDimensions();
   const drawerWidth = Math.min(400, width - 32);
   const close = () => { if (!busy) onClose(); };
-  return <Modal transparent animationType="none" statusBarTranslucent onRequestClose={close}>
+  return <OverlayModal animationType="none" statusBarTranslucent onRequestClose={close}>
     <View style={drawer.overlay}>
-      <Animated.View style={[StyleSheet.absoluteFill, drawer.scrim, !reduced && motion.fade]}>
+      <Animated.View style={[StyleSheet.absoluteFill, !reduced && motion.fade]}>
         <Pressable accessibilityRole="button" accessibilityLabel="关闭会话设置" accessibilityState={{ disabled: busy }}
           disabled={busy} style={StyleSheet.absoluteFill} onPress={close} />
       </Animated.View>
@@ -54,12 +55,11 @@ export function SettingsDrawer({ busy, canWrite, reasoningLabel, onClose, onMode
         </SafeAreaView>
       </Animated.View>
     </View>
-  </Modal>;
+  </OverlayModal>;
 }
 
 const drawer = StyleSheet.create({
   overlay: { flex: 1, alignItems: "flex-end" },
-  scrim: { backgroundColor: "rgba(53, 40, 32, 0.27)" },
   panel: { flex: 1 },
   content: { paddingHorizontal: 24 },
   row: { flexDirection: "row", alignItems: "center", minHeight: 64, paddingVertical: 12, gap: 12,

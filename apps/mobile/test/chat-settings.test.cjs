@@ -15,6 +15,7 @@ function renderDrawer(props, reduced = false) {
       StyleSheet: { create: (styles) => styles, absoluteFill: {}, hairlineWidth: 1 }, useWindowDimensions: () => ({ width: 390 }) },
     "react-native-reanimated": { __esModule: true, default: { View: "Animated.View" } },
     "react-native-safe-area-context": { SafeAreaView: "SafeAreaView" },
+    "../ui/overlay": { OverlayModal: "Modal" },
     "../ui/haptics": { haptic() {} },
     "../ui/motion": { motion: { push: { animationDuration: 210 }, fade: {} }, useReduceMotion: () => reduced },
     "../ui/page-header": { PageHeader: "PageHeader" },

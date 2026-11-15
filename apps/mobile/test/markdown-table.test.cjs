@@ -12,6 +12,7 @@ function mountTable(platform = "ios", failLandscape = false) {
   let pendingEffects = [];
   const children = jsx("View", { children: "指数表格内容" });
   const orientation = { LANDSCAPE: 5, PORTRAIT_UP: 3 };
+  const alertApi = { alert() {} };
   const modules = {
     "react/jsx-runtime": { jsx, jsxs: jsx, Fragment: "Fragment" },
     react: {
@@ -54,6 +55,8 @@ function mountTable(platform = "ios", failLandscape = false) {
       },
     },
     "expo-status-bar": { StatusBar: "StatusBar" },
+    "../ui/overlay": { OverlayModal: "Modal" },
+    "../ui/alerts": { useAlert: () => alertApi },
     "../ui/haptics": { haptic() {} },
     "../ui/motion": { useReduceMotion: () => false },
     "../ui/page-header": { PageHeader: "PageHeader" },

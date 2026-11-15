@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
-import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
-import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { Attachment } from "@hermes-mobile/protocol";
 import type { Session } from "../auth/session";
 import { haptic } from "../ui/haptics";
 import { useReduceMotion } from "../ui/motion";
+import { OverlayModal } from "../ui/overlay";
 import { PageHeader } from "../ui/page-header";
 import { Action, CloseButton, Icon, Notice, useTheme } from "../ui/theme";
 import { AnswerMarkdown } from "./answer-markdown";
@@ -93,14 +93,9 @@ function ReceivedFile({ item: { attachment_id, name, mime, size }, session, tint
     )}
     {!open && loading}
     {!open && failure}
-    <Modal visible={open} transparent animationType={reduced ? "none" : "slide"} onRequestClose={() => setOpen(false)}
+    <OverlayModal visible={open} animationType={reduced ? "none" : "slide"} onRequestClose={() => setOpen(false)}
       supportedOrientations={["portrait", "landscape-left", "landscape-right"]}>
       <SafeAreaView style={layout.previewWindow} edges={["top"]}>
-        <View pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={StyleSheet.absoluteFill}>
-          {isGlassEffectAPIAvailable() && <GlassView style={StyleSheet.absoluteFill} glassEffectStyle="regular" colorScheme={dark ? "dark" : "light"} />}
-          {/* shortcut: Unsupported systems use the scrim; add a native blur fallback if they need frosted glass. */}
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: dark ? "rgba(0, 0, 0, 0.32)" : "rgba(53, 40, 32, 0.22)" }]} />
-        </View>
         <SafeAreaView accessibilityViewIsModal importantForAccessibility="yes" edges={["bottom", "left", "right"]}
           style={[layout.preview, {
             backgroundColor: colors.surface,
@@ -126,7 +121,7 @@ function ReceivedFile({ item: { attachment_id, name, mime, size }, session, tint
           </View>}
         </SafeAreaView>
       </SafeAreaView>
-    </Modal>
+    </OverlayModal>
   </View>;
 }
 

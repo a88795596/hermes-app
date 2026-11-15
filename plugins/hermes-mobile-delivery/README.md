@@ -34,7 +34,7 @@ hermes send --to bark '{"title":"早报","subtitle":"今日摘要","markdown":"*
    HERMES_MOBILE_INBOX_TOKEN=替换为投递令牌
    ```
 
-跨主机使用 HTTPS，并在反向代理转发 `/internal/inbox/v1/deliveries` 和 `/internal/attachments/v1/`。文件上传使用同一个 BFF 域名和投递令牌，反向代理需允许至少 70 MiB 的 JSON 请求体。如果 BFF 在同一受信任的容器网络中独立运行，将其 `HOST` 设为 `0.0.0.0`，插件可用 `http://bff:4317/internal/inbox/v1/deliveries`，其中 `bff` 为 BFF 的服务名，端口与 BFF 的 `PORT` 一致。
+跨主机使用 HTTPS，并在反向代理转发 `/internal/inbox/v1/deliveries`、`/internal/attachments/v1/` 和 `/internal/profiles/v1/avatar`。文件上传使用同一个 BFF 域名和投递令牌，反向代理需允许至少 70 MiB 的 JSON 请求体。如果 BFF 在同一受信任的容器网络中独立运行，将其 `HOST` 设为 `0.0.0.0`，插件可用 `http://bff:4317/internal/inbox/v1/deliveries`，其中 `bff` 为 BFF 的服务名，端口与 BFF 的 `PORT` 一致。
 
 运行 `hermes send --to hermes_mobile "来自 Hermes 的测试消息"` 测试收件箱投递，或将定时任务的投递目标设为 `hermes_mobile`。已配置的收件箱默认目标也可写作 `hermes_mobile:1`。
 
@@ -75,6 +75,21 @@ hermes send --to hermes_mobile '日报已生成 MEDIA:/tmp/report.md'
 ```
 
 较旧的 Hermes 会在调用自定义平台插件前拒绝或丢弃媒体，遇到此情况使用上面的 `hermes mobile-send --file ...`。`hermes send --file` 的含义是读取消息正文，不是上传附件。插件不修改 Hermes 源码。网关原生图片、视频、语音和文档发送方法都已接入，定时任务向插件直接发送的 `MEDIA:` 内容使用 Hermes 自带解析器识别。
+
+## 设置移动端头像
+
+插件通过 Hermes 原生插件接口注册 `hermes_mobile_set_profile_avatar` 工具。安装或升级后重启 Hermes 会话或网关，让 Agent 加载工具。调用示例：
+
+```json
+{
+  "profile_ref": "work",
+  "image_path": "/tmp/avatar.png"
+}
+```
+
+`profile_ref` 使用 BFF `HERMES_PROFILES` 允许名单中的原始配置档案名称，不是 App 中的别名或 UUID。头像仅更新 Hermes 移动端渠道，不改变别名、首页默认档案或其他渠道。App 刷新配置档案后显示新头像。图片必须是通过 Hermes 原生媒体路径安全检查的本地 JPEG、PNG、GIF 或 WebP 文件，不允许符号链接，最大 2 MiB；远程 URL 需先保存为本地图片。
+
+工具复用 `HERMES_MOBILE_INBOX_URL` 的主机和 `HERMES_MOBILE_INBOX_TOKEN`，向 `PUT /internal/profiles/v1/avatar` 发送 `{ "profile_ref": "work", "avatar": { "name": "avatar.png", "mime": "image/png", "size": 123, "content_base64": "..." } }`。成功响应为 `200`，`data` 包含更新后的 `Profile`（`profile_id`、`label`、`avatar_url` 等）。服务端校验令牌、允许名单、图片类型和大小。工具仅在收到有效成功回执后返回 `success: true`；失败不会进入消息投递队列，修正后可重新调用。
 
 ## 投递 API
 

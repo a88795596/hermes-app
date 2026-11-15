@@ -57,7 +57,7 @@ async function workspace(cache, submit, messages = [], options = {}) {
   };
   const exports = {};
   const request = async (_origin, path, requestOptions = {}) => {
-    if (path === "/profiles") return [];
+    if (path === "/profiles") return options.profiles ? options.profiles() : [];
     if (path === "/topics?include_archived=true") return [topic];
     if (path === "/inbox") return [];
     if (path === "/status") return { connector_online: true };
@@ -268,3 +268,72 @@ test("提交被明确拒绝时保留错误和正文，不持续重发", async (t
   assert.equal(app.current.pending[0].error, "消息正文无效。");
 });
 
+
+test("配置档案保存更新全部默认标记并落盘，拒绝的保存不覆盖已有资料", async (t) => {
+  const cache = memoryCache(), requests = [];
+  const original = [{ profile_id: "first", label: "default", is_default: true }, { profile_id: "second", label: "work" }];
+  const updated = [{ profile_id: "first", label: "default" }, { profile_id: "second", label: "work", alias: "工作助手", is_default: true }];
+  let reject = false, remote = original;
+  const app = await workspace(cache, async (path, { method, body }) => {
+    requests.push({ path, method, body });
+    if (reject) throw new ApiError(422, "VALIDATION_FAILED", "别名过长", false);
+    remote = updated;
+    return updated;
+  }, [], { profiles: () => remote });
+  t.after(app.close);
+  await app.current.saveProfilePreferences("second", { alias: "工作助手", is_default: true });
+  await app.settle();
+  assert.deepEqual(app.current.profiles, updated);
+  assert.deepEqual((await cache.get("directory")).profiles, updated);
+  assert.deepEqual(requests[0], { path: "/profiles/second/preferences", method: "PUT", body: { alias: "工作助手", is_default: true } });
+  reject = true;
+  await assert.rejects(app.current.saveProfilePreferences("second", { alias: "失败" }), /别名过长/);
+  await app.settle();
+  assert.deepEqual(app.current.profiles, updated);
+  assert.deepEqual((await cache.get("directory")).profiles, updated);
+});
+
+test("配置档案保存不会被已在途的旧目录响应覆盖", async (t) => {
+  const cache = memoryCache();
+  const original = [{ profile_id: "first", label: "default" }];
+  const updated = [{ ...original[0], alias: "助手", avatar_url: "/mobile/v1/profiles/first/avatar?v=new" }];
+  let hold = false, release, remote = original;
+  const app = await workspace(cache, async () => { remote = updated; return updated; }, [], { profiles: () => {
+    if (hold) { hold = false; return new Promise((resolve) => { release = resolve; }); }
+    return remote;
+  } });
+  t.after(app.close);
+  hold = true;
+  const refresh = app.current.refresh();
+  await app.settle();
+  const saving = app.current.saveProfilePreferences("first", { alias: "助手" });
+  await app.settle();
+  release(original);
+  await Promise.all([refresh, saving]);
+  await app.settle();
+  assert.deepEqual(app.current.profiles, updated);
+  assert.deepEqual((await cache.get("directory")).profiles, updated);
+});
+
+test("保存回执不能覆盖插件或另一设备刚刚写入的新头像和默认项", async (t) => {
+  const cache = memoryCache();
+  const original = [{ profile_id: "first", label: "default" }, { profile_id: "second", label: "work" }];
+  const receipt = [{ ...original[0], alias: "助手" }, original[1]];
+  const latest = [{ ...receipt[0], avatar_url: "/mobile/v1/profiles/first/avatar?v=plugin" }, { ...original[1], is_default: true }];
+  let remote = original, release, hold = false;
+  const app = await workspace(cache, async () => { remote = latest; return receipt; }, [], { profiles: () => {
+    if (hold) { hold = false; return new Promise((resolve) => { release = resolve; }); }
+    return remote;
+  } });
+  t.after(app.close);
+  hold = true;
+  const refresh = app.current.refresh();
+  await app.settle();
+  const saving = app.current.saveProfilePreferences("first", { alias: "助手" });
+  await app.settle();
+  release(latest);
+  await Promise.all([refresh, saving]);
+  await app.settle();
+  assert.deepEqual(app.current.profiles, latest);
+  assert.deepEqual((await cache.get("directory")).profiles, latest);
+});

@@ -9,6 +9,8 @@ function compile(path) {
   }).outputText;
 }
 const source = compile("../src/workspace-screen.tsx");
+const selectionExports = {};
+new Function("exports", compile("../src/profiles/selection.ts"))(selectionExports);
 const textExports = {};
 new Function("exports", compile("../src/ui/text.ts"))(textExports);
 const flush = () => new Promise(setImmediate);
@@ -42,7 +44,6 @@ function mountWorkspace({ update, message, downloaded = false, reloadError, para
         },
       };
       case "react-native": return {
-        Alert: { alert: (title, message, buttons, options) => alerts.push({ title, message, buttons, options }) },
         Keyboard: { dismiss() {} },
         Platform: { OS: "ios", select: (options) => options.ios }, StyleSheet: { create: (styles) => styles, hairlineWidth: 1 },
         Pressable: "Pressable", Text: "Text", View: "View", ScrollView: "ScrollView", RefreshControl: "RefreshControl",
@@ -53,11 +54,15 @@ function mountWorkspace({ update, message, downloaded = false, reloadError, para
       };
       case "react-native-reanimated": return { default: { View: "Animated.View" } };
       case "react-native-safe-area-context": return { SafeAreaView: "SafeAreaView" };
+      case "./ui/alerts": return { useAlert: () => ({ alert: (title, message, buttons, options) => alerts.push({ title, message, buttons, options }) }) };
       case "./ui/theme": return { useTheme: () => ({ colors: {}, styles: {} }), Icon: "Icon" };
       case "./ui/page-header": return { PageHeader: "PageHeader" };
       case "./ui/motion": return { useReduceMotion: () => true, motion: {} };
       case "./ui/haptics": return { haptic: (kind) => feedback.push(kind) };
       case "./ui/text": return textExports;
+      case "./profiles/selection": return selectionExports;
+      case "./profiles/avatar": return { ProfileAvatar: "ProfileAvatar" };
+      case "./profiles/settings": return { ProfileSettings: "ProfileSettings" };
       case "./workspace-context": return { useWorkspaceContext: () => state };
       case "./chat/composer-menu": return { ComposerSheet: "ComposerSheet", PickerRow: "PickerRow" };
       case "./chat/topic-list": return { TopicList: "TopicList" };
@@ -394,7 +399,7 @@ test("首页仅在网络和连接器均在线时显示绿点，连接入口保�
 test("普通标签与二级页面把标题交给统一顶栏，二级页面保留返回入口", () => {
   for (const [section, page, title] of [
     ["inbox", undefined, "收件箱"], ["settings", undefined, "设置"],
-    ["settings", "manage", "管理"], ["settings", "connection", "连接"], ["settings", "archive", "已归档会话"],
+    ["settings", "profiles", "配置档案"], ["settings", "manage", "管理"], ["settings", "connection", "连接"], ["settings", "archive", "已归档会话"],
   ]) {
     let backs = 0;
     const { screen } = mountWorkspace({
@@ -410,4 +415,30 @@ test("普通标签与二级页面把标题交给统一顶栏，二级页面保�
       assert.equal(backs, 1);
     }
   }
+});
+
+test("首页默认档案和选择弹窗使用配置好的头像与别名，手动选择不被默认项替换", () => {
+  const profiles = [{ profile_id: "first", label: "default" },
+    { profile_id: "work", label: "work", alias: "工作助手", avatar_url: "/mobile/v1/profiles/work/avatar?v=1", is_default: true }];
+  const screen = mountWorkspace({ context: { section: "topics", workspace: { profiles } } });
+  const find = (predicate) => findNode(screen.render(), predicate);
+  const avatar = () => find((node) => node.props.accessibilityLabel?.startsWith("选择配置档案"));
+  assert.equal(avatar().props.accessibilityLabel, "选择配置档案，工作助手");
+  assert.equal(findNode(avatar(), (node) => node.type === "ProfileAvatar").props.profile, profiles[1]);
+  avatar().props.onPress();
+  const workRow = find((node) => node.type === "PickerRow" && node.props.title === "工作助手");
+  assert.equal(workRow.props.leading.type, "ProfileAvatar");
+  assert.equal(workRow.props.leading.props.profile.avatar_url, profiles[1].avatar_url);
+  find((node) => node.type === "PickerRow" && node.props.title === "默认").props.onPress();
+  assert.equal(avatar().props.accessibilityLabel, "选择配置档案，默认");
+});
+
+test("配置档案设置页面将远端列表和保存操作接入同一个工作区", () => {
+  const saveProfilePreferences = () => {};
+  const profiles = [{ profile_id: "first", label: "default" }];
+  const { screen } = mountWorkspace({ params: { page: "profiles" }, context: { workspace: { profiles, saveProfilePreferences } } });
+  const settings = findNode(screen, (node) => node.type === "ProfileSettings");
+  assert.equal(settings.props.profiles, profiles);
+  assert.equal(settings.props.onSave, saveProfilePreferences);
+  assert.equal(findNode(screen, (node) => node.type === ManagementScreen), undefined);
 });

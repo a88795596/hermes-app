@@ -25,6 +25,7 @@ test("从模型目录选取后回填编辑表单，只有点击顶栏保存才�
       StyleSheet: { create: (styles) => styles },
     },
     "react-native-safe-area-context": { SafeAreaView: "SafeAreaView" },
+    "../ui/overlay": { OverlayModal: "Modal" },
     "../ui/haptics": { haptic() {} },
     "../ui/motion": { useReduceMotion: () => true },
     "../ui/page-header": { PageHeader: "PageHeader" },

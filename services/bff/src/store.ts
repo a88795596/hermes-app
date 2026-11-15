@@ -15,6 +15,16 @@ export function openStore(connectionString: string) {
           token_hash bytea NOT NULL UNIQUE,
           name text NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS profile_preferences (
+          profile_ref text PRIMARY KEY,
+          alias text,
+          avatar_mime text,
+          avatar_content bytea,
+          avatar_sha256 text,
+          is_default boolean NOT NULL DEFAULT false
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS profile_preferences_default_idx
+          ON profile_preferences (is_default) WHERE is_default;
         CREATE TABLE IF NOT EXISTS topics (
           id uuid PRIMARY KEY,
           profile_ref text NOT NULL,

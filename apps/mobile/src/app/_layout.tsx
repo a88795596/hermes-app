@@ -3,6 +3,8 @@ import { Stack as JSStack } from "expo-router/js-stack";
 import { useEffect } from "react";
 import { Platform } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { AlertProvider } from "../ui/alerts";
+import { OverlayRoot } from "../ui/overlay";
 import { MotionProvider } from "../ui/motion";
 import { useTheme } from "../ui/theme";
 import { prepareUpdate } from "../updates";
@@ -13,7 +15,7 @@ export const unstable_settings = { anchor: "index" };
 export default function RootLayout() {
   const { colors } = useTheme();
   useEffect(() => { void prepareUpdate(); }, []);
-  return <GestureHandlerRootView style={{ flex: 1 }}><MotionProvider>
+  return <GestureHandlerRootView style={{ flex: 1 }}><MotionProvider><OverlayRoot><AlertProvider>
     <WorkspaceProvider>
       {Platform.OS === "android" ? (
         <JSStack screenOptions={{ headerShown: false, gestureEnabled: true, gestureDirection: "horizontal",
@@ -23,5 +25,5 @@ export default function RootLayout() {
           contentStyle: { backgroundColor: colors.background } }} />
       )}
     </WorkspaceProvider>
-  </MotionProvider></GestureHandlerRootView>;
+  </AlertProvider></OverlayRoot></MotionProvider></GestureHandlerRootView>;
 }

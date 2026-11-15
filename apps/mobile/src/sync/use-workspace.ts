@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
-import type { AttachmentUpload, Control, InboxItem, Message, MobileNotice, ModelRequest, ModelSelectionRequest, Profile, ReasoningEffort, ReasoningRequest, SessionStatus, Topic, TopicDetail } from "@hermes-mobile/protocol";
+import type { AttachmentUpload, Control, InboxItem, Message, MobileNotice, ModelRequest, ModelSelectionRequest, Profile, ProfilePreferencesUpdate, ReasoningEffort, ReasoningRequest, SessionStatus, Topic, TopicDetail } from "@hermes-mobile/protocol";
 import type { Session } from "../auth/session";
 import { openCache, type Cache } from "../db/cache";
 import { ApiError, request } from "./api";
@@ -178,6 +178,28 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
     directoryLoad.current = task;
     return task;
   }, [cache, call]);
+
+  async function saveProfilePreferences(id: string, update: ProfilePreferencesUpdate) {
+    if (!cache || revoked.current || signingOut.current) throw new Error("无法访问本地历史记录。");
+    const profiles = await call<Profile[]>(`/profiles/${id}/preferences`, { method: "PUT", body: update });
+    await directoryLoad.current;
+    if (!active.current || revoked.current) return;
+    setDirectory((current) => ({ ...current, profiles }));
+    const save = (async () => {
+      try {
+        const saved = await cache.get<Directory>("directory") ?? directory;
+        if (active.current && !revoked.current) await cache.set("directory", { ...saved, profiles });
+      } catch (failure) {
+        if (active.current) setStorageError(failure instanceof Error ? failure.message : "无法保存本地配置档案。");
+      } finally {
+        directoryLoad.current = undefined;
+      }
+    })();
+    directoryLoad.current = save;
+    await save;
+    // 保存期间其他设备或插件可能已更新资料，再读取一次服务端的最新目录。
+    await loadDirectory();
+  }
 
   async function setTopicArchived(id: string, archived: boolean, newProfileId?: string) {
     if (!cache || revoked.current || signingOut.current) throw new Error("无法访问本地历史记录。");
@@ -546,6 +568,7 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
     syncWorkspace,
     call,
     setTopicArchived,
+    saveProfilePreferences,
     prepareTopic,
     enqueue,
     discard,

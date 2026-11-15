@@ -486,7 +486,7 @@ export function Conversation({
 
   const modelSelection = modelPicker && <ModelPicker
     embedded={settingsOpen}
-    profileLabel={currentProfile ? profileLabel(currentProfile.label) : undefined}
+    profileLabel={currentProfile ? profileLabel(currentProfile) : undefined}
     enabled={canControl && !topicBusy}
     unavailable={topicBusy ? "请等待当前回复结束，再切换模型。"
       : !canControl ? "重新连接 Hermes 后即可选择模型。" : undefined}
