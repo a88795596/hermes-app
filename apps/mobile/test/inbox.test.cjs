@@ -11,7 +11,7 @@ const sourceRoot = pathToFileURL(require.resolve("../src/inbox/inbox.tsx")).href
 // Render the actual inbox, shared controls, and Markdown through React Native Web.
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {
-    if (["expo-symbols", "expo-web-browser", "expo-haptics", "expo-screen-orientation", "react-native-safe-area-context", "react-native-reanimated"].includes(specifier)) {
+    if (["expo-symbols", "expo-web-browser", "expo-haptics", "expo-screen-orientation", "expo-glass-effect", "react-native-safe-area-context", "react-native-reanimated"].includes(specifier)) {
       return { url: `inbox-test:${specifier}`, shortCircuit: true };
     }
     if (context.parentURL?.startsWith(sourceRoot) && specifier.startsWith(".")) {
@@ -23,6 +23,9 @@ const hooks = registerHooks({
     return nextResolve(specifier === "react-native" ? "react-native-web" : specifier, context);
   },
   load(url, context, nextLoad) {
+    if (url === "inbox-test:expo-glass-effect") {
+      return { format: "commonjs", shortCircuit: true, source: "exports.GlassView = require('react-native-web').View; exports.isGlassEffectAPIAvailable = () => false;" };
+    }
     if (url === "inbox-test:expo-screen-orientation") {
       return { format: "commonjs", shortCircuit: true, source: "exports.OrientationLock = {}; exports.lockAsync = async () => {};" };
     }
