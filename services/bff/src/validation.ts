@@ -37,3 +37,9 @@ export function string(value: unknown, field: string, maxBytes: number, allowEmp
   }
   return value;
 }
+
+export function deliverySessionId(value: unknown): string {
+  const id = string(value, "会话 ID", 512);
+  if (!/^[A-Za-z0-9]/u.test(id) || /[^A-Za-z0-9_.-]/u.test(id)) invalid("会话 ID 无效。");
+  return id;
+}

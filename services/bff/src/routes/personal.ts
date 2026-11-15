@@ -12,7 +12,7 @@ import { detail, modelRequest, profileId, profiles, reasoningRequest, topicRow, 
 import { registerPushRoutes } from "../push.js";
 import { receivedAttachmentReferences, registerReceivedAttachments } from "../received-attachments.js";
 import type { Store } from "../store.js";
-import { ApiError, invalid, record, string, uuid } from "../validation.js";
+import { ApiError, deliverySessionId, invalid, record, string, uuid } from "../validation.js";
 
 interface Config {
   pairingToken: string;
@@ -157,11 +157,12 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
         if (!matchesToken(readBearer(request), deliveryToken)) throw new ApiError(401, "UNAUTHORIZED", "收件箱投递凭证无效。");
       },
     }, async (request, reply) => {
-      const body = record(request.body, ["delivery_id", "profile_ref", "title", "text", "attachments"]);
+      const body = record(request.body, ["delivery_id", "profile_ref", "session_id", "title", "text", "attachments"]);
       const attachments = body.attachments === undefined ? undefined : receivedAttachmentReferences(body.attachments);
       const delivery: InboxDelivery = {
         delivery_id: uuid(body.delivery_id, "投递 ID"),
         profile_ref: string(body.profile_ref, "配置档案名称", 64),
+        ...(body.session_id === undefined ? {} : { session_id: deliverySessionId(body.session_id) }),
         ...(body.title === undefined ? {} : { title: string(body.title, "消息标题", MAX_INBOX_TITLE_BYTES) }),
         text: string(body.text, "消息正文", MAX_INBOX_TEXT_BYTES, !!attachments?.length),
         ...(attachments?.length ? { attachments } : {}),

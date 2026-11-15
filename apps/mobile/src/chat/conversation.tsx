@@ -505,7 +505,7 @@ export function Conversation({
         {messages.map((message, index) => {
           const outgoing = message.role === "user";
           const process = !outgoing && showProcess ? message.process : undefined;
-          if (!outgoing && !message.text && !process?.length && message.status === "final") return null;
+          if (!outgoing && !message.text && !message.attachments?.length && !process?.length && message.status === "final") return null;
           const startGroup = messages[index - 1]?.role !== message.role;
           const attachedControls = outgoing && message.submission_id ? historyControls.get(message.submission_id) : undefined;
           return (

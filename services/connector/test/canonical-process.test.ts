@@ -104,6 +104,12 @@ test('Canonical Gateway 在提交返回终态回执时仍保存已缓冲的过�
   ]);
   assert.match(String(submitted?.text), /检查/);
   assert.match(String(submitted?.text), /@file:\/hermes\/attachments\/report.txt/);
+  assert.doesNotMatch(String(submitted?.text), /hermes_mobile:/);
+  assert.match(String(submitted?.api_text), /检查/);
+  assert.match(String(submitted?.api_text), /@file:\/hermes\/attachments\/report.txt/);
+  assert.match(String(submitted?.api_text), /hermes_mobile:session-test/);
+  assert.match(String(submitted?.api_text), /mobile-send --to/);
+  assert.match(String(submitted?.api_text), /--profile "default"/);
   assert.deepEqual(submitted?.attachments, [{ path: '/hermes/cache/images/upload.png', mime: 'image/png' }]);
   const frames = spool.events(new Set([topicId]), new Set(), 50).map(({ body }) => body);
   assert(!JSON.stringify(frames).includes('abc123'));

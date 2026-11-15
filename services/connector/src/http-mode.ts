@@ -2,6 +2,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import type { Command, ConnectorEvent, Control, ModelSelection, ReasoningEffort, TopicQuery, TopicQueryData } from '@hermes-mobile/protocol';
 import { MAX_CLARIFY_CHOICE_BYTES } from '@hermes-mobile/protocol';
 import { attachmentBytes, attachmentFilename, type DownloadAttachment, type ReceiveAttachments } from './attachments.js';
+import { deliveryInstructions } from './delivery-context.js';
 import { integer, object, string } from './gateway.js';
 import type { JsonObject, WebappAccess } from './gateway.js';
 import { addProcessText, removeStreamedCommentary, updateProcessTool } from './message-process.js';
@@ -431,6 +432,7 @@ export function createHttpConnector({ url, token, send, spool, downloadAttachmen
         const effort = spool.reasoningEffort(topic_id);
         const { response, data } = await json(profile_ref, '/v1/runs', {
           session_id: bound.sessionId, input: input ?? command.body.text, ...spool.modelSelection(topic_id),
+          instructions: deliveryInstructions(bound.profileRef, bound.sessionId),
           ...(effort && { model_options: { reasoning_effort: effort } }),
         }, command_id);
         const id = string(data?.run_id);

@@ -43,6 +43,8 @@
 
 上传成功后把返回的元数据加入 assistant message 或 `POST /internal/inbox/v1/deliveries` 的可选 `attachments`，每条最多 10 个。消息入库时验证引用确实存在且属于同一配置档案。上传字节存入独立持久表，WebSocket 仅发送引用。未被消息引用的文件不能由手机下载；当前不自动清理文件。反向代理须转发上传路径并允许约 67 MiB 的 JSON 请求。
 
+`POST /internal/inbox/v1/deliveries` 的可选 `session_id` 指定同一 `profile_ref` 下已绑定的 Hermes 会话，按 `^[A-Za-z0-9][A-Za-z0-9_.-]{0,511}$` 校验。有 ID 时保存 `assistant/final` 消息并更新话题，无 ID 时保留收件箱及推送行为。不存在、未就绪或跨档案的目标返回 404，不回退收件箱。去重记录包含目标会话，相同 `delivery_id` 改投其他目标返回 409。会话投递不关联用户 submission，也不改动正在执行的回复。
+
 ## BFF 与连接器
 
 连接器发起 WebSocket `/internal/connector/v1/events`，握手使用 `Authorization: Bearer <CONNECTOR_TOKEN>`。云端发送的命令结构为 `{type:"command",command_id,topic_id,profile_ref,session_id?,kind,body}`，其中 `session_id` 是绑定的 Hermes 会话 ID。所有使用已绑定会话的命令均须传入该字段。
@@ -63,6 +65,6 @@
 - `{type:"message",event_id,topic_id,message_id,submission_id?,text,attachments?,status:"streaming"|"final"}`，同一响应使用稳定的 `message_id`，`text` 为当前完整的累计文本。`final` 优先于迟到的 `streaming` 更新。省略 `attachments` 时保留该回复已保存的文件；显式空数组清空引用。
 - `{type:"submission",event_id,topic_id,submission_id,status:"queued"|"streaming"|"final"|"failed"|"cancelled"|"unknown",error?}`，更新原用户气泡执行状态，禁止复活已知终态。
 - `{type:"control",event_id,topic_id,control_id,kind,prompt,choices,status,submission_id?,multi_select?}`。连接器按话题映射上游请求 ID。BFF 收到明确的成功回执后才投影已提交的答案。
-- `{type:"delivery",event_id,delivery_id,profile_ref,title?,text}` 供旧版连接器清空升级前的队列，可选标题最多 256 个 UTF-8 字节。新版插件使用 `POST /internal/inbox/v1/deliveries`，HTTP 和旧连接器共用投递 ID 去重。 [收件箱投递 API](../../../plugins/hermes-mobile-delivery/README.md#投递-api)
+- `{type:"delivery",event_id,delivery_id,profile_ref,session_id?,title?,text,attachments?}` 供旧版连接器清空升级前的队列，可选标题最多 256 个 UTF-8 字节。可选会话 ID 与 HTTP 投递使用相同校验和路由。新版插件使用 `POST /internal/inbox/v1/deliveries`，HTTP 和旧连接器共用投递 ID 去重。 [投递 API](../../../plugins/hermes-mobile-delivery/README.md#投递-api)
 
 连接器使用环境变量 `BFF_URL` 和 `CONNECTOR_TOKEN`，可选 `HERMES_BIN` 和 `CONNECTOR_DB_PATH`。容器部署使用 `HERMES_WEBAPP_URL` 和 `HERMES_DASHBOARD_SESSION_TOKEN` 换取原版 WebSocket 票据。已有 HTTP Runs 会话通过 `HERMES_API_URL` 和 `HERMES_API_KEY` 继续使用。BFF 使用环境变量 `DATABASE_URL`、`APP_PAIRING_TOKEN` 和 `CONNECTOR_TOKEN`，可选 `PORT`（3000）、`HOST`（127.0.0.1）、`HERMES_PROFILES`（`default`）和 `EXPO_ACCESS_TOKEN`。隔离开发可用本地 HTTP，远程连接使用 HTTPS／WSS。

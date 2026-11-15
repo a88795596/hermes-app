@@ -127,6 +127,32 @@ class InboxDeliveryTest(unittest.TestCase):
             with sqlite3.connect(path) as db:
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM attachments").fetchone()[0], 0)
 
+    def test_session_target_survives_file_retry_and_legacy_queue_stays_inbox(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "queue.sqlite3"
+            with sqlite3.connect(path) as db:
+                db.execute("CREATE TABLE deliveries (delivery_id TEXT PRIMARY KEY, profile_ref TEXT NOT NULL, text TEXT NOT NULL)")
+                db.execute("INSERT INTO deliveries VALUES (?, ?, ?)", (self.delivery_id, "work", "旧消息"))
+            path.chmod(0o600)
+            source = Path(directory) / "report.md"
+            source.write_bytes(b"# Report")
+            targeted_id = enqueue(path, "work", "", [(source, None)], session_id="mobile_session-1")
+            source.unlink()
+            self.responses = iter([204, 503, 503, 503])
+            with self.assertLogs("hermes_mobile_delivery.inbox", level="WARNING"):
+                self.assertFalse(deliver_pending(path, self.endpoint, "inbox-token", "work"))
+            self.assertNotIn("session_id", self.requests[0][2])
+            self.assertEqual(pull(path, "work"), [(targeted_id, "")])
+            self.responses = iter([204])
+            self.assertTrue(deliver_pending(path, self.endpoint, "inbox-token", "work"))
+            self.assertEqual(pull(path, "work"), [])
+            for request in self.requests[1:]:
+                self.assertEqual(request[2]["delivery_id"], targeted_id)
+                self.assertEqual(request[2]["session_id"], "mobile_session-1")
+                self.assertEqual(request[2], self.requests[1][2])
+            with sqlite3.connect(path) as db:
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM delivery_sessions").fetchone()[0], 0)
+
     def test_upload_failure_or_invalid_receipt_never_posts_or_acknowledges_delivery(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "queue.sqlite3"

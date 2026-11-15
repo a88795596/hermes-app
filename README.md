@@ -155,6 +155,8 @@ pnpm typecheck
 
 图片和普通文件分别通过原版 Hermes 的 `image.attach_bytes` 和 `file.attach` 发送。使用反向代理时，请为消息提交请求允许至少 9 MiB 请求体，并将 `/internal/connector/v1/submissions/` 的 HTTPS 请求转发给 BFF。图片读取由 Hermes 和当前模型的视觉能力决定。
 
+Hermes 投递文件和消息时，`hermes_mobile:<session-id>` 会发送到指定 App 会话的消息列表，`hermes_mobile` 发送到收件箱。聊天时连接器会提供当前会话目标，让 Agent 优先在当前会话交付。纯文件可用 `hermes mobile-send --to hermes_mobile:<session-id> --file /tmp/report.md`；这里的 ID 为已绑定的 Hermes 会话 ID。升级 BFF、投递插件、连接器与 App 后生效。 [投递与文件命令](plugins/hermes-mobile-delivery/README.md#移动端收件箱)
+
 点击会话标题右侧的「过程」开关，可以查看每条回复的思考、阶段说明和工具执行状态。开关在本次使用期间按话题记忆，默认关闭。能查看哪些过程取决于 Hermes 和模型实际提供的数据。
 
 聊天中的「浏览技能」从当前配置档案的原版技能目录读取。Webapp 接入使用 `/api/skills`，本机 CLI 接入使用会话的 `session.info.skills`。

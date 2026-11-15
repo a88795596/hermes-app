@@ -115,6 +115,15 @@ test("过程开关只控制时间线，已结束回复保留未确认的工具�
   }
 });
 
+test("已结束的纯附件回复在隐藏过程时仍展示文件", () => {
+  const attachments = [{ attachment_id: "file", name: "报告.pdf", mime: "application/pdf", size: 10 }];
+  const messages = [{ message_id: "delivery", role: "assistant", text: "", status: "final", attachments }];
+  for (const showProcess of [true, false]) {
+    const screen = conversation(async () => {}, "", { showProcess, messages }).render();
+    assert.deepEqual(find(screen, (node) => node.type === "MessageAttachments")?.props.items, attachments);
+  }
+});
+
 async function selectModel(result, { aborted = false, currentModel = "old" } = {}) {
   const screen = mount("model-picker", "ModelPicker", {
     enabled: true, onClose() {}, onSelected() {},

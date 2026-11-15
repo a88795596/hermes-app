@@ -178,6 +178,7 @@ export function inboxTitle(text: string): string {
 export interface InboxDelivery {
   delivery_id: string;
   profile_ref: string;
+  session_id?: string;
   title?: string;
   text: string;
   attachments?: Attachment[];

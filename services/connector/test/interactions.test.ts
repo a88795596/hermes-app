@@ -14,7 +14,7 @@ import { Spool } from '../src/spool.js';
 import { bridgeFrame } from '../src/wire.js';
 import type { ReceiveAttachments } from '../src/attachments.js';
 
-async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: JsonObject[], received?: { output: string; receive: ReceiveAttachments }) {
+async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: JsonObject[], received?: { output: string; receive: ReceiveAttachments }, profileRef = 'default') {
   const calls: { path: string; body: JsonObject }[] = [];
   const frames: JsonObject[] = [];
   const topicId = randomUUID();
@@ -27,16 +27,16 @@ async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: Jso
     for await (const chunk of req) chunks.push(chunk);
     const raw = Buffer.concat(chunks).toString();
     const body = req.headers['content-type']?.startsWith('multipart/form-data') ? { raw } : raw ? JSON.parse(raw) : {};
-    const path = req.url!.replace('/p/default', '');
+    const path = req.url!.replace(`/p/${profileRef}`, '');
     calls.push({ path, body });
     res.setHeader('content-type', 'application/json');
-    if (path === '/api/chat/file-upload?profile=default') {
+    if (path === `/api/chat/file-upload?profile=${profileRef}`) {
       assert.equal(req.headers.authorization, 'Bearer dashboard-key');
       res.end(JSON.stringify({ ok: true, size: 3, path: '/opt/data/uploads/report.txt' }));
     } else if (path === '/v1/skills') {
       res.statusCode = 500;
       res.end('{}');
-    } else if (path === '/api/skills?profile=default') {
+    } else if (path === `/api/skills?profile=${profileRef}`) {
       assert.equal(req.headers.authorization, 'Bearer dashboard-key');
       res.end(JSON.stringify([{ name: 'example', category: 'dev', description: '示例技能', enabled: true }]));
     } else if (path === '/api/model/options?include_unconfigured=false') {
@@ -86,7 +86,7 @@ async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: Jso
   let spool = new Spool(filename);
   const createId = randomUUID();
   spool.begin(createId, 'create');
-  spool.finish(createId, {}, { topicId, sessionId, profileId: 'default', profileRef: 'default' });
+  spool.finish(createId, {}, { topicId, sessionId, profileId: profileRef, profileRef });
   let connector = createHttpConnector({ ...options, spool });
   t.after(() => {
     connector.close();
@@ -103,7 +103,7 @@ async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: Jso
   }
   async function command(payload: Pick<Command, 'kind' | 'body'>, id = randomUUID() as string) {
     const frame = bridgeFrame(JSON.stringify({
-      ...payload, type: 'command', command_id: id, topic_id: topicId, profile_ref: 'default', session_id: sessionId,
+      ...payload, type: 'command', command_id: id, topic_id: topicId, profile_ref: profileRef, session_id: sessionId,
     }));
     assert(frame.type === 'command');
     await connector.command(frame, () => true);
@@ -112,7 +112,7 @@ async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: Jso
   return { calls, frames, restart, command,
     turn: () => spool.turn(topicId, runId),
     skills: () => connector.query({ type: 'topic_query', kind: 'skills', request_id: randomUUID(),
-      topic_id: topicId, session_id: sessionId, profile_ref: 'default' }),
+      topic_id: topicId, session_id: sessionId, profile_ref: profileRef }),
     disconnectSession: () => { sessionAvailable = false; } };
 }
 
@@ -204,6 +204,23 @@ test('旧 HTTP 会话监听时同步 Hermes 已保存的标题', async (t) => {
   assert.equal(frame?.session_id, 'mobile_test');
 });
 
+test('HTTP 聊天每轮提供当前会话投递目标，保留用户原始输入', async (t) => {
+  for (const profile of ['default', 'work']) {
+    const { command, calls, restart } = await harness(t, 'resolved', undefined, undefined, profile);
+    for (const text of ['生成一份文件', '再生成一份']) {
+      const submission_id = randomUUID();
+      await command({ kind: 'submit', body: { submission_id, text } }, submission_id);
+      const body = calls.filter((call) => call.path === '/v1/runs').at(-1)?.body;
+      assert.equal(body?.input, text);
+      assert.match(String(body?.instructions), /hermes_mobile:mobile_test/);
+      assert.match(String(body?.instructions), /mobile-send --to/);
+      assert.ok(String(body?.instructions).includes(`--profile "${profile}"`));
+      assert.match(String(body?.instructions), /收件箱/);
+      restart();
+    }
+  }
+});
+
 test('原版 Runs 技能接口出错时查询原版控制台技能目录', async (t) => {
   const { calls, skills } = await harness(t);
   assert.deepEqual(await skills(), { kind: 'skills', skills: [{ name: 'example', category: 'dev', description: '示例技能' }] });
@@ -228,8 +245,10 @@ test('HTTP 模式的模型选择器返回已配置的服务商目录，并在重
   restart();
   const id = randomUUID();
   await command({ kind: 'submit', body: { submission_id: id, text: '你好' } }, id);
-  assert.deepEqual(calls.find((call) => call.path === '/v1/runs')?.body, {
+  const body = calls.find((call) => call.path === '/v1/runs')?.body;
+  assert.deepEqual(body && { ...body, instructions: undefined }, {
     session_id: 'mobile_test', input: '你好', ...selection,
+    instructions: undefined,
   });
 });
 

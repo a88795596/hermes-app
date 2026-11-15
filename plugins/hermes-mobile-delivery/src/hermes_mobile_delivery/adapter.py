@@ -4,6 +4,7 @@ import asyncio
 from contextlib import suppress
 import json
 import logging
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -23,6 +24,7 @@ from .spool import enqueue, MAX_ATTACHMENTS
 PLATFORM = "hermes_mobile"
 HOME_CHANNEL_ENV = "HERMES_MOBILE_HOME_CHANNEL"
 MAX_TEXT_BYTES = 128 * 1024
+SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,511}")
 logger = logging.getLogger(__name__)
 
 
@@ -48,7 +50,8 @@ def register_platform(ctx):
 
     async def submit(chat_id, message, *, thread_id=None, media_files=None, file_name=None, gateway=False):
         configured = route()
-        if not configured or chat_id != configured[1] or thread_id:
+        if (not configured or not isinstance(chat_id, str)
+                or not SESSION_ID.fullmatch(chat_id) or thread_id):
             return {"error": "请检查 Hermes 移动端的投递目标、配置档案和 API 凭证"}
         if not isinstance(message, str) or (not message.strip() and not media_files):
             return {"error": "投递到 Hermes 移动端的文本为空"}
@@ -81,7 +84,8 @@ def register_platform(ctx):
             return {"error": "附件不存在、不允许投递或超过每条 10 个的限制"}
         try:
             # shortcut: 每次调用生成 UUID，待 Hermes 提供稳定的分段 ID 后可跨调用去重。
-            delivery_id = await asyncio.to_thread(enqueue, path, profile, text, files)
+            delivery_id = await asyncio.to_thread(enqueue, path, profile, text, files,
+                                                 session_id=None if chat_id == configured[1] else chat_id)
         except (OSError, sqlite3.Error, ValueError):
             return {"error": "无法保存投递队列，请检查磁盘权限、附件名称和单个附件 50 MiB 的限制"}
 
@@ -132,7 +136,9 @@ def register_platform(ctx):
             self._mark_disconnected()
 
         async def get_chat_info(self, chat_id):
-            return {"name": "Hermes 移动端收件箱", "type": "channel", "chat_id": chat_id}
+            configured = route()
+            name = "Hermes 移动端收件箱" if configured and chat_id == configured[1] else "Hermes 移动端会话"
+            return {"name": name, "type": "channel", "chat_id": chat_id}
 
         async def send(self, chat_id, content, reply_to=None, metadata=None):
             media_files, content = self.extract_media(content) if isinstance(content, str) and "MEDIA:" in content else ([], content)
@@ -171,18 +177,34 @@ def register_platform(ctx):
     def setup_cli(parser):
         parser.add_argument("message", nargs="?", default="", help="可选的消息正文")
         parser.add_argument("--file", action="append", default=[], help="附件路径，可重复指定，最多 10 个")
+        parser.add_argument("--to", help="hermes_mobile 或 hermes_mobile:<会话 ID>，省略时优先当前移动端会话")
 
     def send_cli(args):
         configured = route()
-        result = asyncio.run(submit(configured[1] if configured else "", args.message,
+        chat_id = configured[1] if configured else ""
+        if args.to is not None:
+            if args.to.startswith(PLATFORM + ":"):
+                chat_id = args.to.removeprefix(PLATFORM + ":")
+            elif args.to != PLATFORM:
+                chat_id = ""
+        else:
+            session = os.environ.get("HERMES_SESSION_CHAT_ID", "")
+            if (configured and os.environ.get("HERMES_SESSION_PLATFORM") == "api_server"
+                    and session.startswith("mobile_") and not os.environ.get("HERMES_CRON_SESSION")
+                    and (os.environ.get("HERMES_SESSION_PROFILE") or "default") == configured[0]):
+                chat_id = session
+        result = asyncio.run(submit(chat_id, args.message,
                                     media_files=[(file, False) for file in args.file]))
         print(json.dumps(result, ensure_ascii=False))
         raise SystemExit(0 if result.get("success") else 1)
 
-    ctx.register_cli_command(name="mobile-send", help="向 Hermes 移动端收件箱发送文本或文件",
+    ctx.register_cli_command(name="mobile-send", help="向 Hermes 移动端收件箱或会话发送文本和文件",
                              setup_fn=setup_cli, handler_fn=send_cli)
 
     options = {}
+    for name in ("parse_target_ref_fn", "target_ref_syntax_fn"):
+        if name in PlatformEntry.__dataclass_fields__:
+            options[name] = lambda target: (target, None) if SESSION_ID.fullmatch(target) else None
     if "standalone_send" in PlatformEntry.__dataclass_fields__:
         from gateway.platforms.send_targets import StandaloneSendPolicy
 

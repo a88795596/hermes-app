@@ -160,11 +160,24 @@ export async function applyDelivery(db: PoolClient, frame: DeliveryFrame, refs: 
   return applied;
 }
 
-export async function applyInboxDelivery(db: PoolClient, { delivery_id, profile_ref, title, text, attachments }: InboxDelivery, refs: Set<string>) {
+export async function applyInboxDelivery(db: PoolClient, { delivery_id, profile_ref, session_id, title, text, attachments }: InboxDelivery, refs: Set<string>) {
   if (!refs.has(profile_ref)) missing("配置档案");
   await validateReceivedAttachments(db, attachments, profile_ref);
   if (!await recordEvent(db, "delivery", delivery_id, { profile_ref, text, ...(title === undefined ? {} : { title }),
+    ...(session_id === undefined ? {} : { session_id }),
     ...(attachments?.length ? { attachments } : {}) })) return false;
+  if (session_id !== undefined) {
+    const { rows: [topic] } = await db.query<{ id: string }>(
+      "SELECT id FROM topics WHERE profile_ref = $1 AND session_id = $2 AND status = 'ready'", [profile_ref, session_id]);
+    if (!topic) missing("会话");
+    const message: Message = { message_id: delivery_id, role: "assistant", text, status: "final",
+      ...(attachments?.length ? { attachments } : {}) };
+    const inserted = await db.query("INSERT INTO messages (id, topic_id, data) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING",
+      [delivery_id, topic.id, message]);
+    if (!inserted.rowCount) conflict("该消息 ID 已用于其他记录。");
+    await touchTopic(db, topic.id);
+    return true;
+  }
   const item: InboxItem = { inbox_id: delivery_id, profile_id: profileId(profile_ref), title: title ?? inboxTitle(text.trim() || attachments?.[0]?.name || ""),
     text, ...(attachments?.length ? { attachments } : {}), created_at: new Date().toISOString() };
   await db.query("INSERT INTO inbox (id, profile_ref, data) VALUES ($1, $2, $3)", [item.inbox_id, profile_ref, item]);

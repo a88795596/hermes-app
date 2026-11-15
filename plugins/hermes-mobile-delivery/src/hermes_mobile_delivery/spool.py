@@ -39,6 +39,10 @@ def _connect(path: Path):
             profile_ref TEXT NOT NULL,
             text TEXT NOT NULL
         )""")
+        db.execute("""CREATE TABLE IF NOT EXISTS delivery_sessions (
+            delivery_id TEXT PRIMARY KEY REFERENCES deliveries(delivery_id) ON DELETE CASCADE,
+            session_id TEXT NOT NULL
+        )""")
         db.execute("""CREATE TABLE IF NOT EXISTS attachments (
             attachment_id TEXT PRIMARY KEY,
             delivery_id TEXT NOT NULL REFERENCES deliveries(delivery_id) ON DELETE CASCADE,
@@ -50,12 +54,14 @@ def _connect(path: Path):
         yield db
 
 
-def enqueue(path: Path, profile_ref: str, text: str, files=()) -> str:
+def enqueue(path: Path, profile_ref: str, text: str, files=(), *, session_id: str | None = None) -> str:
     if len(files) > MAX_ATTACHMENTS:
         raise ValueError("每条消息最多包含 10 个附件")
     delivery_id = str(uuid4())
     with _connect(path) as db:
         db.execute("INSERT INTO deliveries VALUES (?, ?, ?)", (delivery_id, profile_ref, text))
+        if session_id is not None:
+            db.execute("INSERT INTO delivery_sessions VALUES (?, ?)", (delivery_id, session_id))
         for position, (source, display_name) in enumerate(files):
             source = Path(source)
             name = source.name if display_name is None else display_name
@@ -101,6 +107,12 @@ def attachments(path: Path, delivery_id: str):
             raise ValueError("附件队列记录不存在")
         name, mime, content = row
         yield {"attachment_id": attachment_id, "name": name, "mime": mime, "size": len(content)}, content
+
+
+def delivery_session(path: Path, delivery_id: str) -> str | None:
+    with _connect(path) as db:
+        row = db.execute("SELECT session_id FROM delivery_sessions WHERE delivery_id = ?", (delivery_id,)).fetchone()
+        return row[0] if row else None
 
 
 def ack(path: Path, delivery_id: str) -> None:

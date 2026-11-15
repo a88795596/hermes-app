@@ -1,4 +1,4 @@
-"""Hermes 移动端收件箱投递 API 客户端。"""
+"""Hermes 移动端收件箱和会话投递 API 客户端。"""
 
 from contextlib import closing
 import base64
@@ -10,7 +10,7 @@ import re
 from time import sleep
 from urllib.parse import SplitResult, urlsplit
 
-from .spool import ack, attachments, pull
+from .spool import ack, attachments, delivery_session, pull
 
 
 logger = logging.getLogger(__name__)
@@ -50,14 +50,17 @@ def _request(endpoint: SplitResult, token: str, method: str, path: str, payload:
 
 
 def post_delivery(endpoint: SplitResult, token: str, delivery_id: str, profile: str, text: str,
-                  files=()) -> int | None:
+                  files=(), *, session_id: str | None = None) -> int | None:
     payload = {"delivery_id": delivery_id, "profile_ref": profile, "text": text}
     if files:
         payload["attachments"] = files
+    if session_id is not None:
+        payload["session_id"] = session_id
     return _request(endpoint, token, "POST", endpoint.path or "/", payload)[0]
 
 
 def deliver_one(path: Path, endpoint: SplitResult, token: str, profile: str, delivery_id: str, text: str) -> bool:
+    session_id = delivery_session(path, delivery_id)
     references = []
     for reference, content in attachments(path, delivery_id):
         payload = {"profile_ref": profile, **{key: reference[key] for key in ("name", "mime", "size")},
@@ -76,7 +79,7 @@ def deliver_one(path: Path, endpoint: SplitResult, token: str, profile: str, del
             logger.warning("Hermes 移动端附件等待重试（投递 ID %s，HTTP 状态 %s）", delivery_id, status)
             return False
         references.append(canonical)
-    status = post_delivery(endpoint, token, delivery_id, profile, text, references)
+    status = post_delivery(endpoint, token, delivery_id, profile, text, references, session_id=session_id)
     if status != 204:
         logger.warning("Hermes 移动端投递等待重试（投递 ID %s，HTTP 状态 %s）", delivery_id, status)
         return False

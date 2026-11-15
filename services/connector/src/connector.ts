@@ -1,3 +1,4 @@
+import { deliveryInstructions } from './delivery-context.js';
 import {
   canonicalInteger, encodeControlResponse, normalizeCanonicalEvent, normalizeTurnOutcome,
   parseAdmissionReceipt, parseCanonicalEvent, parseControlReceipt, parseServerRequest, parseSessionSnapshot,
@@ -399,9 +400,10 @@ export class CanonicalConnector {
     if (!current() || !session.gateway.connected || !this.spool.begin(id, digest, { topicId, submissionId: command.body.submission_id })) return;
     session.buffer = { frames: [], bytes: 0 };
     try {
+      const text = [command.body.text, files.join('\n')].filter((part) => part.trim()).join('\n\n') || '请查看上传的图片。';
       const receipt = parseAdmissionReceipt(await session.gateway.rpc('prompt.submit', {
         session_id: binding.sessionId, submission_id: command.body.submission_id,
-        text: [command.body.text, files.join('\n')].filter((part) => part.trim()).join('\n\n') || '请查看上传的图片。',
+        text, api_text: `${text}\n\n${deliveryInstructions(binding.profileRef, binding.sessionId)}`,
         ...(images.length && { attachments: images }),
         ...(session.gateway.clarifyBatch ? { clarify_batch: true } : {}),
       }, id));

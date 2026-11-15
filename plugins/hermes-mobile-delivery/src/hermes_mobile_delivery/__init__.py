@@ -1,4 +1,4 @@
-"""向 Hermes 移动端收件箱和 Bark 主动投递。"""
+"""向 Hermes 移动端会话、收件箱和 Bark 主动投递。"""
 
 
 def register(ctx):

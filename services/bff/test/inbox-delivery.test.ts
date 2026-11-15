@@ -34,6 +34,15 @@ test("连接器投递兼容无标题帧并校验独立标题", () => {
   }
 });
 
+test("投递帧保留可选 Hermes 会话 ID 并拒绝无效值", () => {
+  const frame = { type: "delivery", event_id: randomUUID(), delivery_id: randomUUID(), profile_ref: "work", text: "文件已生成",
+    session_id: "session-report_2026.11-15" };
+  assert.deepEqual(connectorFrame(frame), frame);
+  for (const session_id of [null, "", " ", "bad\u0000id", "bad\nid", "id:thread", "id/path", "会话", "\ud800", "a".repeat(513)]) {
+    assert.throws(() => connectorFrame({ ...frame, session_id }), { statusCode: 422 });
+  }
+});
+
 test("HTTP 投递不需要连接器，重复请求只写入一条收件箱消息和一条通知任务", { skip: !databaseUrl, timeout: 15_000 }, async (t) => {
   const schema = `inbox_delivery_${randomUUID().replaceAll("-", "")}`;
   const database = new pg.Pool({ connectionString: databaseUrl });
@@ -128,6 +137,90 @@ test("HTTP 投递不需要连接器，重复请求只写入一条收件箱消息
   } finally {
     mobile?.terminate();
     connector?.terminate();
+    await app.close();
+    await store.close();
+    await database.query(`DROP SCHEMA ${schema} CASCADE`);
+    await database.end();
+  }
+});
+
+test("指定会话的文件投递写入匹配档案的消息列表并保留幂等和附件权限", { skip: !databaseUrl, timeout: 15_000 }, async (t) => {
+  const schema = `session_delivery_${randomUUID().replaceAll("-", "")}`;
+  const database = new pg.Pool({ connectionString: databaseUrl });
+  await database.query(`CREATE SCHEMA ${schema}`);
+  const url = new URL(databaseUrl!);
+  url.searchParams.set("options", `-c search_path=${schema}`);
+  const store = openStore(url.href);
+  const app = Fastify();
+  let mobile: WebSocket | undefined;
+  try {
+    await store.migrate();
+    await migratePush(store);
+    const config = { pairingToken: "pairing-secret", connectorToken: "connector-secret", inboxDeliveryToken: "delivery-secret",
+      profileRefs: ["default", "work"] };
+    app.register(websocket);
+    app.register(async (api) => registerPersonalRoutes(api, store, config));
+    const origin = await app.listen({ host: "127.0.0.1", port: 0 });
+    const headers = { authorization: `Bearer ${config.inboxDeliveryToken}` };
+    const post = (payload: object) => app.inject({ method: "POST", url: "/internal/inbox/v1/deliveries", headers, payload });
+    const paired = await app.inject({ method: "POST", url: "/mobile/v1/pairings/redeem",
+      payload: { pairing_token: config.pairingToken, device_name: "会话投递测试" } });
+    const device = { authorization: `Bearer ${paired.json().data.token}` };
+    const ticket = await app.inject({ method: "POST", url: "/mobile/v1/ws-tickets", headers: device });
+    mobile = new WebSocket(`${origin.replace(/^http/u, "ws")}/mobile/v1/events?ticket=${ticket.json().data.ticket}`);
+    await once(mobile, "message", { signal: t.signal });
+
+    const topicId = randomUUID();
+    const otherTopicId = randomUUID();
+    for (const [id, profile, session, status] of [
+      [topicId, "work", "session-work", "ready"], [otherTopicId, "default", "session-work", "ready"],
+      [randomUUID(), "work", "session-next", "ready"], [randomUUID(), "work", "session-pending", "creating"],
+    ]) await store.query("INSERT INTO topics (id, profile_ref, title, status, session_id, updated_at) VALUES ($1, $2, '测试会话', $3, $4, '2020-01-01')",
+      [id, profile, status, session]);
+    const content = Buffer.from("会话文件内容");
+    const attachmentId = randomUUID();
+    const uploaded = await app.inject({ method: "PUT", url: `/internal/attachments/v1/${attachmentId}`, headers,
+      payload: { profile_ref: "work", name: "报告.txt", mime: "text/plain", size: content.length, content_base64: content.toString("base64") } });
+    assert.equal(uploaded.statusCode, 200);
+    const attachment = uploaded.json().data;
+    const delivery = { delivery_id: randomUUID(), profile_ref: "work", session_id: "session-work", text: "", attachments: [attachment] };
+    for (const session_id of [null, "", " ", "bad\u0000id", "bad\nid", "id:thread", "id/path", "会话", "\ud800", "a".repeat(513)]) {
+      assert.equal((await post({ ...delivery, session_id })).statusCode, 422);
+    }
+    for (const session_id of ["session-missing", "session-pending"]) {
+      assert.equal((await post({ ...delivery, session_id })).statusCode, 404);
+    }
+    assert.equal((await post({ ...delivery, profile_ref: "default" })).statusCode, 404, "附件不能跨档案引用");
+    assert.equal((await post({ ...delivery, profile_ref: "default", session_id: "session-next", attachments: undefined, text: "跨档案" })).statusCode, 404);
+    assert.equal((await post({ ...delivery, attachments: [{ ...attachment, size: content.length + 1 }] })).statusCode, 422);
+    const updated = once(mobile, "message", { signal: t.signal });
+    assert.deepEqual((await Promise.all([post(delivery), post(delivery)])).map((receipt) => receipt.statusCode), [204, 204]);
+    assert.deepEqual(JSON.parse((await updated)[0].toString()), { type: "changed" });
+    const detail = (await app.inject({ url: `/mobile/v1/topics/${topicId}`, headers: device })).json().data;
+    assert.deepEqual(detail.messages, [{ message_id: delivery.delivery_id, role: "assistant", text: "", status: "final", attachments: [attachment] }]);
+    assert.ok(detail.topic.updated_at > "2020-01-01T00:00:00.000Z");
+    assert.deepEqual((await app.inject({ url: `/mobile/v1/topics/${otherTopicId}`, headers: device })).json().data.messages, []);
+    const file = await app.inject({ url: `/mobile/v1/attachments/${attachmentId}`, headers: device });
+    assert.equal(file.statusCode, 200);
+    assert.deepEqual(file.rawPayload, content);
+    assert.equal((await post({ ...delivery, session_id: "session-next" })).statusCode, 409);
+    assert.equal((await post({ ...delivery, session_id: undefined })).statusCode, 409);
+    assert.equal((await post({ ...delivery, text: "修改正文" })).statusCode, 409);
+    assert.equal((await store.query("SELECT id FROM inbox")).rowCount, 0);
+    assert.equal((await store.query("SELECT inbox_id FROM push_outbox")).rowCount, 0);
+
+    const occupiedId = randomUUID();
+    const occupied = { message_id: occupiedId, role: "user", text: "保留原消息", status: "final" };
+    await store.query("INSERT INTO messages (id, topic_id, data) VALUES ($1, $2, $3)", [occupiedId, otherTopicId, occupied]);
+    assert.equal((await post({ ...delivery, delivery_id: occupiedId })).statusCode, 409);
+    assert.deepEqual((await store.query("SELECT data FROM messages WHERE id = $1", [occupiedId])).rows[0].data, occupied);
+    assert.equal((await store.query("SELECT id FROM connector_ingest WHERE kind = 'delivery' AND id = $1", [occupiedId])).rowCount, 0);
+
+    const inboxDelivery = { delivery_id: randomUUID(), profile_ref: "work", text: "仍投递收件箱" };
+    assert.equal((await post(inboxDelivery)).statusCode, 204);
+    assert.equal((await post({ ...inboxDelivery, session_id: "session-work" })).statusCode, 409);
+  } finally {
+    mobile?.terminate();
     await app.close();
     await store.close();
     await database.query(`DROP SCHEMA ${schema} CASCADE`);

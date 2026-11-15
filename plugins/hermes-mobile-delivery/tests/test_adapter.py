@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import sqlite3
 import sys
 from tempfile import TemporaryDirectory
 from types import ModuleType, SimpleNamespace
@@ -126,3 +127,78 @@ class AdapterTest(unittest.TestCase):
         result = json.loads(output.getvalue())
         self.assertTrue(result["success"])
         self.assertEqual(len(list(attachments(self.path, result["message_id"]))), 2)
+
+    def test_native_targeted_media_and_text_keep_session_target(self):
+        session = "mobile_session-1"
+        results = [asyncio.run(self.adapter.send(session, "会话消息")),
+                   asyncio.run(self.adapter.send_document(session, str(self.source)))]
+        with patch.object(self.module, "deliver_one", return_value=False):
+            results.append(SimpleNamespace(**asyncio.run(self.platform["standalone_sender_fn"](
+                None, session, "独立投递"))))
+        for result in results:
+            self.assertTrue(result.success)
+            with sqlite3.connect(self.path) as db:
+                target = db.execute("SELECT session_id FROM delivery_sessions WHERE delivery_id = ?",
+                                    (result.message_id,)).fetchone()
+            self.assertEqual(target, (session,))
+
+    def test_registers_native_session_target_parsers_when_supported_by_hermes(self):
+        fields = {"parse_target_ref_fn": None, "target_ref_syntax_fn": None}
+        with patch.object(self.module.PlatformEntry, "__dataclass_fields__", fields):
+            self.module.register_platform(SimpleNamespace(profile_name="default",
+                register_platform=lambda **kwargs: self.platform.update(kwargs),
+                register_cli_command=lambda **kwargs: self.cli.update(kwargs)))
+        for name in fields:
+            parser = self.platform.get(name)
+            self.assertIsNotNone(parser)
+            self.assertEqual(parser("mobile_session-1"), ("mobile_session-1", None))
+            self.assertEqual(parser("1"), ("1", None))
+            self.assertIsNone(parser("mobile_session:thread"))
+            self.assertIsNone(parser("../secret"))
+
+    def test_mobile_send_cli_defaults_to_current_mobile_session_and_honors_explicit_inbox(self):
+        parser = argparse.ArgumentParser()
+        self.cli["setup_fn"](parser)
+        cases = [
+            ({}, [], None),
+            ({"HERMES_SESSION_PLATFORM": "api_server", "HERMES_SESSION_CHAT_ID": "mobile_here"}, [], "mobile_here"),
+            ({"HERMES_SESSION_PLATFORM": "api_server", "HERMES_SESSION_CHAT_ID": "another_session"}, [], None),
+            ({"HERMES_SESSION_PLATFORM": "telegram", "HERMES_SESSION_CHAT_ID": "mobile_here"}, [], None),
+            ({"HERMES_SESSION_PLATFORM": "api_server", "HERMES_SESSION_CHAT_ID": "mobile_here", "HERMES_CRON_SESSION": "1"}, [], None),
+            ({"HERMES_SESSION_PLATFORM": "api_server", "HERMES_SESSION_CHAT_ID": "mobile_here", "HERMES_SESSION_PROFILE": "other"}, [], None),
+            ({"HERMES_SESSION_PLATFORM": "api_server", "HERMES_SESSION_CHAT_ID": "mobile_here"}, ["--to", "hermes_mobile"], None),
+            ({}, ["--to", "hermes_mobile:mobile_elsewhere"], "mobile_elsewhere"),
+        ]
+        for environment, target, expected in cases:
+            with self.subTest(environment=environment, target=target):
+                context = {"HERMES_SESSION_PLATFORM": "", "HERMES_SESSION_CHAT_ID": "", "HERMES_SESSION_PROFILE": "",
+                           "HERMES_CRON_SESSION": "", **environment}
+                args = parser.parse_args(["--file", str(self.source), *target])
+                output = io.StringIO()
+                with patch.dict(os.environ, context), patch.object(self.module, "deliver_one", return_value=False), redirect_stdout(output):
+                    with self.assertRaises(SystemExit) as raised:
+                        self.cli["handler_fn"](args)
+                self.assertEqual(raised.exception.code, 0)
+                result = json.loads(output.getvalue())
+                with sqlite3.connect(self.path) as db:
+                    row = db.execute("SELECT session_id FROM delivery_sessions WHERE delivery_id = ?",
+                                     (result["message_id"],)).fetchone()
+                self.assertEqual(row[0] if row else None, expected)
+
+    def test_rejects_invalid_session_targets_without_queueing(self):
+        for target in ("", "has space", "has:thread", "../path", "line\nfeed", "x" * 513):
+            with self.subTest(target=target):
+                result = asyncio.run(self.adapter.send(target, "消息"))
+                self.assertFalse(result.success)
+        self.assertEqual(pull(self.path, "default"), [])
+
+    def test_cli_rejects_empty_foreign_and_thread_targets_without_queueing(self):
+        parser = argparse.ArgumentParser()
+        self.cli["setup_fn"](parser)
+        for target in ("hermes_mobile:", "telegram:mobile_session", "hermes_mobile:mobile_session:thread", "mobile_session"):
+            with self.subTest(target=target), redirect_stdout(io.StringIO()):
+                args = parser.parse_args(["--file", str(self.source), "--to", target])
+                with self.assertRaises(SystemExit) as raised:
+                    self.cli["handler_fn"](args)
+                self.assertEqual(raised.exception.code, 1)
+        self.assertEqual(pull(self.path, "default"), [])
