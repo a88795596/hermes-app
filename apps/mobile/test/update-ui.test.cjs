@@ -16,7 +16,7 @@ const ManagementScreen = Symbol("ManagementScreen");
 
 function mountWorkspace({ update, message, downloaded = false, reloadError, params = {}, router = {}, stack, context = {} } = {}) {
   const alerts = [], choices = [], reloadChoices = [], statuses = [], feedback = [];
-  const values = [];
+  const values = [], focusEffects = [];
   let checks = 0, cursor = 0;
   const state = {
     section: "settings", setSection: (value) => { state.section = value; },
@@ -49,7 +49,7 @@ function mountWorkspace({ update, message, downloaded = false, reloadError, para
       };
       case "expo-router": return {
         useRouter: () => ({ canDismiss: () => false, ...router }), useLocalSearchParams: () => params,
-        useNavigation: () => ({ getState: () => stack }), useFocusEffect() {},
+        useNavigation: () => ({ getState: () => stack }), useFocusEffect: (effect) => focusEffects.push(effect),
       };
       case "react-native-reanimated": return { default: { View: "Animated.View" } };
       case "react-native-safe-area-context": return { SafeAreaView: "SafeAreaView" };
@@ -87,8 +87,8 @@ function mountWorkspace({ update, message, downloaded = false, reloadError, para
     }
   });
   const workspace = exports.default().props.children;
-  const render = () => { cursor = 0; return workspace.type(); };
-  return { alerts, choices, reloadChoices, statuses, feedback, state, render, screen: render(), checks: () => checks };
+  const render = () => { cursor = 0; focusEffects.length = 0; return workspace.type(); };
+  return { alerts, choices, reloadChoices, statuses, feedback, state, render, focusEffects, screen: render(), checks: () => checks };
 }
 
 function findNode(node, matches) {
@@ -265,6 +265,19 @@ test("首页头像打开配置档案选择，取消保留原选择，切换后�
   sheet().props.onClose();
   find((node) => node.props.accessibilityLabel === "新建会话").props.onPress();
   assert.deepEqual(routes, [{ pathname: "/[page]", params: { page: "conversation", topicId: "new-topic", newProfileId: "work" } }]);
+});
+
+test("列表滚动和页面失焦收起当前左滑菜单", () => {
+  const { screen, focusEffects } = mountWorkspace({ context: { section: "topics", workspace: {
+    topics: [{ topic_id: "topic-1", profile_id: "default", title: "会话" }],
+  } } });
+  let closes = 0;
+  const list = findNode(screen, (node) => node.type === "TopicList");
+  list.props.ref.current = { close: () => closes++ };
+  findNode(screen, (node) => node.type === "ScrollView").props.onScrollBeginDrag();
+  assert.equal(closes, 1);
+  for (const effect of focusEffects) effect()?.();
+  assert.equal(closes, 2);
 });
 
 test("单个配置档案仍可打开选择，尚无档案时显示空态且不能新建会话", () => {

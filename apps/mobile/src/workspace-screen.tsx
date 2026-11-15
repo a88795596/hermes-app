@@ -7,7 +7,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { DEFAULT_TOPIC_TITLE, topicTitlePreview } from "@hermes-mobile/protocol";
 import { Conversation } from "./chat/conversation";
 import { ComposerSheet, PickerRow } from "./chat/composer-menu";
-import { TopicList, type TopicListRow } from "./chat/topic-list";
+import { TopicList, type TopicListHandle, type TopicListRow } from "./chat/topic-list";
 import { InboxDetail, InboxList } from "./inbox/inbox";
 import { ManagementMenu, ManagementScreen, type ManagementPage } from "./manage";
 import { Group, Row } from "./manage/shared";
@@ -59,6 +59,7 @@ function Workspace() {
   const router = useRouter();
   const navigation = useNavigation();
   const updateInFlight = useRef(false);
+  const topicListRef = useRef<TopicListHandle>(null);
   const [updateStatus, setUpdateStatus] = useState<string>();
   const [profilesExpanded, setProfilesExpanded] = useState(false);
   const [chatSettingsOpen, setChatSettingsOpen] = useState(false);
@@ -140,6 +141,10 @@ function Workspace() {
     if (previous && "page" in previous && previous.page === "manage") router.back();
     else router.replace({ pathname: "/[page]", params: { page: "manage" } });
   }, [navigation, router]);
+
+  useFocusEffect(useCallback(() => {
+    return () => topicListRef.current?.close();
+  }, []));
 
   useFocusEffect(useCallback(() => {
     if (Platform.OS !== "android" || params.page) return;
@@ -328,6 +333,7 @@ function Workspace() {
         />
       ) : <PageHeader title={pageTitle} leading={settingsPage && <BackLink title={sections[rootSection].title} onPress={goBack} />} />}
       <ScrollView
+        onScrollBeginDrag={() => topicListRef.current?.close()}
         contentContainerStyle={[styles.content, layout.page]}
         keyboardShouldPersistTaps="handled"
         refreshControl={<RefreshControl refreshing={workspace.refreshing} onRefresh={() => { if (!workspace.refreshing) { haptic("light"); void workspace.refresh(); } }} tintColor={colors.accent} colors={[colors.accent]} />}
@@ -336,7 +342,7 @@ function Workspace() {
         {workspace.error && <Notice>{workspace.error}</Notice>}
         {workspace.storageError && <Notice>{workspace.storageError}</Notice>}
         {topicListPage && (rows.length > 0 ? (
-          <TopicList key={archived ? "archive" : profile?.profile_id} rows={rows} archived={archived} busy={archiving}
+          <TopicList ref={topicListRef} key={archived ? "archive" : profile?.profile_id} rows={rows} archived={archived} busy={archiving}
             onOpen={({ id, newProfileId }) => router.push({ pathname: "/[page]", params: {
               page: "conversation", topicId: id, newProfileId, archived: archived ? "1" : undefined,
             } })} onArchive={(row) => void changeArchive(row)} />
