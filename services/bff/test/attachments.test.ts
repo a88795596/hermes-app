@@ -53,7 +53,7 @@ test("说明和附件按同一次提交持久化，只有连接器可读取附�
     const { content_base64, ...metadata } = file;
     assert.deepEqual(result.json().data.attachments, [metadata]);
     const frame = await next();
-    assert.deepEqual(frame.body, { submission_id, text, attachments: [
+    assert.deepEqual(frame.body, { submission_id, text, steer_if_running: true, attachments: [
       { ...metadata, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" },
     ] });
     const download = `/internal/connector/v1/submissions/${submission_id}/attachments/1`;

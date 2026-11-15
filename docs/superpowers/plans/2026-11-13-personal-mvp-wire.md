@@ -37,6 +37,8 @@
 
 `GET /status` 同时返回当前连接器是否声明 `reasoning_supported` 和 `attachments_supported`。消息与收件箱的 `attachments` 仅含 `{name,mime,size,attachment_id?}` 元数据。Hermes 发送的文件必须包含 `attachment_id`，历史用户上传的附件可缺省该字段。有附件时正文可为空，收件箱的自动标题和推送预览回退到首个附件名。
 
+移动端只使用 `/submissions`，不发送模式、运行目标或代次。BFF 在内部 `submit` 命令中加入 `steer_if_running:true`；此策略标记不参与 HTTP 请求幂等比较或连接器命令摘要，旧请求重试不会因升级改变身份。前端保存正文和请求 ID，已有上传完成后立即发送新保存的消息。连接器通过原生快照判断如何提交，插话结果只结束该条补充消息，不改变原任务状态、不创建独立 AI 回复。
+
 ## Hermes 文件上传
 
 连接器或投递插件调用 `PUT /internal/attachments/v1/:id`，`id` 为稳定 UUID，使用连接器令牌或独立的收件箱投递令牌。JSON 请求体为 `{profile_ref,name,mime,size,content_base64}`，单个文件最多 50 MiB。服务端校验名称、MIME、内容长度与严格 base64 编码；图片支持 JPEG、PNG、GIF 和 WebP 签名。成功返回 `{data:{attachment_id,name,mime,size},request_id,server_time}`。相同 ID 的相同文件可安全重试，不同内容、元数据或配置档案返回 409。
@@ -52,6 +54,8 @@
 - `create` 的请求体为 `{request_id}`。
 - `submit` 的请求体为 `{submission_id,text,attachments?:{name,mime,size,sha256}[]}`。含附件的命令只发给声明 `X-Hermes-Mobile-Attachments: 1` 的连接器。连接器通过机器令牌调用 `GET /internal/connector/v1/submissions/:id/attachments/:position`（序号从 1 开始）获取原始字节并校验摘要。BFF 保存连接器命令结果后清理暂存字节。
 - `interrupt` 的请求体为 `{submission_id}`。连接器核对该提交仍在运行后，按当前已验证的活动代次调用。
+- `submit` 的内部可选 `steer_if_running:true` 开启自动判断。连接器对无附件输入读取 `session.resume`：运行中按返回的代次调用 `session.steer({session_id,text,execution_generation})`，否则使用 `prompt.submit`。含附件的输入、旧 HTTP Runs 和未携带标记的历史命令仍走普通提交。旧连接器忽略该内部标记，保持原提交行为。
+- 原生 `session.steer` 没有幂等键、受理 ID 或可查询回执。连接器先持久保存命令以去重；确认同一代次、epoch 和文本的 `queued` 回执后返回 `command_result` 的 `steering:true,status:"ok"`，不附带 `admission_id`，BFF 将补充消息设为 `final`。`stale_generation`、方法不支持、明确 `rejected,delivered:false` 才允许安全转普通提交；其余拒绝、超时、断线和矛盾响应保留 `unknown`，不重复投递。BFF 只接受开启该策略的普通提交返回 `steering:true`。
 - `respond` 的请求体为 `{control_id,response_id,answer}`。澄清支持文本、复选标签数组的 JSON 字符串和空字符串跳过。连接器按上游请求类型转换。
 - `model_options` 的请求体为 `{}`。`select_model` 的请求体为 `{provider,model,confirm?}`。两者的成功回执携带 `model_result`。
 - `select_reasoning` 的请求体为 `{effort}`，仅发给声明 `X-Hermes-Mobile-Reasoning: 1` 的连接器。

@@ -67,8 +67,10 @@ export function connectorFrame(value: unknown): ConnectorFrame {
       invalid("管理操作结果无效。");
     }
     case "command_result": {
-      const body = record(value, ["type", "command_id", "status", "session_id", "admission_id", "error", "control_status", "model_result", "title"]);
+      const body = record(value, ["type", "command_id", "status", "session_id", "admission_id", "error", "control_status", "model_result", "title", "steering"]);
+      if (body.steering !== undefined && body.steering !== true) invalid("连接器的插话结果标记无效。");
       return { type, command_id: uuid(body.command_id, "命令 ID"), status: option(body.status, ["ok", "error", "unknown"]),
+        ...(body.steering === true ? { steering: true } : {}),
         ...(body.session_id === undefined ? {} : { session_id: string(body.session_id, "会话 ID", 512) }),
         ...(body.admission_id === undefined ? {} : { admission_id: string(body.admission_id, "受理 ID", 512) }),
         ...(body.error === undefined ? {} : { error: string(body.error, "错误提示", 1024) }),

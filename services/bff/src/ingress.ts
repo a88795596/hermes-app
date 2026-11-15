@@ -50,6 +50,10 @@ export async function applyResult(db: PoolClient, frame: CommandResult, refs: Se
       (frame.model_result.type === "catalog") !== (payload.kind === "model_options"))) ||
       (isModel && frame.status === "ok" && !frame.model_result)) invalid("命令的模型结果无效。");
   if (frame.title !== undefined) invalid("命令的标题结果无效。");
+  if (frame.steering !== undefined && (frame.steering !== true || payload.kind !== "submit"
+    || payload.body.steer_if_running !== true || payload.body.attachments !== undefined
+    || frame.admission_id !== undefined || frame.session_id !== undefined
+    || frame.control_status !== undefined || frame.model_result !== undefined)) invalid("命令的插话结果无效。");
   if (payload.kind === "create") {
     if (frame.status === "ok" && !frame.session_id) invalid("创建结果缺少会话 ID。");
     const success = frame.status === "ok";
@@ -60,8 +64,8 @@ export async function applyResult(db: PoolClient, frame: CommandResult, refs: Se
     topic.session_id = success ? frame.session_id! : null;
     topic.status = success ? "ready" : "error";
   } else if (payload.kind === "submit") {
-    if (frame.status === "ok" && !frame.admission_id) invalid("提交结果缺少受理 ID。");
-    const status = frame.status === "ok" ? "queued" : frame.status === "error" ? "failed" : "unknown";
+    if (frame.status === "ok" && !frame.steering && !frame.admission_id) invalid("提交结果缺少受理 ID。");
+    const status = frame.status === "ok" ? (frame.steering ? "final" : "queued") : frame.status === "error" ? "failed" : "unknown";
     await applySubmission(db, topic.id, payload.body.submission_id, status, frame.error, frame.admission_id);
     if (payload.body.attachments) await db.query("DELETE FROM submission_attachments WHERE submission_id = $1", [frame.command_id]);
   } else if (payload.kind === "select_reasoning") {

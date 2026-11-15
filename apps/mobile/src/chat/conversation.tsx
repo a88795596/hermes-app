@@ -229,6 +229,7 @@ export function Conversation({
   const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
   const pinned = useRef(true);
   const [sending, setSending] = useState(false);
+  const enqueueing = useRef(false);
   const [stopping, setStopping] = useState(false);
   const [draftFocused, setDraftFocused] = useState(false);
   const [sendFocused, setSendFocused] = useState(false);
@@ -329,7 +330,7 @@ export function Conversation({
 
   async function send() {
     const text = draft.trim();
-    if (sendDisabled) return;
+    if (enqueueing.current || sendDisabled) return;
     haptic(isModelCommand ? "light" : "medium");
     if (isModelCommand) {
       Keyboard.dismiss();
@@ -339,6 +340,7 @@ export function Conversation({
       onDraftChange("");
       return;
     }
+    enqueueing.current = true;
     setSending(true);
     setError(undefined);
     try {
@@ -354,6 +356,7 @@ export function Conversation({
       haptic("error");
       setError(failure instanceof Error ? failure.message : "无法保存消息。");
     } finally {
+      enqueueing.current = false;
       setSending(false);
     }
   }

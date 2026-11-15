@@ -199,7 +199,7 @@ interface CommandEnvelope {
 
 export type Command = CommandEnvelope & (
   | { kind: "create"; body: { request_id: string } }
-  | { kind: "submit"; body: { submission_id: string; text: string; attachments?: AttachmentReference[] } }
+  | { kind: "submit"; body: { submission_id: string; text: string; attachments?: AttachmentReference[]; steer_if_running?: true } }
   | { kind: "interrupt"; body: { submission_id: string } }
   | { kind: "respond"; body: { control_id: string; response_id: string; answer: string } }
   | { kind: "model_options"; body: Record<string, never> }
@@ -214,6 +214,7 @@ export interface CommandResult {
   status: "ok" | "error" | "unknown";
   session_id?: string;
   admission_id?: string;
+  steering?: boolean;
   error?: string;
   control_status?: Control["status"];
   model_result?: ModelResult;

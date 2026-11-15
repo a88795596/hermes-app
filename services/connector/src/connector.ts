@@ -397,9 +397,43 @@ export class CanonicalConnector {
       if (current()) finish('error', { error: 'Hermes 无法读取附件，请重新发送。' });
       return;
     }
-    if (!current() || !session.gateway.connected || !this.spool.begin(id, digest, { topicId, submissionId: command.body.submission_id })) return;
+    let snapshot: SessionSnapshot | undefined;
+    if (command.body.steer_if_running === true && !command.body.attachments?.length) {
+      snapshot = parseSessionSnapshot(await session.gateway.rpc('session.resume', {
+        session_id: binding.sessionId, omit_messages: true,
+      }));
+      this.#checkSnapshot(session, snapshot);
+    }
+    if (!current() || !session.gateway.connected || !this.spool.begin(id, digest,
+      snapshot?.running ? undefined : { topicId, submissionId: command.body.submission_id })) return;
+    if (snapshot?.running) {
+      try {
+        const reply = await session.gateway.rpc('session.steer', {
+          session_id: binding.sessionId, text: command.body.text, execution_generation: canonicalInteger(snapshot.executionGeneration),
+        }, id);
+        const matches = reply.text === command.body.text && isRevision(reply.execution_generation)
+          && String(reply.execution_generation) === snapshot.executionGeneration && isRevision(reply.authority_epoch)
+          && String(reply.authority_epoch) === snapshot.authorityEpoch;
+        // 原生 rejected 也可能已送达，只有 delivered:false 能安全转为普通消息。
+        if (!(matches && reply.status === 'rejected' && reply.delivered === false)) {
+          const accepted = matches && reply.status === 'queued' && reply.delivered === undefined;
+          this.spool.finish(id, { ...result(id, accepted ? 'ok' : 'unknown', {
+            steering: true, ...(!accepted && { error: '无法确认消息是否送达，请先查看回复。' }),
+          }) });
+          return;
+        }
+      } catch (error) {
+        if (!(knownRefusal(error) && (error.code === -32601
+          || ['stale_generation', 'unsupported_control'].includes(error.reason ?? '')))) {
+          this.#failedWrite(id, error, true);
+          if (!knownRefusal(error)) session.gateway.close();
+          return;
+        }
+      }
+    }
     session.buffer = { frames: [], bytes: 0 };
     try {
+      if (snapshot?.running) this.spool.addIntent(topicId, command.body.submission_id);
       const text = [command.body.text, files.join('\n')].filter((part) => part.trim()).join('\n\n') || '请查看上传的图片。';
       const receipt = parseAdmissionReceipt(await session.gateway.rpc('prompt.submit', {
         session_id: binding.sessionId, submission_id: command.body.submission_id,
@@ -426,10 +460,11 @@ export class CanonicalConnector {
     }
   }
 
-  #failedWrite(id: string, error: unknown): void {
+  #failedWrite(id: string, error: unknown, steering = false): void {
     const refused = knownRefusal(error);
     const reason = refused && error.reason && /^[a-z0-9_]{1,64}$/u.test(error.reason) ? error.reason : undefined;
     this.spool.finish(id, { ...result(id, refused ? 'error' : 'unknown', {
+      ...(steering && { steering: true }),
       error: refused ? `Hermes 拒绝了请求${reason ? `（${reason}）` : ''}`
         : 'Hermes 无法确认执行结果',
     }) });

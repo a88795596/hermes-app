@@ -12,7 +12,8 @@ export function stableId(parts: string[]): string {
 export function commandDigest(command: Command): string {
   return createHash('sha256').update(JSON.stringify([
     command.topic_id, command.profile_ref, command.session_id, command.kind,
-    Object.entries(command.body).sort(([a], [b]) => a.localeCompare(b)),
+    Object.entries(command.body).filter(([key]) => command.kind !== 'submit' || key !== 'steer_if_running')
+      .sort(([a], [b]) => a.localeCompare(b)),
   ])).digest('hex');
 }
 
@@ -94,9 +95,11 @@ export function bridgeFrame(source: string): BridgeFrame {
       break;
     case 'submit': {
       const attachments = attachmentReferences(body.attachments);
-      if (body.submission_id === command_id && text(body.text, 256 * 1024, attachments.length > 0)) {
+      if (body.submission_id === command_id && text(body.text, 256 * 1024, attachments.length > 0)
+        && (body.steer_if_running === undefined || body.steer_if_running === true)) {
         return { ...base, session_id, kind: 'submit', body: {
           submission_id: command_id, text: body.text, ...(attachments.length && { attachments }),
+          ...(body.steer_if_running === true && { steer_if_running: true }),
         } };
       }
       break;

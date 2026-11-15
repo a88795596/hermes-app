@@ -427,7 +427,7 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
       await cache.set(pendingKey(item.submission_id), item);
       setPending((current) => [...current.filter((row) => row.submission_id !== item.submission_id), item]);
       if (outboxLoad.current) outboxNeedsRetry.current = true;
-      void flush();
+      void (outboxLoad.current ?? Promise.resolve()).then(flush);
     } finally {
       enqueueWrites.current -= 1;
     }

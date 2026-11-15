@@ -15,7 +15,8 @@ async function prior<T>(db: PoolClient, id: string, kind: Command["kind"], targe
   const payload = existing.payload;
   const { title, auto_title, control_id } = existing.receipt as { title?: string; auto_title?: boolean; control_id?: string };
   const existingBody = payload.kind === "create" ? { ...payload.body, title: auto_title ? undefined : title }
-    : payload.body;
+    : { ...payload.body };
+  if (payload.kind === "submit" && "steer_if_running" in existingBody) delete existingBody.steer_if_running;
   const existingTarget = payload.kind === "create" ? payload.profile_ref
     : payload.kind === "respond" ? control_id : payload.topic_id;
   if (payload.kind !== kind || existingTarget !== target || !isDeepStrictEqual(existingBody, body)) {
@@ -89,7 +90,7 @@ export async function submit(db: PoolClient, refs: Set<string>, topicId: string,
       [submissionId, index + 1, content]);
   }
   await enqueue(db, { type: "command", command_id: submissionId, topic_id: topicId, profile_ref: row.profile_ref,
-    session_id: sessionId, kind: "submit", body }, message);
+    session_id: sessionId, kind: "submit", body: { ...body, steer_if_running: true } }, message);
   await touchTopic(db, topicId);
   return message;
 }

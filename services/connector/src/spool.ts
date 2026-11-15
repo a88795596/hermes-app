@@ -94,12 +94,13 @@ export class Spool {
     let inserted = false;
     this.#transaction(() => {
       inserted = this.#db.prepare('INSERT OR IGNORE INTO commands (id, digest) VALUES (?, ?)').run(id, digest).changes === 1;
-      if (inserted && intent) {
-        this.#db.prepare('INSERT OR IGNORE INTO intents (topic_id, submission_id) VALUES (?, ?)')
-          .run(intent.topicId, intent.submissionId);
-      }
+      if (inserted && intent) this.addIntent(intent.topicId, intent.submissionId);
     });
     return inserted;
+  }
+
+  addIntent(topicId: string, submissionId: string): void {
+    this.#db.prepare('INSERT OR IGNORE INTO intents (topic_id, submission_id) VALUES (?, ?)').run(topicId, submissionId);
   }
 
   hasIntent(topicId: string, submissionId: string): boolean {

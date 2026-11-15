@@ -87,14 +87,57 @@ test("底部选择框的返回、标题和关闭共用顶栏，忙碌时保留�
   assert.equal(closed, 1);
 });
 
-function conversation(enqueue, draft = "测试消息", { showProcess = false, messages = [] } = {}) {
+function conversation(enqueue, draft = "测试消息", { showProcess = false, messages = [], workspace = {}, ...props } = {}) {
   return mount("conversation", "Conversation", {
     id: "topic", topic: { status: "ready" }, draft, attachments: [], session: {}, showProcess,
     workspace: { ready: true, network: "online", connector_online: true, reasoning_supported: true, profiles: [], pending: [],
-      detail: { messages }, enqueue },
+      detail: { messages }, enqueue, ...workspace },
     onDraftChange() {}, onAttachmentsChange() {},
+    ...props,
   });
 }
+
+const activeMessage = { message_id: "original", role: "user", text: "整理报告", status: "streaming", submission_id: "active-turn" };
+
+test("执行中与空闲时始终使用同一个发送入口，不由前端选择插话目标", async () => {
+  for (const status of ["streaming", "final"]) {
+    const queued = [], drafts = [];
+    const screen = conversation(async (item) => { queued.push(item); }, " 加上预算 ", {
+      messages: [{ ...activeMessage, status }], onDraftChange: (value) => drafts.push(value),
+    });
+    const tree = screen.render();
+    assert.equal(find(tree, (node) => node.props.title === "插话"), undefined);
+    const send = findSend(tree);
+    assert.ok(send, "发送入口不随运行状态改变");
+    assert.equal(send.props.disabled, false);
+    send.props.onPress();
+    send.props.onPress();
+    await flush();
+    assert.equal(queued.length, 1);
+    assert.deepEqual(Object.keys(queued[0]).sort(), ["created_at", "submission_id", "text", "topic_id"]);
+    assert.equal(queued[0].text, "加上预算");
+    assert.deepEqual(drafts, [""]);
+    assert.deepEqual(screen.feedback, ["medium"]);
+  }
+});
+
+test("执行中仍允许离线保存和发送附件，不要求客户端知道插话能力", async () => {
+  for (const options of [
+    { workspace: { connector_online: false, network: "offline" } },
+    { workspace: { attachments_supported: true }, attachments: [{ name: "报告.pdf", mime: "application/pdf", size: 10 }] },
+  ]) {
+    const queued = [];
+    const screen = conversation(async (item) => queued.push(item), "补充要求", { messages: [activeMessage], ...options });
+    const send = findSend(screen.render());
+    assert.ok(send);
+    assert.equal(send.props.disabled, false);
+    send.props.onPress();
+    await flush();
+    assert.equal(queued.length, 1);
+    assert.equal(queued[0].target_submission_id, undefined);
+    assert.deepEqual(queued[0].attachments, options.attachments);
+  }
+});
 
 test("发送触感确认点击，消息只保存到本地队列时不宣告送达", async () => {
   let queued = 0;
