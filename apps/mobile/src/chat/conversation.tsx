@@ -237,6 +237,7 @@ export function Conversation({
   const focusTarget = useRef(Boolean(targetMessageId));
   const messageOffsets = useRef(new Map<string, number>());
   const [sending, setSending] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const enqueueing = useRef(false);
   const [stopping, setStopping] = useState(false);
   const [draftFocused, setDraftFocused] = useState(false);
@@ -517,8 +518,12 @@ export function Conversation({
         keyboardShouldPersistTaps="handled"
         refreshControl={
           <RefreshControl
-            refreshing={workspace.refreshing}
-            onRefresh={() => void workspace.refresh()}
+            refreshing={refreshing}
+            onRefresh={async () => {
+              if (refreshing) return;
+              setRefreshing(true);
+              try { await workspace.refresh(); } finally { setRefreshing(false); }
+            }}
             tintColor={colors.accent}
             colors={[colors.accent]}
           />

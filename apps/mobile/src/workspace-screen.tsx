@@ -62,6 +62,7 @@ function Workspace() {
   const topicListRef = useRef<TopicListHandle>(null);
   const [updateStatus, setUpdateStatus] = useState<string>();
   const [profilesExpanded, setProfilesExpanded] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [chatSettingsOpen, setChatSettingsOpen] = useState(false);
   const [managementTabsVisible, setManagementTabsVisible] = useState(true);
   const updateDisabled = Platform.OS === "web" || !!updateStatus;
@@ -337,7 +338,12 @@ function Workspace() {
         onScrollBeginDrag={() => topicListRef.current?.close()}
         contentContainerStyle={[styles.content, layout.page]}
         keyboardShouldPersistTaps="handled"
-        refreshControl={<RefreshControl refreshing={workspace.refreshing} onRefresh={() => { if (!workspace.refreshing) { haptic("light"); void workspace.refresh(); } }} tintColor={colors.accent} colors={[colors.accent]} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => {
+          if (refreshing) return;
+          haptic("light");
+          setRefreshing(true);
+          try { await workspace.refresh(); } finally { setRefreshing(false); }
+        }} tintColor={colors.accent} colors={[colors.accent]} />}
       >
         {error && <Notice>{error}</Notice>}
         {workspace.error && <Notice>{workspace.error}</Notice>}
