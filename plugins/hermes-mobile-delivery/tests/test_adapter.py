@@ -13,7 +13,7 @@ from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from hermes_mobile_delivery.spool import attachments, pull
+from hermes_mobile_delivery.spool import attachments, begin_attempt, enqueue, finish_attempt, pull
 
 
 class AdapterTest(unittest.TestCase):
@@ -56,11 +56,69 @@ class AdapterTest(unittest.TestCase):
             self.module = importlib.import_module("hermes_mobile_delivery.adapter")
         self.addCleanup(sys.modules.pop, "hermes_mobile_delivery.adapter", None)
         self.platform = {}
-        self.cli = {}
+        self.commands = {}
         self.module.register_platform(SimpleNamespace(profile_name="default",
             register_platform=lambda **kwargs: self.platform.update(kwargs),
-            register_cli_command=lambda **kwargs: self.cli.update(kwargs)))
+            register_cli_command=lambda **kwargs: self.commands.update({kwargs["name"]: kwargs})))
+        self.cli = self.commands["mobile-send"]
         self.adapter = self.platform["adapter_factory"](None)
+
+    def run_queue(self, arguments):
+        command = self.commands.get("mobile-queue")
+        self.assertIsNotNone(command, "queue inspection and recovery command must be registered")
+        parser = argparse.ArgumentParser()
+        command["setup_fn"](parser)
+        output = io.StringIO()
+        with redirect_stdout(output), self.assertRaises(SystemExit) as raised:
+            command["handler_fn"](parser.parse_args(arguments))
+        return raised.exception.code, json.loads(output.getvalue())
+
+    def test_reports_queued_and_terminal_status_without_treating_status_strings_as_delivery(self):
+        queued = asyncio.run(self.adapter.send("1", "后台消息"))
+        self.assertEqual(queued.raw_response.get("delivery_status"), "queued")
+        for status in ("delivered", "retryable", "failed", "auth_blocked"):
+            with self.subTest(status=status), patch.object(self.module, "deliver_one", return_value=status):
+                result = asyncio.run(self.platform["standalone_sender_fn"](None, "mobile_target", "消息"))
+            self.assertEqual(result.get("delivery_status"), status)
+            self.assertEqual(result["success"], status != "failed")
+            self.assertEqual("note" in result, status != "delivered")
+            self.assertEqual("error" in result, status == "failed")
+            self.assertTrue(result["message_id"])
+
+    def test_queue_cli_lists_cancels_and_retries_without_changing_target_or_files(self):
+        delivery_id = enqueue(self.path, "default", "报告", [(self.source, None)], session_id="mobile_target")
+        foreign_id = enqueue(self.path, "other", "其他档案")
+        attempt_token = begin_attempt(self.path, "default", delivery_id)
+        self.assertTrue(attempt_token)
+        finish_attempt(self.path, "default", delivery_id, "failed", 422, "VALIDATION_FAILED",
+                       attempt_token=attempt_token)
+        self.source.unlink()
+        exit_code, result = self.run_queue(["list"])
+        self.assertEqual(exit_code, 0)
+        self.assertEqual([item["delivery_id"] for item in result["deliveries"]], [delivery_id])
+        self.assertEqual(result["deliveries"][0]["session_id"], "mobile_target")
+        self.assertEqual(result["deliveries"][0]["text"], "报告")
+        self.assertEqual(result["deliveries"][0]["state"], "failed")
+        self.assertEqual(result["deliveries"][0]["error_code"], "VALIDATION_FAILED")
+        original = list(attachments(self.path, delivery_id))
+        exit_code, result = self.run_queue(["retry", delivery_id])
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(result["deliveries"][0]["state"], "queued")
+        self.assertEqual(result["deliveries"][0]["session_id"], "mobile_target")
+        self.assertEqual(list(attachments(self.path, delivery_id)), original)
+        exit_code, result = self.run_queue(["cancel", delivery_id])
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(result["deliveries"][0]["state"], "cancelled")
+        self.assertEqual(list(attachments(self.path, delivery_id)), original)
+        self.assertEqual(self.run_queue(["retry", delivery_id])[0], 1)
+        self.assertEqual(self.run_queue(["cancel", foreign_id])[0], 1)
+        self.assertEqual(self.run_queue(["list", "--id", foreign_id])[1]["deliveries"], [])
+
+    def test_queue_cli_rejects_invalid_configuration(self):
+        with patch.dict(os.environ, {"HERMES_MOBILE_PROFILE": "other"}):
+            exit_code, result = self.run_queue(["list"])
+        self.assertEqual(exit_code, 1)
+        self.assertIn("error", result)
 
     def test_native_media_signatures_queue_files_without_text_and_preserve_caption_and_name(self):
         calls = [
@@ -82,7 +140,7 @@ class AdapterTest(unittest.TestCase):
                 self.assertIn((result.message_id, kwargs.get("caption", "")), pull(self.path, "default"))
 
     def test_standalone_media_is_durably_accepted_when_server_is_unavailable(self):
-        with patch.object(self.module, "deliver_one", return_value=False):
+        with patch.object(self.module, "deliver_one", return_value="retryable"):
             result = asyncio.run(self.platform["standalone_sender_fn"](
                 None, "1", "", media_files=[(str(self.source), False)]))
         self.assertTrue(result.get("success"), result)
@@ -120,7 +178,7 @@ class AdapterTest(unittest.TestCase):
         self.cli["setup_fn"](parser)
         args = parser.parse_args(["说明", "--file", str(self.source), "--file", str(self.source)])
         output = io.StringIO()
-        with patch.object(self.module, "deliver_one", return_value=False), redirect_stdout(output):
+        with patch.object(self.module, "deliver_one", return_value="retryable"), redirect_stdout(output):
             with self.assertRaises(SystemExit) as raised:
                 self.cli["handler_fn"](args)
         self.assertEqual(raised.exception.code, 0)
@@ -132,7 +190,7 @@ class AdapterTest(unittest.TestCase):
         session = "mobile_session-1"
         results = [asyncio.run(self.adapter.send(session, "会话消息")),
                    asyncio.run(self.adapter.send_document(session, str(self.source)))]
-        with patch.object(self.module, "deliver_one", return_value=False):
+        with patch.object(self.module, "deliver_one", return_value="retryable"):
             results.append(SimpleNamespace(**asyncio.run(self.platform["standalone_sender_fn"](
                 None, session, "独立投递"))))
         for result in results:
@@ -175,7 +233,7 @@ class AdapterTest(unittest.TestCase):
                            "HERMES_CRON_SESSION": "", **environment}
                 args = parser.parse_args(["--file", str(self.source), *target])
                 output = io.StringIO()
-                with patch.dict(os.environ, context), patch.object(self.module, "deliver_one", return_value=False), redirect_stdout(output):
+                with patch.dict(os.environ, context), patch.object(self.module, "deliver_one", return_value="retryable"), redirect_stdout(output):
                     with self.assertRaises(SystemExit) as raised:
                         self.cli["handler_fn"](args)
                 self.assertEqual(raised.exception.code, 0)

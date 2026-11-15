@@ -187,11 +187,20 @@ test("指定会话的文件投递写入匹配档案的消息列表并保留幂�
     for (const session_id of [null, "", " ", "bad\u0000id", "bad\nid", "id:thread", "id/path", "会话", "\ud800", "a".repeat(513)]) {
       assert.equal((await post({ ...delivery, session_id })).statusCode, 422);
     }
-    for (const session_id of ["session-missing", "session-pending"]) {
-      assert.equal((await post({ ...delivery, session_id })).statusCode, 404);
-    }
+    const missing = await post({ ...delivery, session_id: "session-missing" });
+    assert.equal(missing.statusCode, 404);
+    assert.equal(missing.json().error.code, "DELIVERY_TARGET_NOT_FOUND");
+    assert.equal(missing.json().error.retryable, false);
+    const pendingDelivery = { ...delivery, delivery_id: randomUUID(), session_id: "session-pending" };
+    const pending = await post(pendingDelivery);
+    assert.equal(pending.statusCode, 409);
+    assert.equal(pending.json().error.code, "DELIVERY_TARGET_NOT_READY");
+    assert.equal(pending.json().error.retryable, true);
+    assert.equal((await store.query("SELECT id FROM connector_ingest WHERE kind = 'delivery' AND id = $1", [pendingDelivery.delivery_id])).rowCount, 0);
     assert.equal((await post({ ...delivery, profile_ref: "default" })).statusCode, 404, "附件不能跨档案引用");
-    assert.equal((await post({ ...delivery, profile_ref: "default", session_id: "session-next", attachments: undefined, text: "跨档案" })).statusCode, 404);
+    const otherProfile = await post({ ...delivery, profile_ref: "default", session_id: "session-next", attachments: undefined, text: "跨档案" });
+    assert.equal(otherProfile.statusCode, 404);
+    assert.equal(otherProfile.json().error.code, "DELIVERY_TARGET_NOT_FOUND");
     assert.equal((await post({ ...delivery, attachments: [{ ...attachment, size: content.length + 1 }] })).statusCode, 422);
     const updated = once(mobile, "message", { signal: t.signal });
     assert.deepEqual((await Promise.all([post(delivery), post(delivery)])).map((receipt) => receipt.statusCode), [204, 204]);
@@ -208,6 +217,15 @@ test("指定会话的文件投递写入匹配档案的消息列表并保留幂�
     assert.equal((await post({ ...delivery, text: "修改正文" })).statusCode, 409);
     assert.equal((await store.query("SELECT id FROM inbox")).rowCount, 0);
     assert.equal((await store.query("SELECT inbox_id FROM push_outbox")).rowCount, 0);
+
+    await store.query("UPDATE topics SET status = 'ready' WHERE profile_ref = 'work' AND session_id = 'session-pending'");
+    assert.equal((await post(pendingDelivery)).statusCode, 204);
+    assert.equal((await post(pendingDelivery)).statusCode, 204);
+    const recovered = await store.query("SELECT m.data, t.profile_ref, t.session_id FROM messages m JOIN topics t ON t.id = m.topic_id WHERE m.id = $1",
+      [pendingDelivery.delivery_id]);
+    assert.deepEqual(recovered.rows, [{ data: { message_id: pendingDelivery.delivery_id, role: "assistant", text: "", status: "final", attachments: [attachment] },
+      profile_ref: "work", session_id: "session-pending" }]);
+    assert.equal((await store.query("SELECT id FROM inbox")).rowCount, 0);
 
     const occupiedId = randomUUID();
     const occupied = { message_id: occupiedId, role: "user", text: "保留原消息", status: "final" };

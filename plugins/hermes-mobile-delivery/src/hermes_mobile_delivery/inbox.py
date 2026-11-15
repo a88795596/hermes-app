@@ -10,7 +10,7 @@ import re
 from time import sleep
 from urllib.parse import SplitResult, urlsplit
 
-from .spool import ack, attachments, delivery_session, pull
+from .spool import ack, attachments, begin_attempt, delivery_session, due, finish_attempt, renew_attempt
 
 
 logger = logging.getLogger(__name__)
@@ -50,22 +50,55 @@ def _request(endpoint: SplitResult, token: str, method: str, path: str, payload:
 
 
 def post_delivery(endpoint: SplitResult, token: str, delivery_id: str, profile: str, text: str,
-                  files=(), *, session_id: str | None = None) -> int | None:
+                  files=(), *, session_id: str | None = None) -> tuple[int | None, bytes]:
     payload = {"delivery_id": delivery_id, "profile_ref": profile, "text": text}
     if files:
         payload["attachments"] = files
     if session_id is not None:
         payload["session_id"] = session_id
-    return _request(endpoint, token, "POST", endpoint.path or "/", payload)[0]
+    return _request(endpoint, token, "POST", endpoint.path or "/", payload)
 
 
-def deliver_one(path: Path, endpoint: SplitResult, token: str, profile: str, delivery_id: str, text: str) -> bool:
+def _failure(path: Path, profile: str, delivery_id: str, status: int | None, body: bytes,
+             *, attempt_token: str, invalid_receipt: bool = False) -> str:
+    try:
+        receipt = json.loads(body)
+    except (ValueError, RecursionError):
+        receipt = None
+    error = receipt.get("error") if isinstance(receipt, dict) else None
+    code = error.get("code") if isinstance(error, dict) else None
+    if not isinstance(code, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,79}", code):
+        code = "NETWORK_ERROR" if status is None else "HTTP_ERROR"
+    if status in (401, 403):
+        state = "auth_blocked"
+    elif (status is None or status in (408, 429) or 500 <= status <= 599
+          or (status == 404 and code != "DELIVERY_TARGET_NOT_FOUND")
+          or (status == 409 and code == "DELIVERY_TARGET_NOT_READY") or invalid_receipt):
+        state = "retryable"
+    else:
+        state = "failed"
+    if invalid_receipt:
+        code = "INVALID_ATTACHMENT_RECEIPT"
+    state = finish_attempt(path, profile, delivery_id, state, status, code, attempt_token=attempt_token)
+    logger.warning("Hermes 移动端投递状态 %s（投递 ID %s，HTTP %s，错误码 %s）",
+                   state, delivery_id, status, code)
+    return state
+
+
+def deliver_one(path: Path, endpoint: SplitResult, token: str, profile: str, delivery_id: str, text: str) -> str:
+    attempt_token = begin_attempt(path, profile, delivery_id)
+    if not attempt_token:
+        return "queued"
     session_id = delivery_session(path, delivery_id)
     references = []
     for reference, content in attachments(path, delivery_id):
+        if not renew_attempt(path, profile, delivery_id, attempt_token):
+            return "queued"
         payload = {"profile_ref": profile, **{key: reference[key] for key in ("name", "mime", "size")},
                    "content_base64": base64.b64encode(content).decode("ascii")}
         status, body = _request(endpoint, token, "PUT", f"/internal/attachments/v1/{reference['attachment_id']}", payload)
+        if status not in (200, 201):
+            return _failure(path, profile, delivery_id, status, body, attempt_token=attempt_token)
         try:
             receipt = json.loads(body)
         except (ValueError, RecursionError):
@@ -74,23 +107,24 @@ def deliver_one(path: Path, endpoint: SplitResult, token: str, profile: str, del
         mime = canonical.get("mime") if isinstance(canonical, dict) else None
         valid_mime = isinstance(mime, str) and (mime == reference["mime"]
             or mime in {"image/png", "image/jpeg", "image/gif", "image/webp"})
-        if (status not in (200, 201) or not valid_mime or canonical != {**reference, "mime": mime}
+        if (not valid_mime or canonical != {**reference, "mime": mime}
                 or type(canonical.get("size")) is not int):
-            logger.warning("Hermes 移动端附件等待重试（投递 ID %s，HTTP 状态 %s）", delivery_id, status)
-            return False
+            return _failure(path, profile, delivery_id, status, body,
+                            attempt_token=attempt_token, invalid_receipt=True)
         references.append(canonical)
-    status = post_delivery(endpoint, token, delivery_id, profile, text, references, session_id=session_id)
+    if not renew_attempt(path, profile, delivery_id, attempt_token):
+        return "queued"
+    status, body = post_delivery(endpoint, token, delivery_id, profile, text, references, session_id=session_id)
     if status != 204:
-        logger.warning("Hermes 移动端投递等待重试（投递 ID %s，HTTP 状态 %s）", delivery_id, status)
-        return False
-    ack(path, delivery_id)
-    return True
+        return _failure(path, profile, delivery_id, status, body, attempt_token=attempt_token)
+    return "delivered" if ack(path, delivery_id, attempt_token=attempt_token) else "queued"
 
 
 def deliver_pending(path: Path, endpoint: SplitResult, token: str, profile: str) -> bool:
-    pending = pull(path, profile)
-    for delivery_id, text in pending:
-        if not deliver_one(path, endpoint, token, profile, delivery_id, text):
-            # shortcut: 按入队顺序暂停重试，确认单条故障需要独立处置时再引入隔离队列。
-            return False
-    return bool(pending)
+    delivered = False
+    for delivery_id, text in due(path, profile):
+        state = deliver_one(path, endpoint, token, profile, delivery_id, text)
+        delivered = delivered or state == "delivered"
+        if state == "auth_blocked":
+            break
+    return delivered

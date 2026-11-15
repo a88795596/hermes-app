@@ -6,6 +6,7 @@ from pathlib import Path
 import os
 import sqlite3
 import stat
+import time
 import unicodedata
 from uuid import uuid4
 
@@ -51,6 +52,25 @@ def _connect(path: Path):
             mime TEXT NOT NULL,
             content BLOB NOT NULL
         )""")
+        db.execute("""CREATE TABLE IF NOT EXISTS delivery_state (
+            delivery_id TEXT PRIMARY KEY REFERENCES deliveries(delivery_id) ON DELETE CASCADE,
+            state TEXT NOT NULL DEFAULT 'queued',
+            created_at REAL NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            last_attempt_at REAL,
+            next_attempt_at REAL NOT NULL DEFAULT 0,
+            attempt_token TEXT,
+            http_status INTEGER,
+            error_code TEXT
+        )""")
+        db.execute("""CREATE TABLE IF NOT EXISTS profile_pauses (
+            profile_ref TEXT PRIMARY KEY,
+            paused_until REAL NOT NULL
+        )""")
+        now = time.time()
+        db.execute("""INSERT OR IGNORE INTO delivery_state (delivery_id, created_at, next_attempt_at)
+            SELECT delivery_id, ?, ? FROM deliveries""", (now, now))
         yield db
 
 
@@ -60,6 +80,9 @@ def enqueue(path: Path, profile_ref: str, text: str, files=(), *, session_id: st
     delivery_id = str(uuid4())
     with _connect(path) as db:
         db.execute("INSERT INTO deliveries VALUES (?, ?, ?)", (delivery_id, profile_ref, text))
+        now = time.time()
+        db.execute("INSERT INTO delivery_state (delivery_id, created_at, next_attempt_at) VALUES (?, ?, ?)",
+                   (delivery_id, now, now))
         if session_id is not None:
             db.execute("INSERT INTO delivery_sessions VALUES (?, ?)", (delivery_id, session_id))
         for position, (source, display_name) in enumerate(files):
@@ -95,6 +118,128 @@ def pull(path: Path, profile_ref: str, limit: int = 20) -> list[tuple[str, str]]
                           (profile_ref, limit)).fetchall()
 
 
+def due(path: Path, profile_ref: str, limit: int = 20) -> list[tuple[str, str]]:
+    if not path.exists():
+        return []
+    with _connect(path) as db:
+        now = time.time()
+        return db.execute("""SELECT d.delivery_id, d.text FROM deliveries d
+            JOIN delivery_state s USING (delivery_id)
+            WHERE d.profile_ref = ? AND s.state IN ('queued', 'retryable', 'auth_blocked', 'delivering')
+                AND s.next_attempt_at <= ? AND NOT EXISTS (
+                    SELECT 1 FROM profile_pauses WHERE profile_ref = ? AND paused_until > ?)
+            ORDER BY s.next_attempt_at, d.rowid LIMIT ?""", (profile_ref, now, profile_ref, now, limit)).fetchall()
+
+
+def begin_attempt(path: Path, profile_ref: str, delivery_id: str) -> str | None:
+    if not path.exists():
+        return None
+    with _connect(path) as db:
+        now = time.time()
+        token = str(uuid4())
+        # 覆盖 10 个附件及消息各 3 次、每次 30 秒的网络尝试。
+        changed = db.execute("""UPDATE delivery_state
+            SET state = 'delivering', attempts = attempts + 1, last_attempt_at = ?, next_attempt_at = ?, attempt_token = ?
+            WHERE delivery_id = ? AND state IN ('queued', 'retryable', 'auth_blocked', 'delivering')
+                AND next_attempt_at <= ?
+                AND EXISTS (SELECT 1 FROM deliveries WHERE delivery_id = ? AND profile_ref = ?)
+                AND NOT EXISTS (SELECT 1 FROM profile_pauses WHERE profile_ref = ? AND paused_until > ?)""",
+            (now, now + 1200, token, delivery_id, now, delivery_id, profile_ref, profile_ref, now)).rowcount
+        return token if changed else None
+
+
+def renew_attempt(path: Path, profile_ref: str, delivery_id: str, attempt_token: str) -> bool:
+    if not path.exists():
+        return False
+    with _connect(path) as db:
+        return bool(db.execute("""UPDATE delivery_state SET next_attempt_at = ?
+            WHERE delivery_id = ? AND state = 'delivering' AND attempt_token = ?
+                AND EXISTS (SELECT 1 FROM deliveries WHERE delivery_id = ? AND profile_ref = ?)""",
+            (time.time() + 1200, delivery_id, attempt_token, delivery_id, profile_ref)).rowcount)
+
+
+def finish_attempt(path: Path, profile_ref: str, delivery_id: str, state: str,
+                   http_status: int | None, error_code: str | None, *, attempt_token: str) -> str:
+    if state not in {"failed", "retryable", "auth_blocked"}:
+        raise ValueError("无效的投递结果")
+    now = time.time()
+    with _connect(path) as db:
+        row = db.execute("""SELECT s.state, s.retry_count, s.attempt_token FROM delivery_state s
+            JOIN deliveries d USING (delivery_id) WHERE d.delivery_id = ? AND d.profile_ref = ?""",
+            (delivery_id, profile_ref)).fetchone()
+        if row is None:
+            return "delivered"
+        if row[0] != "delivering" or row[2] != attempt_token:
+            return row[0]
+        retries = row[1] + (state == "retryable")
+        next_attempt = 0
+        if state == "retryable":
+            if retries >= 10:
+                state = "failed"
+            else:
+                next_attempt = now + min(300, 5 * 2 ** (retries - 1))
+        elif state == "auth_blocked":
+            next_attempt = now + 300
+            db.execute("""INSERT INTO profile_pauses VALUES (?, ?)
+                ON CONFLICT (profile_ref) DO UPDATE SET paused_until = MAX(paused_until, excluded.paused_until)""",
+                (profile_ref, next_attempt))
+        db.execute("""UPDATE delivery_state SET state = ?, retry_count = ?, next_attempt_at = ?,
+            http_status = ?, error_code = ?, attempt_token = NULL
+            WHERE delivery_id = ? AND state = 'delivering' AND attempt_token = ?""",
+            (state, retries, next_attempt, http_status, error_code, delivery_id, attempt_token))
+        return state
+
+
+def inspect_queue(path: Path, profile_ref: str, delivery_id: str | None = None) -> list[dict]:
+    if not path.exists():
+        return []
+    with _connect(path) as db:
+        db.row_factory = sqlite3.Row
+        rows = db.execute("""SELECT d.delivery_id, d.profile_ref, d.text, target.session_id,
+                s.state, s.created_at, s.attempts, s.last_attempt_at, s.next_attempt_at,
+                s.http_status, s.error_code, p.paused_until
+            FROM deliveries d JOIN delivery_state s USING (delivery_id)
+            LEFT JOIN delivery_sessions target USING (delivery_id)
+            LEFT JOIN profile_pauses p USING (profile_ref)
+            WHERE d.profile_ref = ? AND (? IS NULL OR d.delivery_id = ?) ORDER BY d.rowid""",
+            (profile_ref, delivery_id, delivery_id)).fetchall()
+        records = []
+        for row in rows:
+            record = dict(row)
+            record["attachments"] = [dict(file) for file in db.execute("""SELECT attachment_id, name, mime,
+                length(content) AS size FROM attachments WHERE delivery_id = ? ORDER BY position""",
+                (record["delivery_id"],))]
+            records.append(record)
+        return records
+
+
+def retry(path: Path, profile_ref: str, delivery_id: str) -> bool:
+    if not path.exists():
+        return False
+    now = time.time()
+    with _connect(path) as db:
+        changed = db.execute("""UPDATE delivery_state SET state = 'queued', attempts = 0,
+                retry_count = 0, next_attempt_at = ?, attempt_token = NULL
+            WHERE delivery_id = ? AND state != 'cancelled'
+                AND (state != 'delivering' OR next_attempt_at <= ?)
+                AND EXISTS (SELECT 1 FROM deliveries WHERE delivery_id = ? AND profile_ref = ?)""",
+            (now, delivery_id, now, delivery_id, profile_ref)).rowcount
+        if changed:
+            db.execute("DELETE FROM profile_pauses WHERE profile_ref = ?", (profile_ref,))
+        return bool(changed)
+
+
+def cancel(path: Path, profile_ref: str, delivery_id: str) -> bool:
+    if not path.exists():
+        return False
+    with _connect(path) as db:
+        return bool(db.execute("""UPDATE delivery_state SET state = 'cancelled', next_attempt_at = 0, attempt_token = NULL
+            WHERE delivery_id = ? AND state != 'cancelled'
+                AND (state != 'delivering' OR next_attempt_at <= ?)
+                AND EXISTS (SELECT 1 FROM deliveries WHERE delivery_id = ? AND profile_ref = ?)""",
+            (delivery_id, time.time(), delivery_id, profile_ref)).rowcount)
+
+
 def attachments(path: Path, delivery_id: str):
     with _connect(path) as db:
         ids = db.execute("SELECT attachment_id FROM attachments WHERE delivery_id = ? ORDER BY position",
@@ -115,7 +260,10 @@ def delivery_session(path: Path, delivery_id: str) -> str | None:
         return row[0] if row else None
 
 
-def ack(path: Path, delivery_id: str) -> None:
-    if path.exists():
-        with _connect(path) as db:
-            db.execute("DELETE FROM deliveries WHERE delivery_id = ?", (delivery_id,))
+def ack(path: Path, delivery_id: str, *, attempt_token: str) -> bool:
+    if not path.exists():
+        return False
+    with _connect(path) as db:
+        return bool(db.execute("""DELETE FROM deliveries WHERE delivery_id = ? AND EXISTS (
+            SELECT 1 FROM delivery_state WHERE delivery_id = ? AND state = 'delivering' AND attempt_token = ?)""",
+            (delivery_id, delivery_id, attempt_token)).rowcount)

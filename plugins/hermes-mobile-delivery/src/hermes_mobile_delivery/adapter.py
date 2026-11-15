@@ -18,7 +18,7 @@ from hermes_cli.config import get_env_value_prefer_dotenv
 from hermes_constants import get_hermes_home
 
 from .inbox import deliver_one, deliver_pending, inbox_endpoint
-from .spool import enqueue, MAX_ATTACHMENTS
+from .spool import cancel, enqueue, inspect_queue, MAX_ATTACHMENTS, retry
 
 
 PLATFORM = "hermes_mobile"
@@ -89,15 +89,21 @@ def register_platform(ctx):
         except (OSError, sqlite3.Error, ValueError):
             return {"error": "无法保存投递队列，请检查磁盘权限、附件名称和单个附件 50 MiB 的限制"}
 
-        delivered = False
+        delivery_status = "queued"
         if not gateway:
             try:
-                delivered = await asyncio.to_thread(deliver_one, path, endpoint, token, profile, delivery_id, text)
+                delivery_status = await asyncio.to_thread(deliver_one, path, endpoint, token, profile, delivery_id, text)
             except (OSError, sqlite3.Error, ValueError):
                 logger.warning("Hermes 移动端无法确认本地队列记录（投递 ID %s）", delivery_id)
-        result = {"success": True, "message_id": delivery_id, "delivery_reconciliation": "limited"}
-        if not delivered:
-            result["note"] = f"消息已进入 Hermes 移动端投递队列（投递 ID {delivery_id}）"
+        result = {"success": delivery_status != "failed", "message_id": delivery_id,
+                  "delivery_reconciliation": "limited", "delivery_status": delivery_status}
+        if delivery_status != "delivered":
+            note = {"failed": "投递失败，原消息和附件已保留，请通过 mobile-queue 查询或重试",
+                    "auth_blocked": "鉴权失败，本配置档案暂停投递，请修正凭证后通过 mobile-queue 重试"}.get(
+                        delivery_status, "消息已进入 Hermes 移动端投递队列，尚未送达")
+            result["note"] = f"{note}（投递 ID {delivery_id}）"
+            if delivery_status == "failed":
+                result["error"] = result["note"]
         return result
 
     async def standalone_send(pconfig, chat_id, message, *, thread_id=None, media_files=None, force_document=False):
@@ -200,6 +206,35 @@ def register_platform(ctx):
 
     ctx.register_cli_command(name="mobile-send", help="向 Hermes 移动端收件箱或会话发送文本和文件",
                              setup_fn=setup_cli, handler_fn=send_cli)
+
+    def setup_queue_cli(parser):
+        commands = parser.add_subparsers(dest="action", required=True)
+        listing = commands.add_parser("list", help="查看当前配置档案的未送达、失败和取消记录")
+        listing.add_argument("--id", dest="delivery_id", help="只查看指定投递 ID")
+        for action, help_text in (("retry", "按原目标和快照重新排队"), ("cancel", "停止投递并保留记录")):
+            command = commands.add_parser(action, help=help_text)
+            command.add_argument("delivery_id", help="投递 ID")
+
+    def queue_cli(args):
+        configured = route()
+        result = {"success": False}
+        if not configured:
+            result["error"] = "请检查 Hermes 移动端的配置档案和 API 凭证"
+        else:
+            profile, _, _, _, path = configured
+            try:
+                if args.action != "list" and not {"retry": retry, "cancel": cancel}[args.action](
+                        path, profile, args.delivery_id):
+                    result["error"] = "记录不存在、已取消或正在投递，未修改队列"
+                else:
+                    result = {"success": True, "deliveries": inspect_queue(path, profile, args.delivery_id)}
+            except (OSError, sqlite3.Error, ValueError):
+                result["error"] = "无法处理投递队列，请检查磁盘权限和队列文件"
+        print(json.dumps(result, ensure_ascii=False))
+        raise SystemExit(0 if result["success"] else 1)
+
+    ctx.register_cli_command(name="mobile-queue", help="查询、重试或取消 Hermes 移动端投递",
+                             setup_fn=setup_queue_cli, handler_fn=queue_cli)
 
     options = {}
     for name in ("parse_target_ref_fn", "target_ref_syntax_fn"):

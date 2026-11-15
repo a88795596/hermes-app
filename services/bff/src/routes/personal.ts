@@ -65,7 +65,8 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
 
   api.setErrorHandler((error, request, reply) => {
     if (error instanceof ApiError) {
-      return reply.code(error.statusCode).send({ error: { code: error.code, message: error.message, retryable: false }, request_id: request.id });
+      return reply.code(error.statusCode).send({ error: { code: error.code, message: error.message,
+        retryable: error.code === "DELIVERY_TARGET_NOT_READY" }, request_id: request.id });
     }
     const status = error instanceof Error && "statusCode" in error ? Number(error.statusCode) : 500;
     if (status === 413) return reply.code(413).send({ error: {

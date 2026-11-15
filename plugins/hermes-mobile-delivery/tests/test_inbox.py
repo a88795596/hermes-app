@@ -8,6 +8,7 @@ from tempfile import TemporaryDirectory
 from threading import Thread
 import unittest
 from uuid import uuid4
+from unittest.mock import patch
 
 from hermes_mobile_delivery.inbox import deliver_pending, inbox_endpoint, post_delivery
 from hermes_mobile_delivery.spool import enqueue, pull
@@ -15,6 +16,9 @@ from hermes_mobile_delivery.spool import enqueue, pull
 
 class InboxDeliveryTest(unittest.TestCase):
     def setUp(self):
+        timer = patch("hermes_mobile_delivery.spool.time.time", return_value=1000)
+        self.clock = timer.start()
+        self.addCleanup(timer.stop)
         self.requests = []
         self.uploads = []
         self.upload_status = 200
@@ -61,7 +65,7 @@ class InboxDeliveryTest(unittest.TestCase):
         self.delivery_id = str(uuid4())
 
     def send(self):
-        return post_delivery(self.endpoint, "inbox-token", self.delivery_id, "work", "早报完成")
+        return post_delivery(self.endpoint, "inbox-token", self.delivery_id, "work", "早报完成")[0]
 
     def test_retries_with_same_delivery_id_after_connection_loss(self):
         self.responses = iter([None, 503, 204])
@@ -95,6 +99,7 @@ class InboxDeliveryTest(unittest.TestCase):
                 self.assertFalse(deliver_pending(path, self.endpoint, "inbox-token", "work"))
             self.assertEqual(pull(path, "work"), [(delivery_id, "服务离线时产生的消息")])
 
+            self.clock.return_value += 300
             self.responses = iter([204])
             self.assertTrue(deliver_pending(path, self.endpoint, "inbox-token", "work"))
             self.assertEqual([request[2]["delivery_id"] for request in self.requests], [delivery_id] * 4)
@@ -112,6 +117,7 @@ class InboxDeliveryTest(unittest.TestCase):
             with self.assertLogs("hermes_mobile_delivery.inbox", level="WARNING"):
                 self.assertFalse(deliver_pending(path, self.endpoint, "inbox-token", "work"))
             self.assertEqual(pull(path, "work"), [(delivery_id, "")])
+            self.clock.return_value += 300
             self.responses = iter([204])
             self.assertTrue(deliver_pending(path, self.endpoint, "inbox-token", "work"))
             self.assertEqual(pull(path, "work"), [])
@@ -140,9 +146,10 @@ class InboxDeliveryTest(unittest.TestCase):
             source.unlink()
             self.responses = iter([204, 503, 503, 503])
             with self.assertLogs("hermes_mobile_delivery.inbox", level="WARNING"):
-                self.assertFalse(deliver_pending(path, self.endpoint, "inbox-token", "work"))
+                self.assertTrue(deliver_pending(path, self.endpoint, "inbox-token", "work"))
             self.assertNotIn("session_id", self.requests[0][2])
             self.assertEqual(pull(path, "work"), [(targeted_id, "")])
+            self.clock.return_value += 300
             self.responses = iter([204])
             self.assertTrue(deliver_pending(path, self.endpoint, "inbox-token", "work"))
             self.assertEqual(pull(path, "work"), [])
@@ -160,6 +167,7 @@ class InboxDeliveryTest(unittest.TestCase):
             source.write_bytes(b"video")
             delivery_id = enqueue(path, "work", "视频", [(source, "预览.mp4")])
             for status, corrupt in ((401, False), (200, True)):
+                self.clock.return_value += 300
                 self.upload_status, self.corrupt_upload_receipt = status, corrupt
                 with self.assertLogs("hermes_mobile_delivery.inbox", level="WARNING"):
                     self.assertFalse(deliver_pending(path, self.endpoint, "inbox-token", "work"))
@@ -182,6 +190,7 @@ class InboxDeliveryTest(unittest.TestCase):
                     self.assertTrue(self.requests, "normalized upload should reach inbox delivery")
                     self.assertEqual(len(self.requests[-1][2]["attachments"]), 1)
                     self.assertEqual(self.requests[-1][2]["attachments"][0]["mime"], "image/png")
+                    self.clock.return_value += 300
                     self.responses = iter([204])
                     self.assertTrue(deliver_pending(path, self.endpoint, "inbox-token", "work"))
                     self.assertEqual(self.uploads[0], self.uploads[1])
@@ -196,6 +205,7 @@ class InboxDeliveryTest(unittest.TestCase):
             source.write_bytes(b"# Report")
             delivery_id = enqueue(path, "work", "", [(source, None)])
             for mime in ("text/html", "invalid/type\r\n", "image/svg+xml"):
+                self.clock.return_value += 300
                 self.upload_mime = mime
                 with self.assertLogs("hermes_mobile_delivery.inbox", level="WARNING"):
                     self.assertFalse(deliver_pending(path, self.endpoint, "inbox-token", "work"))
@@ -208,6 +218,7 @@ class InboxDeliveryTest(unittest.TestCase):
             source = Path(directory) / "report.md"
             source.write_bytes(b"# Report")
             enqueue(path, "work", "", [(source, "  日报.md  ")])
+            self.clock.return_value += 300
             self.responses = iter([204])
             self.assertTrue(deliver_pending(path, self.endpoint, "inbox-token", "work"))
             self.assertEqual(self.uploads[0][2]["name"], "日报.md")

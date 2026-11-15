@@ -6,7 +6,7 @@ import { touchTopic } from "./mutations.js";
 import { profileId, topicRow } from "./projections.js";
 import { queueInboxPush } from "./push.js";
 import { validateReceivedAttachments } from "./received-attachments.js";
-import { conflict, invalid, missing } from "./validation.js";
+import { ApiError, conflict, invalid, missing } from "./validation.js";
 
 const terminal = new Set<Message["status"]>(["final", "failed", "cancelled"]);
 
@@ -167,9 +167,10 @@ export async function applyInboxDelivery(db: PoolClient, { delivery_id, profile_
     ...(session_id === undefined ? {} : { session_id }),
     ...(attachments?.length ? { attachments } : {}) })) return false;
   if (session_id !== undefined) {
-    const { rows: [topic] } = await db.query<{ id: string }>(
-      "SELECT id FROM topics WHERE profile_ref = $1 AND session_id = $2 AND status = 'ready'", [profile_ref, session_id]);
-    if (!topic) missing("会话");
+    const { rows: [topic] } = await db.query<{ id: string; status: string }>(
+      "SELECT id, status FROM topics WHERE profile_ref = $1 AND session_id = $2", [profile_ref, session_id]);
+    if (!topic) throw new ApiError(404, "DELIVERY_TARGET_NOT_FOUND", "找不到投递目标会话。");
+    if (topic.status !== "ready") throw new ApiError(409, "DELIVERY_TARGET_NOT_READY", "投递目标会话尚未就绪。");
     const message: Message = { message_id: delivery_id, role: "assistant", text, status: "final",
       ...(attachments?.length ? { attachments } : {}) };
     const inserted = await db.query("INSERT INTO messages (id, topic_id, data) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING",
