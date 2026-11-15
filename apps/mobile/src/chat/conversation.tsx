@@ -53,11 +53,12 @@ const activityLabel: Record<SessionStatus["activity"], string> = {
 
 function ProcessTimeline({ steps, final }: { steps: MessageProcessStep[]; final: boolean }) {
   const { colors, styles } = useTheme();
+  const { height } = useWindowDimensions();
   const [expanded, setExpanded] = useState(false);
   const visibleSteps = expanded ? steps : steps.slice(-1);
   const title = steps.some((step) => step.kind === "reasoning") ? "思考" : "执行过程";
   return (
-    <View style={[chat.process, { borderColor: colors.edge }]}>
+    <View style={[chat.process, { borderColor: colors.edge }, expanded && { maxHeight: height / 3 }]}>
       <Pressable accessibilityRole="button" accessibilityLabel={`${expanded ? "收起" : "展开"}${title}`}
         accessibilityState={{ expanded }}
         onPress={() => { haptic("selection"); setExpanded((current) => !current); }}
@@ -70,7 +71,8 @@ function ProcessTimeline({ steps, final }: { steps: MessageProcessStep[]; final:
         </Text>
         <Icon name={expanded ? "down" : "chevron"} size={17} color={colors.muted} />
       </Pressable>
-      <View style={chat.processSteps}>
+      {(expanded || !final) && <ScrollView style={chat.processScroll} contentContainerStyle={chat.processSteps}
+        scrollEnabled={expanded} nestedScrollEnabled bounces={false} keyboardShouldPersistTaps="handled">
         {visibleSteps.map((step, index) => {
           const status = step.kind !== "tool" || (step.status === "running" && final) ? "unknown" : step.status;
           const complete = status === "succeeded";
@@ -87,7 +89,7 @@ function ProcessTimeline({ steps, final }: { steps: MessageProcessStep[]; final:
             </View>
           );
         })}
-      </View>
+      </ScrollView>}
     </View>
   );
 }
@@ -733,6 +735,7 @@ const chat = StyleSheet.create({
   sectionHeader: { flexDirection: "row", alignItems: "center", gap: 10 },
   sectionIcon: { height: 32, width: 32, borderRadius: 9, alignItems: "center", justifyContent: "center" },
   sectionTitle: { flexShrink: 1, fontSize: 17, lineHeight: 25, fontWeight: "700" },
+  processScroll: { flexGrow: 0 },
   processSteps: { paddingStart: 8 },
   processStep: { flexDirection: "row", alignItems: "flex-start", gap: 12 },
   processRail: { position: "absolute", top: 12, bottom: -12, start: 7.5, width: 1 },
