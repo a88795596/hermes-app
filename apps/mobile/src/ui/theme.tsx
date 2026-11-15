@@ -62,6 +62,7 @@ const symbols = {
   stop: ["stop.fill", "stop"],
   chat: ["bubble.left", "chat_bubble"],
   send: ["arrow.up", "arrow_upward"],
+  microphone: ["mic", "mic"],
   attachment: ["paperclip", "attach_file"],
   photo: ["photo", "image"],
   link: ["link", "link"],

@@ -52,6 +52,9 @@ function mount(props) {
       case "./attachments": return {};
       case "./model-picker": return {};
       case "./settings-drawer": return {};
+      case "./use-speech-input": return { useSpeechInput: (_id, _enabled, draft) => ({
+        available: false, state: "idle", busy: false, start: async () => {}, stop: async () => draft,
+      }) };
       default: throw new Error(`Unexpected dependency: ${name}`);
     }
   });

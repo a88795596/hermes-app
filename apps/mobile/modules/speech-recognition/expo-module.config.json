@@ -1,0 +1,10 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "podspecPath": "HermesSpeechRecognition.podspec",
+    "modules": ["HermesSpeechRecognitionModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.hermesspeech.HermesSpeechRecognitionModule"]
+  }
+}

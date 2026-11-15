@@ -25,6 +25,8 @@ const commonHeaders = {
 // 双平台必须共用适配器，CLI 才能在一次事务中发布两端。
 const database = standaloneRepository({ baseUrl: `${baseUrl}/admin`, commonHeaders });
 const storage = standaloneStorage({ baseUrl: `${baseUrl}/storage`, protocol: "hermes-ota", commonHeaders });
+const nativeSources = ["app.json", "app.config.js", "eas.json", "modules/speech-recognition/index.ts",
+  "modules/speech-recognition/expo-module.config.json", "../../scripts/setup-speech-recognition.py"];
 
 export default defineConfig((options) => {
   if (options && (!process.env.EXPO_PUBLIC_HOT_UPDATER_BASE_URL || !process.env.EXPO_PUBLIC_HOT_UPDATER_API_KEY)) {
@@ -33,7 +35,11 @@ export default defineConfig((options) => {
   return {
     build: expo(),
     updateStrategy: "fingerprint",
-    fingerprint: { extraSources: ["app.json", "app.config.js", "eas.json"] },
+    fingerprint: { extraSources: {
+      ios: [...nativeSources, "modules/speech-recognition/ios", "modules/speech-recognition/*.podspec"],
+      android: [...nativeSources, "modules/speech-recognition/android/src/main", "modules/speech-recognition/android/*.gradle",
+        "modules/speech-recognition/android/*.pro"],
+    } },
     database,
     storage,
     plugins: [apiKeys()],

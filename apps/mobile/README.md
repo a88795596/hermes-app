@@ -22,7 +22,26 @@ HTML 支持内联 JavaScript 交互，使用不共享 App 来源与凭证的沙�
 
 接收聊天文件需配置 Connector 的 Hermes Webapp 接口，插件投递方式与旧版 Hermes 的 `mobile-send --file` 兼容命令见 [插件说明](../../plugins/hermes-mobile-delivery/README.md)。历史消息只有文件名、没有附件 ID 时仍保留文件名显示。
 
-本功能新增 `expo-audio`、`expo-video` 和 `react-native-webview` 原生模块；首次交付必须运行下方本地原生构建命令。仅发布 OTA 不会为旧安装包补上这些模块。音视频解码取决于设备系统，建议使用 MP3/M4A/WAV 和 H.264/AAC MP4；不请求麦克风权限，也不在后台继续播放。
+本功能新增 `expo-audio`、`expo-video` 和 `react-native-webview` 原生模块；首次交付必须运行下方本地原生构建命令。仅发布 OTA 不会为旧安装包补上这些模块。音视频解码取决于设备系统，建议使用 MP3/M4A/WAV 和 H.264/AAC MP4；播放不请求麦克风权限，也不在后台继续播放。
+
+## 语音输入
+
+iOS 和 Android 输入框右侧的麦克风按钮开始离线录音，识别文字实时写入草稿。再次点击结束录音；发送会先等待最后的识别结果，再提交消息。录音期间暂停手动编辑，停止后可修改文字。离开会话、进入后台或系统中断时停止录音，已识别文字保留。
+
+识别复用 assistant 项目的 sherpa-onnx 1.13.8 和中文流式 Zipformer 模型，音频只在设备内处理，不上传、不保存录音文件。首次使用会请求麦克风权限。模型资源约 160 MiB，随原生 App 安装；Expo Go、Web 和旧原生包不提供该模块。
+
+在仓库根目录可单独准备或检查资源：
+
+```sh
+pnpm setup:speech                 # 准备两端；单独构建可追加 --platform ios 或 --platform android
+python3 scripts/setup-speech-recognition.py --check
+python3 scripts/setup-speech-recognition.py --self-test
+bash apps/mobile/modules/speech-recognition/tests/check.sh
+```
+
+准备脚本固定下载版本及 SHA-256，复用本地校验通过的文件，生成物位于 Git 忽略的 `apps/mobile/modules/speech-recognition/vendor/`。`pnpm app:ios` / `pnpm app:android` 及 mobile 包的 `ios` / `android` 开发命令会先准备对应平台资源，再生成原生工程或指纹。直接调用 EAS 或 Expo prebuild 前请先执行 `pnpm setup:speech --platform ios` 或 `--platform android`。根 `.easignore` 将资源带入 EAS 本地构建临时目录，同时排除环境文件、签名凭据与缓存。Android Gradle 只将本端 AAR 与共用模型加入安装包，iOS 使用 XCFramework。原生模块、模型或权限改变后必须重建 App，OTA 无法补齐这些内容；热更新指纹按平台追踪原生源码、共享模块接口与模型版本脚本，不依赖本地是否已下载二进制。
+
+模型来源、引擎许可证和 ONNX Runtime 第三方声明随资源保留在 `vendor/SOURCES.md`、`vendor/model/README.md` 和 `vendor/licenses/`；模型发布归档未附单独权重许可证，引擎许可证不能替代模型授权。
 
 ## 本地编译并安装到手机
 
@@ -65,6 +84,7 @@ pnpm --dir apps/mobile dlx eas-cli@27.10.0 credentials --platform ios
 
 ```sh
 mkdir -p .data/builds
+pnpm setup:speech --platform ios
 pnpm --dir apps/mobile dlx eas-cli@27.10.0 build --local --platform ios --profile preview --output ../../.data/builds/hermes-cashcat-ios.ipa
 ```
 

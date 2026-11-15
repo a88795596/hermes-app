@@ -48,6 +48,7 @@ try {
         .map(([id]) => ({ id }));
       const device = selectDevice(devices, values.device);
       if (!process.env.JAVA_HOME && process.platform === "darwin") process.env.JAVA_HOME = run("/usr/libexec/java_home", ["-v", "17"], true);
+      run("pnpm", ["setup:speech", "--platform", "android"]);
       run("pnpm", ["exec", "expo", "prebuild", "--platform", "android", "--no-install"]);
       run("pnpm", ["exec", "expo", "run:android", "--variant", "release", "--device", device, "--no-bundler"]);
       // Expo 的开发链接可能打开系统选择器，Release 安装后显式冷启动主 Activity。
@@ -62,6 +63,7 @@ try {
           ? [{ id: hardware.udid, identifier: device.identifier, name: device.properties?.state?.name ?? device.deviceProperties?.name }] : [];
       });
       const device = selectDevice(devices, values.device);
+      run("pnpm", ["setup:speech", "--platform", "ios"]);
       // EAS 在临时目录预构建，先把新原生指纹保留在当前工作区供后续 OTA 使用。
       run("pnpm", ["exec", "hot-updater", "fingerprint", "create"]);
       const builds = join(root, ".data/builds");

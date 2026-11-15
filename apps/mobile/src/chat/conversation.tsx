@@ -17,6 +17,7 @@ import { AttachmentMenu, ComposerMenu, ReasoningMenu, reasoningLabels, type Comp
 import { ModelPicker } from "./model-picker";
 import { MessageAttachments } from "./message-attachments";
 import { SettingsDrawer } from "./settings-drawer";
+import { useSpeechInput } from "./use-speech-input";
 
 const messageStatus: Record<Message["status"], string> = {
   accepted: "已接收",
@@ -278,6 +279,7 @@ export function Conversation({
     .filter((item) => item.topic_id === id && !messages.some((message) => message.submission_id === item.submission_id))
     .sort((a, b) => a.created_at - b.created_at);
   const canWrite = topic?.status === "ready" || (!!newProfileId && topic?.status !== "error");
+  const speech = useSpeechInput(id, canWrite && !picking, draft, onDraftChange);
   const canSend = canWrite && workspace.ready && !sending && !picking;
   const canControl = workspace.network === "online" && workspace.connector_online === true;
   const isModelCommand = !attachments.length && draft.trim().toLowerCase() === "/model";
@@ -290,8 +292,9 @@ export function Conversation({
   const reasoningLegacy = canControl && workspace.reasoning_supported !== true;
   const reasoningBlocked = reasoningLegacy && (reasoningStatus !== undefined || reasoning !== null);
   const attachmentsBlocked = canControl && workspace.attachments_supported !== true;
-  const sendDisabled = !canSend || (!draft.trim() && !attachments.length) || (!!attachments.length && attachmentsBlocked)
+  const sendDisabled = !canSend || (!draft.trim() && !attachments.length && !speech.busy) || (!!attachments.length && attachmentsBlocked)
     || (isModelCommand ? !canControl : reasoningBlocked);
+  const speechDisabled = sending || speech.state === "stopping" || (!speech.busy && (!canWrite || picking || openingSkills));
   const attachmentDisabled = !canWrite || picking || sending || attachments.length >= MAX_ATTACHMENTS;
   const reasoningUnavailable = !canControl ? "重新连接 Hermes 后即可切换思考强度。"
     : reasoningLegacy ? "更新服务端和连接器后即可切换思考强度。"
@@ -358,21 +361,24 @@ export function Conversation({
   }
 
   async function send() {
-    const text = draft.trim();
     if (enqueueing.current || sendDisabled) return;
-    haptic(isModelCommand ? "light" : "medium");
-    if (isModelCommand) {
-      Keyboard.dismiss();
-      setError(undefined);
-      setCommandNotice(undefined);
-      setModelPicker(true);
-      onDraftChange("");
-      return;
-    }
     enqueueing.current = true;
     setSending(true);
     setError(undefined);
     try {
+      const finalDraft = await speech.stop();
+      if (finalDraft === null) return;
+      const text = finalDraft.trim();
+      const modelCommand = !attachments.length && text.toLowerCase() === "/model";
+      if ((!text && !attachments.length) || (modelCommand ? !canControl : reasoningBlocked)) return;
+      haptic(modelCommand ? "light" : "medium");
+      if (modelCommand) {
+        Keyboard.dismiss();
+        setCommandNotice(undefined);
+        setModelPicker(true);
+        onDraftChange("");
+        return;
+      }
       await workspace.enqueue({ submission_id: randomUUID(), topic_id: id, text, created_at: Date.now(),
         ...(attachments.length && { attachments }),
         ...(newProfileId && { profile_id: newProfileId }) });
@@ -637,16 +643,16 @@ export function Conversation({
         ))}
       </ScrollView>
       <View style={[chat.column, chat.composer, { borderTopColor: colors.edge }]}>
-        {error && <Notice>{error}</Notice>}
+        {(error ?? speech.error) && <Notice>{error ?? speech.error}</Notice>}
         {commandNotice && <Text accessibilityLiveRegion="polite" style={styles.muted}>{commandNotice}</Text>}
         {isModelCommand && !canControl && <Text style={styles.muted}>连接 Hermes 后即可选择模型。</Text>}
         {reasoningBlocked && <Text accessibilityLiveRegion="polite" style={styles.muted}>更新 Hermes 连接器后可继续发送。</Text>}
         {!!attachments.length && attachmentsBlocked && <Notice>更新服务端和连接器后可发送附件。</Notice>}
         <ScrollView horizontal accessibilityLabel="会话操作" keyboardShouldPersistTaps="handled"
           showsHorizontalScrollIndicator={false} style={chat.toolbarScroll} contentContainerStyle={chat.toolbar}>
-          <Action compact icon="command" title="命令" disabled={!canWrite} onPress={() => { Keyboard.dismiss(); setMenu("commands"); }} />
+          <Action compact icon="command" title="命令" disabled={!canWrite || speech.busy} onPress={() => { Keyboard.dismiss(); setMenu("commands"); }} />
           <Action compact icon="skill" title={openingSkills ? "正在加载技能…" : "技能"}
-            disabled={!canWrite || openingSkills || (topic?.status !== "ready" && !canControl)}
+            disabled={!canWrite || speech.busy || openingSkills || (topic?.status !== "ready" && !canControl)}
             onPress={() => { Keyboard.dismiss(); void openSkills(); }} />
           {running && (
             <Action compact title={stopping ? "停止中…" : "停止回复"} icon="stop"
@@ -669,48 +675,68 @@ export function Conversation({
             ))}
           </ScrollView>
         )}
-        <View style={[chat.composerRow, { backgroundColor: colors.secondary, borderColor: draftFocused ? colors.accent : colors.edge }]}>
-          <Pressable accessibilityRole="button" accessibilityLabel="添加附件"
-            accessibilityState={{ disabled: attachmentDisabled, busy: picking, expanded: menu === "attachments" }}
-            disabled={attachmentDisabled} onPress={() => { haptic("light"); Keyboard.dismiss(); setMenu("attachments"); }}
-            style={({ pressed }) => [chat.iconButton, (pressed || attachmentDisabled) && styles.faded]}>
-            {picking ? <ActivityIndicator size="small" color={colors.accent} /> : <Icon name="attachment" size={22} color={colors.accent} />}
-          </Pressable>
-          <View style={[chat.composerDivider, { backgroundColor: colors.edge }]} />
-          <Field
-            accessibilityLabel="消息"
-            placeholder={attachments.length ? "添加描述…" : "发消息给 Hermes"}
-            style={chat.draft}
-            multiline
-            numberOfLines={Platform.OS === "web" ? 1 : undefined}
-            editable={canWrite && !sending}
-            value={draft}
-            onChangeText={onDraftChange}
-            onFocus={() => setDraftFocused(true)}
-            onBlur={() => setDraftFocused(false)}
-          />
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="发送"
-            accessibilityState={{ disabled: sendDisabled, busy: sending }}
-            disabled={sendDisabled}
-            onPress={() => void send()}
-            onFocus={() => setSendFocused(true)}
-            onBlur={() => setSendFocused(false)}
-            style={[chat.sendButton, sendFocused && !sendDisabled && { borderColor: colors.accent }]}
-          >
-            {({ pressed }) => (
-              <View style={[
-                chat.sendCircle,
-                !sendDisabled && { backgroundColor: colors.accentFill },
-                pressed && chat.pressed,
-              ]}>
-                {sending ? <ActivityIndicator size="small" color={colors.muted} /> : (
-                  <Icon name="send" size={22} color={sendDisabled ? colors.muted : colors.onAccent} />
-                )}
-              </View>
-            )}
-          </Pressable>
+        <View style={chat.composerControls}>
+          <View style={[chat.composerRow, { backgroundColor: colors.secondary, borderColor: draftFocused ? colors.accent : colors.edge }]}>
+            <Pressable accessibilityRole="button" accessibilityLabel="添加附件"
+              accessibilityState={{ disabled: attachmentDisabled, busy: picking, expanded: menu === "attachments" }}
+              disabled={attachmentDisabled} onPress={() => { haptic("light"); Keyboard.dismiss(); setMenu("attachments"); }}
+              style={({ pressed }) => [chat.iconButton, (pressed || attachmentDisabled) && styles.faded]}>
+              {picking ? <ActivityIndicator size="small" color={colors.accent} /> : <Icon name="attachment" size={22} color={colors.accent} />}
+            </Pressable>
+            <View style={[chat.composerDivider, { backgroundColor: colors.edge }]} />
+            <Field
+              accessibilityLabel="消息"
+              placeholder={speech.busy ? "正在聆听…" : attachments.length ? "添加描述…" : "发消息给 Hermes"}
+              style={chat.draft}
+              multiline
+              numberOfLines={Platform.OS === "web" ? 1 : undefined}
+              editable={canWrite && !sending && !speech.busy}
+              value={draft}
+              onChangeText={onDraftChange}
+              onFocus={() => setDraftFocused(true)}
+              onBlur={() => setDraftFocused(false)}
+            />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="发送"
+              accessibilityState={{ disabled: sendDisabled, busy: sending }}
+              disabled={sendDisabled}
+              onPress={() => void send()}
+              onFocus={() => setSendFocused(true)}
+              onBlur={() => setSendFocused(false)}
+              style={[chat.sendButton, sendFocused && !sendDisabled && { borderColor: colors.accent }]}
+            >
+              {({ pressed }) => (
+                <View style={[
+                  chat.sendCircle,
+                  !sendDisabled && { backgroundColor: colors.accentFill },
+                  pressed && chat.pressed,
+                ]}>
+                  {sending ? <ActivityIndicator size="small" color={colors.muted} /> : (
+                    <Icon name="send" size={22} color={sendDisabled ? colors.muted : colors.onAccent} />
+                  )}
+                </View>
+              )}
+            </Pressable>
+          </View>
+          {speech.available && <Pressable accessibilityRole="button"
+            accessibilityLabel={speech.busy ? "停止语音输入" : "开始语音输入"}
+            accessibilityState={{ disabled: speechDisabled, selected: speech.busy,
+              busy: speech.state === "starting" || speech.state === "stopping" }}
+            disabled={speechDisabled} onPress={() => {
+              if (speechDisabled) return;
+              haptic("light");
+              Keyboard.dismiss();
+              setMenu(undefined);
+              setError(undefined);
+              if (speech.busy) void speech.stop();
+              else void speech.start();
+            }}
+            style={({ pressed }) => [chat.iconButton, chat.speechButton, (pressed || speechDisabled) && styles.faded]}>
+            {speech.state === "starting" || speech.state === "stopping"
+              ? <ActivityIndicator size="small" color={colors.error} />
+              : <Icon name={speech.busy ? "stop" : "microphone"} size={22} color={speech.busy ? colors.error : colors.accent} />}
+          </Pressable>}
         </View>
       </View>
       {settingsOpen ? <SettingsDrawer busy={settingsBusy} canWrite={canWrite} reasoningLabel={reasoningLabel}
@@ -764,7 +790,11 @@ const chat = StyleSheet.create({
   chipName: { maxWidth: 140 },
   iconButton: { width: touchSize, height: touchSize, alignItems: "center", justifyContent: "center" },
   composerDivider: { height: 22, width: StyleSheet.hairlineWidth, marginBottom: (touchSize - 22) / 2 },
+  composerControls: { flexDirection: "row", alignItems: "flex-end", gap: 8 },
+  speechButton: { flexShrink: 0, marginBottom: 4 },
   composerRow: {
+    flex: 1,
+    minWidth: 0,
     flexDirection: "row",
     alignItems: "flex-end",
     borderRadius: 24,

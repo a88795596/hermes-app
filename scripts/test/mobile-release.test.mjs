@@ -53,6 +53,7 @@ test("Android 从项目目录生成原生工程，再对唯一真机执行 Relea
   assert.equal(result.status, 0, result.stderr);
   const builds = result.calls.filter(call => call.name === "pnpm");
   assert.deepEqual(builds.map(call => call.args), [
+    ["setup:speech", "--platform", "android"],
     ["exec", "expo", "prebuild", "--platform", "android", "--no-install"],
     ["exec", "expo", "run:android", "--variant", "release", "--device", "phone-one", "--no-bundler"],
   ]);
@@ -87,6 +88,9 @@ test("iOS 使用本地 Ad Hoc 构建产物，验证签名后安装并启动选�
   assert.equal(result.status, 0, result.stderr);
   const build = result.calls.find(call => call.name === "pnpm" && call.args.includes("build"));
   const fingerprint = result.calls.find(call => call.args.includes("fingerprint"));
+  const speech = result.calls.find(call => call.name === "pnpm" && call.args.includes("setup:speech"));
+  assert.ok(speech && result.calls.indexOf(speech) < result.calls.indexOf(fingerprint), "准备离线语音资源后才生成原生指纹与构建归档");
+  assert.deepEqual(speech.args, ["setup:speech", "--platform", "ios"]);
   assert.ok(fingerprint && result.calls.indexOf(fingerprint) < result.calls.indexOf(build));
   assert.deepEqual(fingerprint.args, ["exec", "hot-updater", "fingerprint", "create"]);
   assert.ok(build.args.includes("--local"));
@@ -99,6 +103,15 @@ test("iOS 使用本地 Ad Hoc 构建产物，验证签名后安装并启动选�
   assert.ok(install.args.at(-1).startsWith(join(result.root, ".data/builds/ios-")));
   assert.ok(result.calls.findIndex(call => call.name === "codesign") < result.calls.indexOf(install));
   assert.deepEqual(result.calls.at(-1).args, ["devicectl", "device", "process", "launch", "--device", "iphone-one", "--terminate-existing", "hermes.cashcat.cn"]);
+});
+
+test("语音资源准备失败后不继续原生指纹、构建或安装", (t) => {
+  for (const platform of ["ios", "android"]) {
+    const result = run(t, platform, [], { FAIL_STEP: "setup:speech" });
+    assert.notEqual(result.status, 0);
+    assert.ok(result.calls.some(call => call.args.includes("setup:speech")));
+    assert.ok(!result.calls.some(call => call.args.some(arg => ["fingerprint", "build", "prebuild", "run:android", "install", "launch"].includes(arg))));
+  }
 });
 
 test("iOS 构建失败后不安装遗留产物", (t) => {
