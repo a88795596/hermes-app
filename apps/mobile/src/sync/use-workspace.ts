@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
-import type { AttachmentUpload, Control, InboxItem, Message, MobileNotice, ModelRequest, ModelSelectionRequest, Profile, ReasoningEffort, ReasoningRequest, Topic, TopicDetail } from "@hermes-mobile/protocol";
+import type { AttachmentUpload, Control, InboxItem, Message, MobileNotice, ModelRequest, ModelSelectionRequest, Profile, ReasoningEffort, ReasoningRequest, SessionStatus, Topic, TopicDetail } from "@hermes-mobile/protocol";
 import type { Session } from "../auth/session";
 import { openCache, type Cache } from "../db/cache";
 import { ApiError, request } from "./api";
@@ -35,6 +35,7 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
   const [cache, setCache] = useState<Cache>();
   const [directory, setDirectory] = useState(emptyDirectory);
   const [detail, setDetail] = useState<TopicDetail>();
+  const [activity, setActivity] = useState<{ topicId: string; streamingIds: string; value: SessionStatus["activity"] }>();
   const [pending, setPending] = useState<Pending[]>([]);
   const [foreground, setForeground] = useState(AppState.currentState !== "background");
   const [network, setNetwork] = useState<"connecting" | "online" | "offline">("connecting");
@@ -46,6 +47,8 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
   const hasRemoteTopic = !localTopic || detail?.topic.topic_id === topicId
     || directory.topics.some((topic) => topic.topic_id === topicId);
   const remoteId = hasRemoteTopic ? topicId : null;
+  const streamingIds = detail?.topic.topic_id === topicId
+    ? detail.messages.filter((message) => message.status === "streaming").map((message) => message.message_id).join(",") : "";
   const active = useRef(true);
   const visibleTopic = useRef(topicId);
   const remoteTopic = useRef(remoteId);
@@ -119,6 +122,28 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
       throw error;
     }
   }, [endSession, session]);
+
+  useEffect(() => {
+    if (!cache || !foreground || !remoteId || sessionEnded || network === "offline" || !directory.connector_online) {
+      setActivity(undefined);
+      return;
+    }
+    const abort = new AbortController();
+    const id = remoteId;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    async function poll() {
+      try {
+        const status = await call<SessionStatus>(`/topics/${id}/status`, { signal: abort.signal });
+        if (!abort.signal.aborted) setActivity({ topicId: id, streamingIds, value: status.activity });
+      } catch {
+        // 查询失败不等于任务完成，保留本次前台会话最后确认的状态。
+      } finally {
+        if (!abort.signal.aborted) timer = setTimeout(poll, 3000);
+      }
+    }
+    void poll();
+    return () => { abort.abort(); clearTimeout(timer); };
+  }, [cache, call, directory.connector_online, foreground, network, remoteId, sessionEnded, streamingIds]);
 
   const createTopic = useCallback((id: string, profileId: string, signal?: AbortSignal) => call<Topic>("/topics", {
     method: "POST", body: { request_id: id, profile_id: profileId }, signal,
@@ -508,6 +533,8 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
   return {
     ...directory,
     detail: detail?.topic.topic_id === topicId ? detail : undefined,
+    activity: foreground && activity?.topicId === topicId && (!streamingIds || activity.streamingIds === streamingIds)
+      ? activity.value : undefined,
     pending,
     network,
     live,

@@ -120,12 +120,31 @@ export class CanonicalConnector {
     if (!binding || binding.profileRef !== profile_ref || binding.sessionId !== session_id) {
       throw new Error('无法验证 Hermes 会话绑定');
     }
-    const { gateway } = await this.#attach(binding);
+    const session = await this.#attach(binding);
+    const { gateway } = session;
     try {
       if (kind === 'skills' && typeof this.access !== 'string') {
         return { kind, skills: await webappSkills(this.access, profile_ref) };
       }
-      const info = await gateway.rpc('session.info', { session_id }, undefined, queryTimeout);
+      const deadline = Date.now() + queryTimeout;
+      let subagents: unknown[] = [];
+      let info: JsonObject;
+      if (kind === 'status') {
+        try {
+          // 先查子任务再读父执行，覆盖后台结果唤醒下一轮的交接。
+          const roster = await gateway.rpc('subagent.list', { session_id }, undefined, queryTimeout);
+          if (!Array.isArray(roster.subagents)) throw new Error('Hermes 子任务状态无效');
+          subagents = roster.subagents;
+        } catch (error) {
+          if (!(error instanceof GatewayRefusal && (error.code === -32601 || error.reason === 'unsupported_projection'))) throw error;
+        }
+        const raw = await gateway.rpc('session.resume', { session_id, omit_messages: true }, undefined, Math.max(1, deadline - Date.now()));
+        const snapshot = parseSessionSnapshot(raw);
+        this.#checkSnapshot(session, snapshot);
+        info = { ...object(raw.info), running: snapshot.running, message_count: raw.message_count };
+      } else {
+        info = await gateway.rpc('session.info', { session_id }, undefined, Math.max(1, deadline - Date.now()));
+      }
       if (info.profile_id !== binding.profileId) throw new Error('Hermes 返回了意外的配置档案');
       if (kind === 'version') return { kind, version: runtimeVersion(info.version) };
       if (kind === 'skills') {
@@ -137,7 +156,7 @@ export class CanonicalConnector {
         });
         return { kind, skills: skillList(skills) };
       }
-      return { kind, status: sessionStatus(info, this.spool.activeTurns(topic_id)) };
+      return { kind, status: sessionStatus(info, this.spool.activeTurns(topic_id), subagents) };
     } catch (error) {
       if (error instanceof GatewayRefusal && error.code === -32601) throw new QueryUnavailable();
       throw error;

@@ -119,6 +119,38 @@ test("仅当前会话回复中显示流光，等待、结束、失败、停止�
   assert.equal(findNode(list.screen, (node) => node.type === "AssistantStreamBorder"), undefined);
 });
 
+test("用户提交结束后，Hermes 自动续轮从开始到完成持续显示流光", () => {
+  const continuation = { role: "assistant", status: "streaming", text: "" };
+  const screen = mountWorkspace({ params: { page: "conversation", topicId: "topic" }, context: {
+    drafts: {}, draftAttachments: {}, showProcess: {}, workspace: {
+      detail: { topic: { topic_id: "topic" }, messages: [
+        { role: "user", status: "final" }, { role: "assistant", status: "final" }, continuation,
+      ] },
+    },
+  } });
+  const border = () => findNode(screen.render(), (node) => node.type === "AssistantStreamBorder");
+  assert.ok(border(), "没有新用户提交或回复正文时，自动续轮也处于执行中");
+  continuation.text = "继续核验结果";
+  assert.ok(border());
+  continuation.status = "final";
+  assert.equal(border(), undefined, "自动续轮真正完成后关闭流光");
+});
+
+test("主轮结束但后台子任务仍运行时保留流光，原生确认空闲后关闭", () => {
+  const screen = mountWorkspace({ params: { page: "conversation", topicId: "topic" }, context: {
+    drafts: {}, draftAttachments: {}, showProcess: {}, workspace: {
+      activity: "running",
+      detail: { topic: { topic_id: "topic" }, messages: [{ role: "user", status: "final" }, { role: "assistant", status: "final" }] },
+    },
+  } });
+  const border = () => findNode(screen.render(), (node) => node.type === "AssistantStreamBorder");
+  assert.ok(border());
+  screen.state.workspace.activity = "idle";
+  assert.equal(border(), undefined);
+  screen.state.workspace.detail.messages.push({ role: "assistant", status: "streaming" });
+  assert.equal(border(), undefined, "已确认的原生空闲状态覆盖过期 streaming 投影");
+});
+
 function mountSettings(update, message, options = {}) {
   const { screen: settings, ...state } = mountWorkspace({ update, message, ...options });
   const button = findNode(settings, (node) => node.type === "Pressable" && node.props.accessibilityLabel === "检查更新");

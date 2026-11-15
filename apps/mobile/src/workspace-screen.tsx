@@ -301,8 +301,9 @@ function Workspace() {
             if (profileId) startConversation(profileId);
           }}
         />
-        {workspace.detail?.topic.topic_id === id && workspace.detail.messages.some((message) =>
-          message.role === "user" && message.status === "streaming") && <AssistantStreamBorder />}
+        {workspace.detail?.topic.topic_id === id && (workspace.activity === undefined
+          ? workspace.detail.messages.some((message) => message.status === "streaming")
+          : workspace.activity === "running") && <AssistantStreamBorder />}
       </View>
     );
   }

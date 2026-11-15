@@ -49,14 +49,22 @@ export async function webappSkills({ origin, token }: WebappAccess, profile: str
   return skillList(skills.filter((item: unknown) => object(item)?.enabled !== false));
 }
 
-export function sessionStatus(value: unknown, turns: Turn[]): SessionStatus {
+export function sessionStatus(value: unknown, turns: Turn[], subagents: unknown[] = []): SessionStatus {
   const item = object(value);
-  if (!item) throw new Error('Hermes 会话状态无效');
+  if (!item || (item.running !== undefined && typeof item.running !== 'boolean')) throw new Error('Hermes 会话状态无效');
   const model = boundedText(string(item.model) ?? '', 512).trim();
   const count = integer(item.message_count);
-  const activity = turns.some(({ status }) => status === 'streaming') ? 'running'
+  const children = subagents.map((value) => {
+    const status = string(object(value)?.status);
+    if (!status || !['queued', 'running', 'completed', 'failed', 'error', 'timeout', 'interrupted'].includes(status)) {
+      throw new Error('Hermes 子任务状态无效');
+    }
+    return status;
+  });
+  const activity = item.running === true || children.some((status) => status === 'running' || status === 'queued') ? 'running'
+    : item.running !== false && turns.some(({ status }) => status === 'streaming') ? 'running'
     : turns.some(({ status }) => status === 'queued') ? 'queued'
-    : turns.length ? 'unknown' : 'idle';
+    : item.running === false || !turns.length ? 'idle' : 'unknown';
   return {
     activity,
     ...(model && { model }),

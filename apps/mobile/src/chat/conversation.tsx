@@ -566,7 +566,7 @@ export function Conversation({
                 messageOffsets.current.set(message.message_id, nativeEvent.layout.y);
                 if (message.message_id === targetMessageId && focusTarget.current) keepLatestVisible();
               }}
-              style={[chat.messageGroup, message.message_id === targetMessageId && { backgroundColor: colors.tint, borderRadius: 12 }]}>
+              style={chat.messageGroup}>
               <View style={[chat.message, outgoing ? [chat.outgoing, { maxWidth: messageWidth }] : chat.incoming, startGroup && chat.startGroup]}>
                 {!!process?.length && <ProcessTimeline steps={process} final={message.status === "final"} />}
                 {(!!message.text || !!message.attachments?.length) && (

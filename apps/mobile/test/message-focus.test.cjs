@@ -87,7 +87,7 @@ function props(overrides = {}) {
     onDraftChange() {}, onAttachmentsChange() {}, ...overrides };
 }
 
-test("通知目标异步加载后定位并高亮，后续布局变化不跳到底部", () => {
+test("通知目标异步加载后定位，后续布局变化不跳到底部", () => {
   const input = props({ targetMessageId: "reply" });
   const screen = mount(input);
   transcript(screen.render()).props.onContentSizeChange();
@@ -96,12 +96,26 @@ test("通知目标异步加载后定位并高亮，后续布局变化不跳到�
   let tree = screen.render();
   layout(message(tree, "reply"), 480);
   assert.deepEqual(screen.calls.at(-1), { kind: "message", y: 472, animated: false });
-  assert.equal(Object.assign({}, ...[message(tree, "reply").props.style].flat(Infinity)).backgroundColor, "highlight");
   transcript(tree).props.onScroll(scrollEvent(1000));
   transcript(tree).props.onContentSizeChange();
   assert.equal(screen.calls.at(-1).kind, "message", "程序滚动触发 onScroll 不能恢复跟随底部");
   layout(message(tree, "reply"), 620);
   assert.equal(screen.calls.at(-1).y, 612, "图片等内容改变高度后更新目标位置");
+});
+
+test("通知定位的回复保持助手样式，只有用户消息显示发送气泡", () => {
+  for (const targetMessageId of [undefined, "reply"]) {
+    const input = props({ targetMessageId });
+    input.workspace.detail.messages = [{ ...reply("question"), role: "user" }, reply("reply")];
+    const tree = mount(input).render();
+    const answer = message(tree, "reply");
+    const hasBubble = (node) => Object.assign({}, ...[node.props.style].flat(Infinity)).backgroundColor === "highlight";
+    assert.equal(find(answer, hasBubble), undefined, "助手回复及其容器不能套用发送气泡背景");
+    assert.ok(find(answer, (node) => node.type === "AnswerMarkdown" && node.props.text === "reply"));
+    const question = message(tree, "question");
+    assert.ok(find(question, hasBubble), "用户消息保留发送气泡");
+    assert.ok(find(question, (node) => node.props.accessibilityLabel === "你：question"));
+  }
 });
 
 test("切换通知目标能定位已布局的消息，切换话题不会保留旧目标", () => {
