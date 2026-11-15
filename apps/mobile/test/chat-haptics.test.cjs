@@ -3,7 +3,7 @@ const { readFileSync } = require("node:fs");
 const test = require("node:test");
 const ts = require("typescript");
 
-function mount(file, name, props) {
+function mount(file, name, props, speech) {
   const values = [], effects = [], feedback = [];
   const dimensions = { width: 390, height: 844 };
   let cursor = 0;
@@ -55,6 +55,9 @@ function mount(file, name, props) {
       case "./answer-markdown": return { AnswerMarkdown: "AnswerMarkdown" };
       case "./message-attachments": return { MessageAttachments: "MessageAttachments" };
       case "./attachments": return { pickAttachments: async () => [] };
+      case "./use-speech-input": return { useSpeechInput: (_id, _enabled, draft) => speech ?? {
+        available: false, state: "idle", busy: false, start: async () => {}, stop: async () => draft,
+      } };
       default: throw new Error(`Unexpected dependency: ${dependency}`);
     }
   });
@@ -92,15 +95,114 @@ test("底部选择框的返回、标题和关闭共用顶栏，忙碌时保留�
   assert.equal(closed, 1);
 });
 
-function conversation(enqueue, draft = "测试消息", { messages = [], workspace = {}, ...props } = {}) {
+function conversation(enqueue, draft = "测试消息", { messages = [], workspace = {}, speech, ...props } = {}) {
   return mount("conversation", "Conversation", {
     id: "topic", topic: { status: "ready" }, draft, attachments: [], session: {},
     workspace: { ready: true, network: "online", connector_online: true, reasoning_supported: true, profiles: [], pending: [],
       detail: { messages }, enqueue, ...workspace },
     onDraftChange() {}, onAttachmentsChange() {},
     ...props,
-  });
+  }, speech);
 }
+
+test("语音按钮独立位于输入框外侧右边，点击开始与停止都不发送消息", async () => {
+  let started = 0, stopped = 0;
+  const drafts = [];
+  const speech = { available: true, state: "idle", busy: false,
+    start: async () => { started++; }, stop: async () => { stopped++; return "已有草稿 语音"; } };
+  const screen = conversation(async () => assert.fail("麦克风按钮不能发送消息"), "已有草稿", {
+    speech, onDraftChange: (text) => drafts.push(text),
+  });
+  const tree = screen.render();
+  const mic = find(tree, (node) => node.props.accessibilityLabel === "开始语音输入");
+  assert.ok(mic, "可用设备显示语音入口");
+  const row = find(tree, (node) => Array.isArray(node.props.children)
+    && node.props.children.some((child) => child?.props?.accessibilityLabel === "消息"));
+  const labels = row.props.children.map((child) => child?.props?.accessibilityLabel).filter(Boolean);
+  assert.deepEqual(labels, ["添加附件", "消息", "发送"]);
+  const controls = find(tree, (node) => Array.isArray(node.props.children) && node.props.children.includes(row));
+  assert.deepEqual(controls.props.children, [row, mic], "语音按钮在输入框边框外，独立排列在右侧");
+  mic.props.onPress();
+  await flush();
+  assert.equal(started, 1);
+  for (const state of ["starting", "recording"]) {
+    speech.state = state;
+    speech.busy = true;
+    const tree = screen.render();
+    const stop = find(tree, (node) => node.props.accessibilityLabel === "停止语音输入");
+    assert.equal(stop.props.disabled, false, "等待权限时也能停止");
+    assert.equal(stop.props.accessibilityState.selected, true);
+    assert.equal(find(tree, (node) => node.props.accessibilityLabel === "消息").props.editable, false);
+    assert.equal(find(tree, (node) => node.props.icon === "skill").props.disabled, true);
+    assert.equal(find(tree, (node) => node.props.icon === "command").props.disabled, true, "命令中的技能入口也不能改写录音草稿");
+    stop.props.onPress();
+    await flush();
+  }
+  assert.equal(stopped, 2);
+  assert.deepEqual(drafts, [], "停止按钮不清空已有草稿");
+  speech.state = "stopping";
+  assert.equal(find(screen.render(), (node) => node.props.accessibilityLabel === "停止语音输入").props.disabled, true);
+  speech.state = "idle";
+  speech.busy = false;
+  assert.equal(find(screen.render(), (node) => node.props.accessibilityLabel === "消息").props.editable, true);
+  assert.equal(find(conversation(async () => {}).render(), (node) => node.props.accessibilityLabel === "开始语音输入"), undefined);
+});
+
+test("录音中发送等待最后转写，快速重复点击只提交一份完整草稿", async () => {
+  const queued = [], drafts = [];
+  let finish, stopped = 0;
+  const ending = new Promise((resolve) => { finish = resolve; });
+  const speech = { available: true, state: "recording", busy: true, start: async () => {},
+    stop: () => { stopped++; return ending; } };
+  const screen = conversation(async (item) => queued.push(item), "已有草稿 识别到一半", {
+    speech, onDraftChange: (text) => drafts.push(text),
+  });
+  const send = findSend(screen.render());
+  send.props.onPress();
+  send.props.onPress();
+  await flush();
+  assert.equal(stopped, 1);
+  assert.deepEqual(queued, []);
+  assert.deepEqual(drafts, []);
+  assert.equal(findSend(screen.render()).props.disabled, true);
+  finish("已有草稿 识别到最后一句");
+  await flush();
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].text, "已有草稿 识别到最后一句");
+  assert.deepEqual(drafts, [""]);
+});
+
+test("尚无实时文字时也能发送来结束录音，空结果或会话失效不会提交或清空草稿", async () => {
+  for (const final of ["最后一句", "", null]) {
+    const queued = [], drafts = [];
+    const speech = { available: true, state: "recording", busy: true, start: async () => {}, stop: async () => final };
+    const screen = conversation(async (item) => queued.push(item), "", { speech, onDraftChange: (text) => drafts.push(text) });
+    const send = findSend(screen.render());
+    assert.equal(send.props.disabled, false);
+    send.props.onPress();
+    await flush();
+    assert.deepEqual(queued.map((item) => item.text), final ? [final] : []);
+    assert.deepEqual(drafts, final ? [""] : []);
+  }
+});
+
+test("发送使用最终语音文本识别 model 命令，排队失败保留草稿", async () => {
+  const speech = { available: true, state: "recording", busy: true, start: async () => {}, stop: async () => "/model" };
+  const drafts = [];
+  const screen = conversation(async () => assert.fail("model 命令不进入消息队列"), "/mo", {
+    speech, onDraftChange: (text) => drafts.push(text),
+  });
+  findSend(screen.render()).props.onPress();
+  await flush();
+  assert.ok(find(screen.render(), (node) => node.type === "ModelPicker"));
+  assert.deepEqual(drafts, [""]);
+  const failed = conversation(async () => { throw new Error("disk full"); }, "已有草稿", {
+    speech: { ...speech, stop: async () => "已有草稿 最后一句" }, onDraftChange: () => assert.fail("失败不能清空草稿"),
+  });
+  findSend(failed.render()).props.onPress();
+  await flush();
+  assert.ok(find(failed.render(), (node) => node.type === "Notice" && node.props.children === "disk full"));
+});
 
 test("其他页面刷新不会启动会话详情的下拉刷新控件", () => {
   const screen = conversation(async () => {}, "", { workspace: { refreshing: true } });

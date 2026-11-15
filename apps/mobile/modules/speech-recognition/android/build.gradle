@@ -1,0 +1,35 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.hermesspeech'
+version = '1.0.0'
+
+def sherpaDirectory = layout.buildDirectory.dir('generated/sherpa')
+def prepareSherpa = tasks.register('prepareSherpa', Sync) {
+  from zipTree(file('../vendor/android/sherpa-onnx.aar'))
+  include 'classes.jar', 'jni/**/*.so'
+  into sherpaDirectory
+}
+
+android {
+  namespace 'expo.modules.hermesspeech'
+  defaultConfig {
+    consumerProguardFiles 'consumer-rules.pro'
+  }
+  sourceSets.main {
+    jniLibs.srcDir sherpaDirectory.get().dir('jni').asFile
+    assets.srcDirs '../vendor/model', '../vendor/licenses'
+  }
+  androidResources {
+    noCompress += ['onnx']
+  }
+}
+
+tasks.named('preBuild').configure { dependsOn prepareSherpa }
+
+dependencies {
+  implementation files(sherpaDirectory.map { it.file('classes.jar') }).builtBy(prepareSherpa)
+  testImplementation 'junit:junit:4.13.2'
+}

@@ -16,6 +16,7 @@
     "dev:updates": "pnpm --filter @hermes-mobile/updates dev",
     "app:android": "node scripts/mobile-release.mjs android",
     "app:ios": "node scripts/mobile-release.mjs ios",
+    "setup:speech": "python3 scripts/setup-speech-recognition.py",
     "ota:push": "pnpm --filter @hermes-mobile/mobile ota:deploy",
     "ota:fingerprint": "pnpm --filter @hermes-mobile/mobile ota:fingerprint",
     "ota:deploy": "pnpm --filter @hermes-mobile/mobile ota:deploy",

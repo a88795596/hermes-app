@@ -15,3 +15,7 @@ __pycache__/
 *.py[cod]
 .venv/
 .DS_Store
+# Downloaded, checksum-verified offline speech runtime and model.
+/apps/mobile/modules/speech-recognition/vendor/
+/apps/mobile/modules/speech-recognition/android/build/
+/apps/mobile/modules/speech-recognition/android/.gradle/

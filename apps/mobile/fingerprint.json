@@ -1,7 +1,7 @@
 {
   "ios": {
     "engine": "hot-updater/interface@1",
-    "hash": "4aa00af26fc1eb6037181be34ff952de68e94629799e3a53bc924b881a025563",
+    "hash": "309e31cc7cd5727d45f607d3ebc0c0e97dfb7046b0507d581c65655e55502f18",
     "sources": [
       {
         "type": "contents",
@@ -428,6 +428,15 @@
       },
       {
         "type": "contents",
+        "id": "dependency:speech-recognition",
+        "contents": "speech-recognition@",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "8f815577f4e55c4f373ddbd2ff3ca33cd2d4c6070f32f57406dd0290a849e8ca"
+      },
+      {
+        "type": "contents",
         "id": "runtime",
         "contents": "react-native@0.88.1",
         "reasons": [
@@ -446,6 +455,14 @@
       },
       {
         "type": "file",
+        "filePath": "../../scripts/setup-speech-recognition.py",
+        "reasons": [
+          "extra-source"
+        ],
+        "hash": "4c7328cc18d9119305b315c7dfbd5df5113924276f7ba0950251048eb46df8a6"
+      },
+      {
+        "type": "file",
         "filePath": "app.config.js",
         "reasons": [
           "extra-source"
@@ -458,7 +475,7 @@
         "reasons": [
           "extra-source"
         ],
-        "hash": "c3d46b8d26d9d90d51c206de9055b0333ec4e7707ad815863b95835f368ff8ba"
+        "hash": "96ed9d73fd3d31b1de3f4a22f286d33629803c08632e0db67418d6e0ee4d232f"
       },
       {
         "type": "file",
@@ -467,12 +484,60 @@
           "extra-source"
         ],
         "hash": "67822767f44d008dcb569f6a99c2d5f5bb53411149752a9f0cb8c6c3d0cc2194"
+      },
+      {
+        "type": "file",
+        "filePath": "modules/speech-recognition/HermesSpeechRecognition.podspec",
+        "reasons": [
+          "extra-source"
+        ],
+        "hash": "dfaaf1a1e291af1c787450df3f7c96a95d5d9f9bfdc0d45b5037fd93e2278614"
+      },
+      {
+        "type": "file",
+        "filePath": "modules/speech-recognition/expo-module.config.json",
+        "reasons": [
+          "extra-source"
+        ],
+        "hash": "b5c898952f0a5150e2f0081426e4345882463da8b4a530ad0a8d7f0f970a0082"
+      },
+      {
+        "type": "file",
+        "filePath": "modules/speech-recognition/index.ts",
+        "reasons": [
+          "extra-source"
+        ],
+        "hash": "dc8ebf7a515efa0eba4f0b703120a3175ea582a96335fc027d0e91cc2fffecde"
+      },
+      {
+        "type": "file",
+        "filePath": "modules/speech-recognition/ios/HermesSpeechRecognitionModule.swift",
+        "reasons": [
+          "extra-source"
+        ],
+        "hash": "aa6c1aa956f72bd01cc70be006a69bb79f95be9766140bc95d68011c24a5fb71"
+      },
+      {
+        "type": "file",
+        "filePath": "modules/speech-recognition/ios/SpeechRecognitionRuntime.swift",
+        "reasons": [
+          "extra-source"
+        ],
+        "hash": "ecb961fca42e7ef7244a6ede32b2da0634dc8beea137b0bcd123c344500c6369"
+      },
+      {
+        "type": "file",
+        "filePath": "modules/speech-recognition/ios/StreamingRecognizer.swift",
+        "reasons": [
+          "extra-source"
+        ],
+        "hash": "7bd7c4044b32a58a5bd2b8b7045c41eb9be2f9c4a826fdee8c6741385cf56a5e"
       }
     ]
   },
   "android": {
     "engine": "hot-updater/interface@1",
-    "hash": "edf763f4de8f203966cdc453c8f0fe68afdc7db8f45b3f98a9fe7f4b63a94970",
+    "hash": "a94a7c50d3d5cac709b188a03fd3214539090f61b2f6d0d43738e7a2bb2676c2",
     "sources": [
       {
         "type": "contents",
@@ -881,6 +946,15 @@
       },
       {
         "type": "contents",
+        "id": "dependency:speech-recognition",
+        "contents": "speech-recognition@",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "8f815577f4e55c4f373ddbd2ff3ca33cd2d4c6070f32f57406dd0290a849e8ca"
+      },
+      {
+        "type": "contents",
         "id": "runtime",
         "contents": "react-native@0.88.1",
         "reasons": [
@@ -899,6 +973,14 @@
       },
       {
         "type": "file",
+        "filePath": "../../scripts/setup-speech-recognition.py",
+        "reasons": [
+          "extra-source"
+        ],
+        "hash": "4c7328cc18d9119305b315c7dfbd5df5113924276f7ba0950251048eb46df8a6"
+      },
+      {
+        "type": "file",
         "filePath": "app.config.js",
         "reasons": [
           "extra-source"
@@ -911,7 +993,7 @@
         "reasons": [
           "extra-source"
         ],
-        "hash": "c3d46b8d26d9d90d51c206de9055b0333ec4e7707ad815863b95835f368ff8ba"
+        "hash": "96ed9d73fd3d31b1de3f4a22f286d33629803c08632e0db67418d6e0ee4d232f"
       },
       {
         "type": "file",
@@ -920,15 +1002,97 @@
           "extra-source"
         ],
         "hash": "67822767f44d008dcb569f6a99c2d5f5bb53411149752a9f0cb8c6c3d0cc2194"
+      },
+      {
+        "type": "file",
+        "filePath": "modules/speech-recognition/android/build.gradle",
+        "reasons": [
+          "extra-source"
+        ],
+        "hash": "ac05fc95071a65fc15a7799e09978ddc8b7ebfc78ccccaa463af0ffae63d28a6"
+      },
+      {
+        "type": "file",
+        "filePath": "modules/speech-recognition/android/consumer-rules.pro",
+        "reasons": [
+          "extra-source"
+        ],
+        "hash": "45d7617cde52e40cab0b596df43f3d1da6f49991386e2d640e17dda63edbc506"
+      },
+      {
+        "type": "file",
+        "filePath": "modules/speech-recognition/android/src/main/AndroidManifest.xml",
+        "reasons": [
+          "extra-source"
+        ],
+        "hash": "3f1f3c0c97300fc8e4dbcda1fbdbbf0775a2cf794349f2516042b6c6582f0544"
+      },
+      {
+        "type": "file",
+        "filePath": "modules/speech-recognition/android/src/main/java/expo/modules/hermesspeech/HermesSpeechRecognitionModule.kt",
+        "reasons": [
+          "extra-source"
+        ],
+        "hash": "163651bf39a61afa33e8061366378c44bf2798f325602ce4f71cba7425b177bd"
+      },
+      {
+        "type": "file",
+        "filePath": "modules/speech-recognition/android/src/main/java/expo/modules/hermesspeech/StreamingTranscript.kt",
+        "reasons": [
+          "extra-source"
+        ],
+        "hash": "ae0a71e8cda0e24ffa70fbce4310dfdd5fb3dec4dae06870f7041d8c51cc2bb8"
+      },
+      {
+        "type": "file",
+        "filePath": "modules/speech-recognition/android/src/main/java/expo/modules/hermesspeech/TranscriptText.kt",
+        "reasons": [
+          "extra-source"
+        ],
+        "hash": "9f73cd473ede96fcfcd0c20b096b2000a7052965353ce1a7807ba01c1d8ec5f8"
+      },
+      {
+        "type": "file",
+        "filePath": "modules/speech-recognition/expo-module.config.json",
+        "reasons": [
+          "extra-source"
+        ],
+        "hash": "b5c898952f0a5150e2f0081426e4345882463da8b4a530ad0a8d7f0f970a0082"
+      },
+      {
+        "type": "file",
+        "filePath": "modules/speech-recognition/index.ts",
+        "reasons": [
+          "extra-source"
+        ],
+        "hash": "dc8ebf7a515efa0eba4f0b703120a3175ea582a96335fc027d0e91cc2fffecde"
       }
     ]
   },
   "inputs": {
     "adapter": "expo",
-    "extraSources": [
-      "app.json",
-      "app.config.js",
-      "eas.json"
-    ]
+    "extraSources": {
+      "ios": [
+        "app.json",
+        "app.config.js",
+        "eas.json",
+        "modules/speech-recognition/index.ts",
+        "modules/speech-recognition/expo-module.config.json",
+        "../../scripts/setup-speech-recognition.py",
+        "modules/speech-recognition/ios",
+        "modules/speech-recognition/*.podspec"
+      ],
+      "android": [
+        "app.json",
+        "app.config.js",
+        "eas.json",
+        "modules/speech-recognition/index.ts",
+        "modules/speech-recognition/expo-module.config.json",
+        "../../scripts/setup-speech-recognition.py",
+        "modules/speech-recognition/android/src/main",
+        "modules/speech-recognition/android/*.gradle",
+        "modules/speech-recognition/android/*.pro"
+      ]
+    }
   }
 }
