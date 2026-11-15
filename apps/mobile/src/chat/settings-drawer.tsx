@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Modal, Pressable, StyleSheet, Switch, Text, View, useWindowDimensions } from "react-native";
+import { Modal, Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import Animated from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { haptic } from "../ui/haptics";
@@ -7,15 +7,13 @@ import { motion, useReduceMotion } from "../ui/motion";
 import { PageHeader } from "../ui/page-header";
 import { CloseButton, Icon, useTheme } from "../ui/theme";
 
-export function SettingsDrawer({ busy, canWrite, reasoningLabel, showProcess, onClose, onModel, onReasoning, onToggleProcess, children }: {
+export function SettingsDrawer({ busy, canWrite, reasoningLabel, onClose, onModel, onReasoning, children }: {
   busy: boolean;
   canWrite: boolean;
   reasoningLabel: string;
-  showProcess: boolean;
   onClose: () => void;
   onModel: () => void;
   onReasoning: () => void;
-  onToggleProcess: () => void;
   children?: ReactNode;
 }) {
   const { colors, styles } = useTheme();
@@ -51,13 +49,6 @@ export function SettingsDrawer({ busy, canWrite, reasoningLabel, showProcess, on
                 {"value" in item && <Text numberOfLines={2} style={[styles.caption, drawer.value]}>{item.value}</Text>}
                 <Icon name="chevron" size={15} color={colors.accent} />
               </Pressable>)}
-              <View style={[drawer.row, { borderColor: colors.edge }]}>
-                <Icon name="process" size={21} color={colors.accent} />
-                <Text style={[styles.text, drawer.label]}>显示过程</Text>
-                <Switch accessibilityLabel="显示回复过程" value={showProcess} style={{ alignSelf: "center" }}
-                  trackColor={{ false: colors.edge, true: colors.accentFill }}
-                  onValueChange={() => { haptic("selection"); onToggleProcess(); }} />
-              </View>
             </View>
           </>}
         </SafeAreaView>

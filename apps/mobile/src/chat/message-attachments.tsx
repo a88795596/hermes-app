@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { GlassView, isGlassEffectAPIAvailable } from "expo-glass-effect";
 import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { Attachment } from "@hermes-mobile/protocol";
@@ -95,9 +96,15 @@ function ReceivedFile({ item: { attachment_id, name, mime, size }, session, tint
     <Modal visible={open} transparent animationType={reduced ? "none" : "slide"} onRequestClose={() => setOpen(false)}
       supportedOrientations={["portrait", "landscape-left", "landscape-right"]}>
       <SafeAreaView style={layout.previewWindow} edges={["top"]}>
+        <View pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={StyleSheet.absoluteFill}>
+          {isGlassEffectAPIAvailable() && <GlassView style={StyleSheet.absoluteFill} glassEffectStyle="regular" colorScheme={dark ? "dark" : "light"} />}
+          {/* shortcut: Unsupported systems use the scrim; add a native blur fallback if they need frosted glass. */}
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: dark ? "rgba(0, 0, 0, 0.32)" : "rgba(53, 40, 32, 0.22)" }]} />
+        </View>
         <SafeAreaView accessibilityViewIsModal importantForAccessibility="yes" edges={["bottom", "left", "right"]}
-          style={[layout.preview, kind === "markdown" && layout.documentSheet, {
-            backgroundColor: colors.background,
+          style={[layout.preview, {
+            backgroundColor: colors.surface,
+            borderTopColor: colors.edge,
             marginTop: kind === "markdown" ? Math.min(106, height * 0.18) : Math.min(60, height * 0.12),
           }]}>
           <View style={[layout.header, { borderBottomColor: colors.edge }]}>
@@ -150,8 +157,7 @@ const layout = StyleSheet.create({
   loading: { padding: 16, flexDirection: "row", gap: 8, alignItems: "center", justifyContent: "center" },
   error: { padding: 12, gap: 8 },
   previewWindow: { flex: 1 },
-  preview: { flex: 1, minHeight: 0 },
-  documentSheet: { borderTopLeftRadius: 24, borderTopRightRadius: 24, overflow: "hidden" },
+  preview: { flex: 1, minHeight: 0, borderTopLeftRadius: 24, borderTopRightRadius: 24, borderTopWidth: StyleSheet.hairlineWidth, overflow: "hidden" },
   header: { borderBottomWidth: StyleSheet.hairlineWidth },
   imagePreview: { flex: 1, paddingHorizontal: 16, paddingVertical: 24, paddingTop: 12 },
   fullImage: { flex: 1, width: "100%", maxWidth: 800, alignSelf: "center", borderRadius: 16 },

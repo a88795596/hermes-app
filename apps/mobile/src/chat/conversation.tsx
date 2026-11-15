@@ -53,23 +53,30 @@ const activityLabel: Record<SessionStatus["activity"], string> = {
 
 function ProcessTimeline({ steps, final }: { steps: MessageProcessStep[]; final: boolean }) {
   const { colors, styles } = useTheme();
+  const [expanded, setExpanded] = useState(false);
+  const visibleSteps = expanded ? steps : steps.slice(-1);
+  const title = steps.some((step) => step.kind === "reasoning") ? "思考" : "执行过程";
   return (
     <View style={[chat.process, { borderColor: colors.edge }]}>
-      <View style={chat.sectionHeader}>
+      <Pressable accessibilityRole="button" accessibilityLabel={`${expanded ? "收起" : "展开"}${title}`}
+        accessibilityState={{ expanded }}
+        onPress={() => { haptic("selection"); setExpanded((current) => !current); }}
+        style={({ pressed }) => [chat.sectionHeader, { minHeight: touchSize }, pressed && styles.faded]}>
         <View style={[chat.sectionIcon, { backgroundColor: colors.tint }]}>
           <Icon name="sparkle" size={17} color={colors.accent} />
         </View>
-        <Text accessibilityRole="header" style={[styles.heading, chat.sectionTitle]}>
-          {steps.some((step) => step.kind === "reasoning") ? "思考" : "执行过程"}
+        <Text accessibilityRole="header" style={[styles.heading, chat.sectionTitle, { flex: 1 }]}>
+          {title}
         </Text>
-      </View>
+        <Icon name={expanded ? "down" : "chevron"} size={17} color={colors.muted} />
+      </Pressable>
       <View style={chat.processSteps}>
-        {steps.map((step, index) => {
+        {visibleSteps.map((step, index) => {
           const status = step.kind !== "tool" || (step.status === "running" && final) ? "unknown" : step.status;
           const complete = status === "succeeded";
           return (
-            <View key={index} style={chat.processStep}>
-              {index < steps.length - 1 && <View style={[chat.processRail, { backgroundColor: colors.edge }]} />}
+            <View key={expanded ? index : steps.length - 1} style={chat.processStep}>
+              {index < visibleSteps.length - 1 && <View style={[chat.processRail, { backgroundColor: colors.edge }]} />}
               <View style={[chat.processMarker, {
                 borderColor: status === "failed" ? colors.error : colors.accent,
                 backgroundColor: complete ? colors.accentFill : colors.background,
@@ -208,7 +215,7 @@ function ControlPrompt({
 }
 
 export function Conversation({
-  id, topic, newProfileId, workspace, session, draft, onDraftChange, attachments, onAttachmentsChange, onNewTopic, showProcess, onToggleProcess,
+  id, topic, newProfileId, workspace, session, draft, onDraftChange, attachments, onAttachmentsChange, onNewTopic,
   settingsOpen, onCloseSettings, targetMessageId,
 }: {
   id: string;
@@ -219,8 +226,6 @@ export function Conversation({
   session: Session;
   draft: string;
   attachments: AttachmentUpload[];
-  showProcess: boolean;
-  onToggleProcess: () => void;
   settingsOpen: boolean;
   onCloseSettings: () => void;
   onDraftChange: (value: string) => void;
@@ -556,7 +561,7 @@ export function Conversation({
         )}
         {messages.map((message, index) => {
           const outgoing = message.role === "user";
-          const process = !outgoing && showProcess ? message.process : undefined;
+          const process = !outgoing ? message.process : undefined;
           if (!outgoing && !message.text && !message.attachments?.length && !process?.length && message.status === "final") return null;
           const startGroup = messages[index - 1]?.role !== message.role;
           const attachedControls = outgoing && message.submission_id ? historyControls.get(message.submission_id) : undefined;
@@ -707,7 +712,6 @@ export function Conversation({
         </View>
       </View>
       {settingsOpen ? <SettingsDrawer busy={settingsBusy} canWrite={canWrite} reasoningLabel={reasoningLabel}
-        showProcess={showProcess} onToggleProcess={onToggleProcess}
         onModel={() => setModelPicker(true)} onReasoning={() => setMenu("reasoning")}
         onClose={() => { setModelPicker(false); setMenu(undefined); onCloseSettings(); }}>
         {modelSelection || reasoningSelection || undefined}

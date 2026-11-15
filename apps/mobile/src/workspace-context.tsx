@@ -23,7 +23,6 @@ function useSignedInWorkspace(session: Session, onSignOut: () => Promise<void>) 
   const [inboxItem, setInboxItem] = useState<InboxItem>();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [draftAttachments, setDraftAttachments] = useState<Record<string, AttachmentUpload[]>>({});
-  const [showProcess, setShowProcess] = useState<Record<string, boolean>>({});
   const [signingOut, setSigningOut] = useState(false);
   const [push, setPush] = useState<"idle" | "enabling" | "enabled">("idle");
   const [error, setError] = useState<string>();
@@ -31,7 +30,7 @@ function useSignedInWorkspace(session: Session, onSignOut: () => Promise<void>) 
   const [archiving, setArchiving] = useState(false);
   return {
     session, onSignOut, workspace, section, setSection, profileId, setProfileId, inboxProfileId, setInboxProfileId,
-    inboxItem, setInboxItem, drafts, setDrafts, draftAttachments, setDraftAttachments, showProcess, setShowProcess,
+    inboxItem, setInboxItem, drafts, setDrafts, draftAttachments, setDraftAttachments,
     signingOut, setSigningOut, push, setPush, error, setError, archiveInFlight, archiving, setArchiving,
   };
 }

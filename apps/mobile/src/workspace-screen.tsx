@@ -70,7 +70,7 @@ function Workspace() {
   const params = useLocalSearchParams<{ page?: Page | "conversation" | "inbox-item"; topicId?: string; messageId?: string; newProfileId?: string; archived?: string }>();
   const { session, onSignOut, workspace, section: rootSection, setSection,
     profileId, setProfileId, inboxProfileId, setInboxProfileId, inboxItem: selectedInboxItem, setInboxItem,
-    drafts, setDrafts, draftAttachments, setDraftAttachments, showProcess, setShowProcess,
+    drafts, setDrafts, draftAttachments, setDraftAttachments,
     signingOut, setSigningOut, push, setPush, error, setError, archiveInFlight: archiveInFlightRef, archiving, setArchiving } = useWorkspaceContext();
   const page = params.page && params.page !== "conversation" && params.page !== "inbox-item" ? params.page : rootSection;
   const chat = params.page === "conversation" && typeof params.topicId === "string"
@@ -272,7 +272,6 @@ function Workspace() {
 
   if (chat) {
     const { id, newProfileId } = chat;
-    const processVisible = showProcess[id] ?? false;
     return (
       <View style={styles.frame}>
         <PageHeader title={chatTitle} leading={<BackLink title={archived ? "已归档会话" : "话题列表"} onPress={goBack} />}
@@ -286,10 +285,8 @@ function Workspace() {
           targetMessageId={typeof params.messageId === "string" ? params.messageId : undefined}
           topic={topic}
           newProfileId={newProfileId}
-          showProcess={processVisible}
           settingsOpen={chatSettingsOpen}
           onCloseSettings={() => setChatSettingsOpen(false)}
-          onToggleProcess={() => setShowProcess((current) => ({ ...current, [id]: !current[id] }))}
           workspace={workspace}
           session={session}
           draft={drafts[id] ?? ""}
