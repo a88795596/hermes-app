@@ -61,6 +61,7 @@ function mountWorkspace({ update, message, downloaded = false, reloadError, para
       case "./workspace-context": return { useWorkspaceContext: () => state };
       case "./chat/composer-menu": return { ComposerSheet: "ComposerSheet", PickerRow: "PickerRow" };
       case "./chat/topic-list": return { TopicList: "TopicList" };
+      case "./chat/assistant-stream-border": return { AssistantStreamBorder: "AssistantStreamBorder" };
       case "./updates": return {
         currentUpdate: { id: "running-version" },
         async checkUpdateManually(confirm, confirmReload) {
@@ -99,6 +100,24 @@ function findNode(node, matches) {
     ? [node.props.leading, node.props.title, node.props.trailing]
     : node.props.children, matches);
 }
+
+test("仅当前会话回复中显示流光，等待、结束、失败、停止和其他页面不显示", () => {
+  for (const status of ["accepted", "queued", "streaming", "final", "failed", "cancelled", "unknown"]) {
+    const screen = mountWorkspace({ params: { page: "conversation", topicId: "topic" }, context: {
+      drafts: {}, draftAttachments: {}, showProcess: {}, workspace: {
+        detail: { topic: { topic_id: "topic", title: "会话" }, messages: [{ role: "user", status }] },
+      },
+    } });
+    const border = () => findNode(screen.render(), (node) => node.type === "AssistantStreamBorder");
+    assert.equal(Boolean(border()), status === "streaming", status);
+    screen.state.workspace.detail.topic.topic_id = "another-topic";
+    assert.equal(border(), undefined, "切换话题时不能使用旧会话状态");
+  }
+  const list = mountWorkspace({ context: { section: "topics", workspace: {
+    detail: { topic: { topic_id: "topic" }, messages: [{ role: "user", status: "streaming" }] },
+  } } });
+  assert.equal(findNode(list.screen, (node) => node.type === "AssistantStreamBorder"), undefined);
+});
 
 function mountSettings(update, message, options = {}) {
   const { screen: settings, ...state } = mountWorkspace({ update, message, ...options });
