@@ -1,7 +1,9 @@
-import { useMemo, type ReactNode } from "react";
+import { cloneElement, useMemo, type ReactNode } from "react";
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View, type TextStyle } from "react-native";
-import Markdown, { MarkdownIt, type RenderFunction, type RenderRules } from "react-native-markdown-renderer";
+import Markdown, { AstRenderer, MarkdownIt, renderRules, styles as defaultStyles,
+  type ASTNode, type RenderFunction, type RenderRules } from "react-native-markdown-renderer";
 import { useTheme } from "../ui/theme";
+import { MarkdownTable } from "./markdown-table";
 
 const parser = MarkdownIt({ html: false, linkify: true });
 // Stop detected URLs at Chinese punctuation while preserving explicit Markdown link targets.
@@ -38,8 +40,6 @@ function MarkdownLink({ url, color, onOpenLink, children }: {
 
 function markdownTheme(colors: ReturnType<typeof useTheme>["colors"], onOpenLink: (url: string) => void) {
   const line = StyleSheet.hairlineWidth;
-  const cell = { flex: 1, flexBasis: 0, minWidth: 0, paddingHorizontal: 10, paddingVertical: 7,
-    borderColor: colors.edge, borderBottomWidth: line, borderEndWidth: line };
   const style = StyleSheet.create({
     root: { gap: 16, minWidth: 0 },
     text: { color: colors.foreground, fontSize: 17, lineHeight: 27 },
@@ -64,13 +64,10 @@ function markdownTheme(colors: ReturnType<typeof useTheme>["colors"], onOpenLink
     listRow: { flexDirection: "row", alignItems: "flex-start", gap: 10, paddingStart: 8 },
     listMarker: { color: colors.accent, fontWeight: "600" },
     listItem: { flex: 1, gap: 4 },
-    tableContent: { flexGrow: 1 },
-    table: { flexGrow: 1, borderTopWidth: line, borderStartWidth: line, borderColor: colors.edge },
-    tableRow: { flexDirection: "row" },
+    tableRow: { flexDirection: "row", borderColor: colors.edge },
+    tableCell: { flex: 1, flexBasis: 0, minWidth: 100, paddingHorizontal: 10, paddingVertical: 7, borderColor: colors.edge },
     tableShade: { backgroundColor: colors.secondary },
     tableHeader: { backgroundColor: colors.tint },
-    tableHeaderCell: cell,
-    tableRowCell: cell,
     hr: { height: line, backgroundColor: colors.edge, marginVertical: 4 },
   });
 
@@ -81,6 +78,9 @@ function markdownTheme(colors: ReturnType<typeof useTheme>["colors"], onOpenLink
   );
   const link: RenderFunction = (node, children) => (
     <MarkdownLink key={node.key} url={node.attributes.href} color={colors.accent} onOpenLink={onOpenLink}>{children}</MarkdownLink>
+  );
+  const tableCell: RenderFunction = (node, children) => (
+    <View key={node.key} style={[style.tableCell, node.index > 0 && { borderStartWidth: 1 }]}>{children}</View>
   );
   function heading(level: number, size: TextStyle): RenderFunction {
     return function renderHeading(node, children) {
@@ -141,20 +141,37 @@ function markdownTheme(colors: ReturnType<typeof useTheme>["colors"], onOpenLink
     },
     table(node, children) {
       const columns = node.children[0]?.children[0]?.children.length ?? 1;
-      return <ScrollView key={node.key} horizontal tabIndex={0} contentContainerStyle={style.tableContent}>
-        <View style={[style.table, { width: columns * 92 }]}>{children}</View>
-      </ScrollView>;
+      return <MarkdownTable key={node.key} columns={columns}>{children}</MarkdownTable>;
     },
+    th: tableCell,
+    td: tableCell,
     tr: (node, children, [parent]) => (
-      <View key={node.key} style={[style.tableRow, parent?.type === "tbody" && node.index % 2 === 1 && style.tableShade]}>{children}</View>
+      <View key={node.key} style={[style.tableRow,
+        (parent?.type === "thead" || node.index < parent.children.length - 1) && { borderBottomWidth: 1 },
+        parent?.type === "tbody" && node.index % 2 === 1 && style.tableShade]}>{children}</View>
     ),
   };
 
   return { style, rules };
 }
 
+function stabilizeKeys(nodes: ASTNode[], parent = "answer") {
+  for (const node of nodes) {
+    node.key = `${parent}/${node.index}`;
+    stabilizeKeys(node.children, node.key);
+  }
+}
+
 export function AnswerMarkdown({ text, onOpenLink }: { text: string; onOpenLink: (url: string) => void }) {
   const { colors } = useTheme();
-  const { style, rules } = useMemo(() => markdownTheme(colors, onOpenLink), [colors, onOpenLink]);
-  return <Markdown markdownit={parser} mergeStyle={false} style={style} rules={rules}>{text}</Markdown>;
+  const render = useMemo(() => {
+    const { style, rules } = markdownTheme(colors, onOpenLink);
+    const renderer = new AstRenderer({ ...renderRules, ...rules }, { ...defaultStyles, ...style });
+    // Keep tables and their ancestors mounted while streamed text is reparsed.
+    return (nodes: ASTNode[]) => {
+      stabilizeKeys(nodes);
+      return cloneElement(renderer.render(nodes), { key: "answer" });
+    };
+  }, [colors, onOpenLink]);
+  return <Markdown markdownit={parser} renderer={render}>{text}</Markdown>;
 }

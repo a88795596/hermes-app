@@ -2,6 +2,8 @@
 
 应用使用 Expo Router，路由位于 `src/app`。 [模块边界](./src/ARCHITECTURE.md) · [本地启动步骤](../../README.md#run-the-personal-mvp)
 
+Markdown 表格支持右上角放大为横屏全屏，关闭后恢复竖屏。此功能新增 `expo-screen-orientation` 原生模块与 iOS 横屏配置，首次交付需重新编译两端原生包；仅发布 OTA 无法补齐旧包的原生能力。
+
 安装原生开发构建后，在工作区根目录启动 Metro。
 
 ```sh
