@@ -6,6 +6,7 @@ import Animated from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { DEFAULT_TOPIC_TITLE, topicTitlePreview } from "@hermes-mobile/protocol";
 import { Conversation } from "./chat/conversation";
+import { AssistantStreamBorder } from "./chat/assistant-stream-border";
 import { ComposerSheet, PickerRow } from "./chat/composer-menu";
 import { TopicList, type TopicListHandle, type TopicListRow } from "./chat/topic-list";
 import { InboxDetail, InboxList } from "./inbox/inbox";
@@ -300,6 +301,8 @@ function Workspace() {
             if (profileId) startConversation(profileId);
           }}
         />
+        {workspace.detail?.topic.topic_id === id && workspace.detail.messages.some((message) =>
+          message.role === "user" && message.status === "streaming") && <AssistantStreamBorder />}
       </View>
     );
   }
