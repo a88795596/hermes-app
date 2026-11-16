@@ -62,6 +62,24 @@ function isRevision(value: unknown): boolean {
   return typeof value === 'bigint' ? value >= 0n && value <= 9_223_372_036_854_775_807n : integer(value) !== undefined;
 }
 
+function assistantMessage(turn: Turn, key: string[]): Extract<ConnectorEvent, { type: 'message' }> | undefined {
+  if (!turn.text && !turn.process?.length && !turn.attachments?.length) return;
+  return {
+    type: 'message', event_id: stableId([turn.topicId, 'message', ...key]), topic_id: turn.topicId,
+    message_id: turn.replyMessageId ?? stableId([turn.topicId, 'message', turn.admissionId]),
+    text: turn.text, status: turn.status === 'streaming' ? 'streaming' : 'final',
+    ...(turn.process?.length ? { process: turn.process } : {}),
+    ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
+    ...(turn.submissionId ? { submission_id: turn.submissionId } : {}),
+  };
+}
+
+function reusedReplyText(turn: Turn | undefined, text: string | undefined): string | undefined {
+  if (!turn?.replyMessageId || !text) return text;
+  const commentary = boundedText(redactProcessText(text).trim(), MAX_MESSAGE_PROCESS_TEXT_BYTES);
+  return turn.process?.some((step) => step.kind === 'commentary' && step.text === commentary) ? text : undefined;
+}
+
 export class CanonicalConnector {
   readonly #profiles = new Map<string, Profile>();
   readonly #sessions = new Map<string, Session>();
@@ -767,7 +785,8 @@ export class CanonicalConnector {
     }
     if (!session.cursor || session.cursor.epoch !== cursor.epoch || BigInt(session.cursor.sequence) <= BigInt(cursor.sequence)) {
       const title = topicTitleEvent(session.binding, snapshot.title, [cursor.epoch, cursor.sequence]);
-      this.spool.record(session.binding.topicId, title ? [title] : [], cursor);
+      // 仅有内存中的思考增量时，快照水位不能越过仍需回放的内容。
+      this.spool.record(session.binding.topicId, title ? [title] : [], session.reasoning.size ? undefined : cursor);
       session.cursor = cursor;
     }
   }
@@ -790,10 +809,11 @@ export class CanonicalConnector {
   #applyReceipt(session: Session, receipt: CanonicalAdmission, submissionId: string | null): void {
     const previous = this.spool.turn(session.binding.topicId, receipt.admissionId);
     const status = receiptStatus(receipt);
+    const finalText = receipt.responseReused ? reusedReplyText(previous, receipt.finalText) : receipt.finalText;
     if (previous?.status === 'streaming' && status === 'queued') return;
     if (previous && ['final', 'failed', 'cancelled'].includes(previous.status) &&
-      (previous.status !== status || previous.text || previous.attachments?.length || !receipt.finalText)) return;
-    const text = receipt.finalText || previous?.text || '';
+      (previous.status !== status || previous.text || previous.attachments?.length || !finalText)) return;
+    const text = finalText || previous?.text || '';
     if (previous?.status === status && previous.submissionId === submissionId && previous.text === text
       && status !== 'queued') return;
     const reasoning = session.reasoning.get(receipt.admissionId);
@@ -801,6 +821,7 @@ export class CanonicalConnector {
     if (terminal) session.reasoning.delete(receipt.admissionId);
     this.#setTurn(session, {
       topicId: session.binding.topicId, admissionId: receipt.admissionId, submissionId, text, status,
+      replyMessageId: previous?.replyMessageId,
       process: terminal && reasoning ? addProcessText(previous?.process, 'reasoning', redactProcessText(reasoning)) : previous?.process,
     }, [receipt.admissionId, 'receipt', status, receipt.authorityEpoch, receipt.executionGeneration ?? ''],
     terminal);
@@ -883,6 +904,14 @@ export class CanonicalConnector {
           this.#applyReceipt(session, receipt, receipt.submissionId);
         }
       }
+    } else if (projection?.type === 'steering.applied') {
+      const turn = this.spool.turn(binding.topicId, projection.admissionId);
+      if (event.authorityEpoch === session.gateway.identity.authorityEpoch && turn?.status === 'streaming'
+        && !this.#receiving.has(JSON.stringify([turn.topicId, turn.admissionId]))) {
+        this.#splitReply(session, turn, key, cursor);
+        session.cursor = cursor;
+        return;
+      }
     } else if (projection && 'admissionId' in projection && projection.admissionId) {
       const admissionId = projection.admissionId;
       const existing = this.spool.turn(binding.topicId, admissionId);
@@ -891,6 +920,7 @@ export class CanonicalConnector {
         // 保留完整思考块以隐藏跨增量的凭据，重连从上一条已持久化事件补拉。
         const value = (session.reasoning.get(admissionId) ?? '') + projection.text;
         session.reasoning.set(admissionId, boundedText(value, maxReasoningBytes));
+        session.cursor = cursor;
         return;
       }
       const previousText = existing?.text ?? '';
@@ -929,7 +959,8 @@ export class CanonicalConnector {
         const provided = projection.submissionId;
         if (!submissionId && provided && this.spool.hasIntent(binding.topicId, provided)) submissionId = provided;
         status = outcomeStatus(projection.outcome);
-        text = projection.responseReused ? previousText || projection.text || ''
+        // 已展示的内容可能位于插话前的气泡，避免把它复制到新气泡。
+        text = projection.responseReused ? previousText || reusedReplyText(existing, projection.text) || ''
           : projection.text || previousText;
         if (!process?.some((step) => step.kind === 'reasoning')) {
           process = addProcessText(process, 'reasoning', projection.reasoning && redactProcessText(projection.reasoning));
@@ -938,14 +969,28 @@ export class CanonicalConnector {
       }
       // 已结束的回复保留已确认的终态。
       if (projection.type !== 'reasoning.delta' && (!existing || !['final', 'failed', 'cancelled'].includes(existing.status))) {
-        this.#setTurn(session, { topicId: binding.topicId, admissionId, submissionId, text, status, process },
+        this.#setTurn(session, { topicId: binding.topicId, admissionId, submissionId, text, status, process,
+          replyMessageId: existing?.replyMessageId },
           key, publishMessage, cursor);
         session.cursor = cursor;
         return;
       }
     }
-    this.spool.record(binding.topicId, title ? [title] : [], cursor);
+    this.spool.record(binding.topicId, title ? [title] : [], session.reasoning.size ? undefined : cursor);
     session.cursor = cursor;
+  }
+
+  #splitReply(session: Session, turn: Turn, key: string[], cursor: Cursor): void {
+    const buffered = session.reasoning.get(turn.admissionId);
+    const process = buffered ? addProcessText(turn.process, 'reasoning', redactProcessText(buffered)) : turn.process;
+    const closed = assistantMessage({ ...turn, process, status: 'final' }, key);
+    session.reasoning.delete(turn.admissionId);
+    // 只结束旧气泡，Hermes 的受理记录保持运行。新气泡在下一条可显示的事件到达时写入。
+    this.spool.record(turn.topicId, closed ? [{ id: closed.event_id, body: { ...closed } }] : [],
+      session.reasoning.size ? undefined : cursor, {
+        ...turn, replyMessageId: stableId([turn.topicId, 'message', turn.admissionId, 'steer', ...key]),
+        text: '', process: undefined, attachments: undefined,
+      });
   }
 
   #setTurn(session: Session, turn: Turn, key: string[], publishMessage = false, cursor?: Cursor): void {
@@ -971,23 +1016,16 @@ export class CanonicalConnector {
     const eventId = (kind: string) => stableId([topicId, kind, ...key]);
     const frames: ConnectorEvent[] = [];
     const text = turn.text.trim() ? boundedText(turn.text, 256 * 1024) : '';
-    if (publishMessage && (text || turn.process?.length || turn.attachments?.length)) {
-      frames.push({
-        type: 'message', event_id: eventId('message'), topic_id: topicId,
-        message_id: stableId([topicId, 'message', turn.admissionId]), text,
-        status: turn.status === 'streaming' ? 'streaming' : 'final',
-        ...(turn.process?.length ? { process: turn.process } : {}),
-        ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
-        ...(turn.submissionId ? { submission_id: turn.submissionId } : {}),
-      });
-    }
+    const message = publishMessage ? assistantMessage({ ...turn, text }, key) : undefined;
+    if (message) frames.push(message);
     if (turn.submissionId) {
       frames.push({
         type: 'submission', event_id: eventId(`submission-${turn.admissionId}`), topic_id: topicId,
         submission_id: turn.submissionId, status: turn.status,
       });
     }
-    this.spool.record(topicId, frames.map((body) => ({ id: body.event_id, body: { ...body } })), cursor, { ...turn, text });
+    this.spool.record(topicId, frames.map((body) => ({ id: body.event_id, body: { ...body } })),
+      session.reasoning.size ? undefined : cursor, { ...turn, text });
   }
 
   #prompt(session: Session, prompt: CanonicalPrompt, key: string[], submissionId?: string | null): string {

@@ -45,7 +45,7 @@ Expo 通知载荷 `PushNotificationData` 为 `{inbox_id}` 或 `{topic_id,message
 
 `GET /status` 同时返回当前连接器是否声明 `reasoning_supported` 和 `attachments_supported`。消息与收件箱的 `attachments` 仅含 `{name,mime,size,attachment_id?}` 元数据。Hermes 发送的文件必须包含 `attachment_id`，历史用户上传的附件可缺省该字段。有附件时正文可为空，收件箱的自动标题和推送预览回退到首个附件名。
 
-移动端只使用 `/submissions`，不发送模式、运行目标或代次。BFF 在内部 `submit` 命令中加入 `steer_if_running:true`；此策略标记不参与 HTTP 请求幂等比较或连接器命令摘要，旧请求重试不会因升级改变身份。前端保存正文和请求 ID，已有上传完成后立即发送新保存的消息。连接器通过原生快照判断如何提交，插话结果只结束该条补充消息，不改变原任务状态、不创建独立 AI 回复。
+移动端只使用 `/submissions`，不发送模式、运行目标或代次。BFF 在内部 `submit` 命令中加入 `steer_if_running:true`；此策略标记不参与 HTTP 请求幂等比较或连接器命令摘要，旧请求重试不会因升级改变身份。前端保存正文和请求 ID，已有上传完成后立即发送新保存的消息。连接器通过原生快照判断如何提交，插话回执结束该条补充消息的待处理状态。插话进入模型请求时，原任务后续内容显示为新助手消息，执行仍归原受理记录。
 
 ## Hermes 文件上传
 
@@ -64,6 +64,7 @@ Expo 通知载荷 `PushNotificationData` 为 `{inbox_id}` 或 `{topic_id,message
 - `interrupt` 的请求体为 `{submission_id}`。连接器核对该提交仍在运行后，按当前已验证的活动代次调用。
 - `submit` 的内部可选 `steer_if_running:true` 开启自动判断。连接器对无附件输入读取 `session.resume`：运行中按返回的代次调用 `session.steer({session_id,text,execution_generation})`，否则使用 `prompt.submit`。含附件的输入、旧 HTTP Runs 和未携带标记的历史命令仍走普通提交。旧连接器忽略该内部标记，保持原提交行为。
 - 原生 `session.steer` 没有幂等键、受理 ID 或可查询回执。连接器先持久保存命令以去重；确认同一代次、epoch 和文本的 `queued` 回执后返回 `command_result` 的 `steering:true,status:"ok"`，不附带 `admission_id`，BFF 将补充消息设为 `final`。`stale_generation`、方法不支持、明确 `rejected,delivered:false` 才允许安全转普通提交；其余拒绝、超时、断线和矛盾响应保留 `unknown`，不重复投递。BFF 只接受开启该策略的普通提交返回 `steering:true`。
+- Hermes Mobile Delivery 通过 `pre_api_request` 观察请求，使用原生会话事件 `plugin.hermes-mobile-delivery.steering.applied` 标记首次包含新插话的请求。Connector 按事件序号结束旧助手消息，并在同一受理记录下保存新的助手消息 ID。分界与回放游标同事务落盘。BFF 仍接收普通 `message` 和 `submission` 帧。网关缺少会话插件事件时保持单条助手消息。
 - `respond` 的请求体为 `{control_id,response_id,answer}`。澄清支持文本、复选标签数组的 JSON 字符串和空字符串跳过。连接器按上游请求类型转换。
 - `model_options` 的请求体为 `{}`。`select_model` 的请求体为 `{provider,model,global?,confirm?}`，`global` 仅接受布尔值。两者的成功回执携带 `model_result`。HTTP Runs 模式通过 Hermes 原版控制台的 `POST /api/model/set?profile=当前档案`（`scope:main`）保存默认模型，确认成功后才记录会话选择并在 `selected` 回执带 `global:true`；客户端仅凭该回执确认已保存默认值。不会修改其他 profile。Hermes 要求风险确认时返回绑定话题、profile 和模型的凭证，5 分钟内有效且仅可使用一次；连接器重启后须重新选择。保存结果不明返回 `unknown`。旧 Canonical 网关不支持 `global:true`，明确拒绝而不忽略该参数。
 - `select_reasoning` 的请求体为 `{effort}`，仅发给声明 `X-Hermes-Mobile-Reasoning: 1` 的连接器。

@@ -12,16 +12,20 @@ export type Turn = {
   topicId: string;
   admissionId: string;
   submissionId: string | null;
+  replyMessageId?: string;
   text: string;
   process?: MessageProcessStep[];
   attachments?: Attachment[];
   status: 'queued' | 'streaming' | 'final' | 'failed' | 'cancelled' | 'unknown';
 };
 
-type TurnRow = Omit<Turn, 'process' | 'attachments'> & { process: string | null; attachments: string | null };
+type TurnRow = Omit<Turn, 'process' | 'attachments' | 'replyMessageId'> & {
+  process: string | null; attachments: string | null; replyMessageId: string | null;
+};
 
-function readTurn({ process, attachments, ...turn }: TurnRow): Turn {
-  return { ...turn, ...(process ? { process: JSON.parse(process) as MessageProcessStep[] } : {}),
+function readTurn({ process, attachments, replyMessageId, ...turn }: TurnRow): Turn {
+  return { ...turn, ...(replyMessageId ? { replyMessageId } : {}),
+    ...(process ? { process: JSON.parse(process) as MessageProcessStep[] } : {}),
     ...(attachments ? { attachments: JSON.parse(attachments) as Attachment[] } : {}) };
 }
 
@@ -88,6 +92,9 @@ export class Spool {
       }
       if (!this.#db.prepare('PRAGMA table_info(turns)').all().some((column) => column.name === 'attachments')) {
         this.#db.exec('ALTER TABLE turns ADD COLUMN attachments TEXT');
+      }
+      if (!this.#db.prepare('PRAGMA table_info(turns)').all().some((column) => column.name === 'reply_message_id')) {
+        this.#db.exec('ALTER TABLE turns ADD COLUMN reply_message_id TEXT');
       }
     });
   }
@@ -279,7 +286,8 @@ export class Spool {
 
   turn(topicId: string, admissionId: string): Turn | undefined {
     const row = this.#db.prepare(`
-      SELECT topic_id AS topicId, admission_id AS admissionId, submission_id AS submissionId, text, status, process, attachments
+      SELECT topic_id AS topicId, admission_id AS admissionId, submission_id AS submissionId,
+        text, status, process, attachments, reply_message_id AS replyMessageId
       FROM turns WHERE topic_id = ? AND admission_id = ?
     `).get(topicId, admissionId) as TurnRow | undefined;
     return row && readTurn(row);
@@ -287,7 +295,8 @@ export class Spool {
 
   activeTurns(topicId: string): Turn[] {
     const rows = this.#db.prepare(`
-      SELECT topic_id AS topicId, admission_id AS admissionId, submission_id AS submissionId, text, status, process, attachments
+      SELECT topic_id AS topicId, admission_id AS admissionId, submission_id AS submissionId,
+        text, status, process, attachments, reply_message_id AS replyMessageId
       FROM turns WHERE topic_id = ? AND status IN ('queued', 'streaming', 'unknown')
     `).all(topicId) as TurnRow[];
     return rows.map(readTurn);
@@ -295,12 +304,15 @@ export class Spool {
 
   #storeTurn(turn: Turn): void {
     this.#db.prepare(`
-      INSERT INTO turns (topic_id, admission_id, submission_id, text, status, process, attachments) VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO turns (topic_id, admission_id, submission_id, text, status, process, attachments, reply_message_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (topic_id, admission_id)
       DO UPDATE SET submission_id = COALESCE(excluded.submission_id, turns.submission_id),
-        text = excluded.text, status = excluded.status, process = excluded.process, attachments = excluded.attachments
+        text = excluded.text, status = excluded.status, process = excluded.process, attachments = excluded.attachments,
+        reply_message_id = excluded.reply_message_id
     `).run(turn.topicId, turn.admissionId, turn.submissionId, turn.text, turn.status,
-      turn.process ? JSON.stringify(turn.process) : null, turn.attachments ? JSON.stringify(turn.attachments) : null);
+      turn.process ? JSON.stringify(turn.process) : null, turn.attachments ? JSON.stringify(turn.attachments) : null,
+      turn.replyMessageId ?? null);
   }
 
   record(topicId: string, frames: { id: string; body: JsonObject }[], cursor?: Cursor, turn?: Turn, controls: Control[] = []): void {

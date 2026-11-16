@@ -7,9 +7,10 @@ import type { Command, CommandResult, Message } from "@hermes-mobile/protocol";
 import Fastify from "fastify";
 import pg from "pg";
 import WebSocket from "ws";
-import { applyResult } from "../src/ingress.js";
+import { applyEvent, applyResult } from "../src/ingress.js";
 import { submit } from "../src/mutations.js";
 import { connectorFrame } from "../src/connector-frame.js";
+import { detail as topicDetail } from "../src/projections.js";
 import { registerPersonalRoutes } from "../src/routes/personal.js";
 import { openStore, type Store } from "../src/store.js";
 
@@ -196,6 +197,11 @@ test("PostgreSQL 并发发送仅保存一条消息，自动插话确认不结束
     await store.query("INSERT INTO messages (id, topic_id, data) VALUES ($1, $2, $3)", [originalMessageId, topicId, original]);
     await store.query("INSERT INTO submissions (id, topic_id, message_id, data) VALUES ($1, $2, $3, $4)",
       [originalId, topicId, originalMessageId, { status: "streaming" }]);
+    const firstReply = randomUUID();
+    const receiveReply = (message_id: string, status: "streaming" | "final", text: string) =>
+      store.transaction((db) => applyEvent(db, { type: "message", event_id: randomUUID(), topic_id: topicId,
+        message_id, submission_id: originalId, status, text }, refs, new Map([[topicId, "steer-test"]])));
+    await receiveReply(firstReply, "streaming", "正在整理报告");
     const post = (text = "请使用中文") => store.transaction((db) => submit(db, refs, topicId, submissionId, text, [], true));
     const replies = await Promise.all([post(), post(), post()]);
     assert.equal(new Set(replies.map(({ message_id }) => message_id)).size, 1);
@@ -203,7 +209,7 @@ test("PostgreSQL 并发发送仅保存一条消息，自动插话确认不结束
     assert.equal("steering" in message, false);
     assert.equal((await store.query("SELECT id FROM commands WHERE id = $1", [submissionId])).rowCount, 1);
     assert.equal((await store.query("SELECT id FROM submissions WHERE id = $1", [submissionId])).rowCount, 1);
-    assert.equal((await store.query("SELECT id FROM messages WHERE topic_id = $1", [topicId])).rowCount, 2);
+    assert.equal((await store.query("SELECT id FROM messages WHERE topic_id = $1", [topicId])).rowCount, 3);
     await assert.rejects(post("不同的要求"), { code: "IDEMPOTENCY_CONFLICT" });
     await store.transaction((db) => applyResult(db, { type: "command_result", command_id: submissionId, status: "ok", steering: true }, refs));
     const { rows } = await store.query<{ id: string; data: Message }>("SELECT id, data FROM messages WHERE topic_id = $1", [topicId]);
@@ -212,7 +218,17 @@ test("PostgreSQL 并发发送仅保存一条消息，自动插话确认不结束
     assert.deepEqual((await store.query("SELECT data FROM submissions WHERE id = $1", [originalId])).rows[0].data, { status: "streaming" });
     await store.query("UPDATE commands SET payload = payload #- '{body,steer_if_running}' WHERE id = $1", [submissionId]);
     assert.equal((await post()).message_id, message.message_id);
-    assert.equal((await store.query("SELECT id FROM messages WHERE topic_id = $1", [topicId])).rowCount, 2);
+    await receiveReply(firstReply, "final", "正在整理报告");
+    const nextReply = randomUUID();
+    await receiveReply(nextReply, "streaming", "开始用中文整理");
+    await receiveReply(nextReply, "final", "中文报告已完成");
+    const history = (await topicDetail(store, topicId, refs)).messages;
+    assert.deepEqual(history.map(({ message_id, status }) => [message_id, status]), [
+      [originalMessageId, "streaming"], [firstReply, "final"], [message.message_id, "final"], [nextReply, "final"],
+    ]);
+    assert.deepEqual(history.filter(({ role }) => role === "assistant").map(({ text, submission_id }) => [text, submission_id]), [
+      ["正在整理报告", originalId], ["中文报告已完成", originalId],
+    ]);
   } finally {
     await store.close();
     await database.query(`DROP SCHEMA ${schema} CASCADE`);

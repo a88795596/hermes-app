@@ -102,6 +102,7 @@ export interface CanonicalAdmission {
   authorityEpoch: string;
   executionGeneration: string | null;
   finalText?: string;
+  responseReused?: true;
 }
 
 function parseAdmission(value: CanonicalRecord): CanonicalAdmission {
@@ -124,6 +125,7 @@ function parseAdmission(value: CanonicalRecord): CanonicalAdmission {
       ? null
       : integer(value.execution_generation, "execution_generation"),
     finalText: typeof result?.final_response === "string" ? result.final_response : undefined,
+    ...(result?.response_reused === true ? { responseReused: true } : {}),
   };
 }
 
@@ -328,6 +330,7 @@ type SegmentIdentity = TurnIdentity & { segment?: number };
 
 export type CanonicalProjection =
   | ({ type: "message.start" } & TurnIdentity)
+  | { type: "steering.applied"; admissionId: string }
   | ({ type: "message.delta"; text: string | null; offset?: number } & SegmentIdentity)
   | ({ type: "message.interim"; text: string; alreadyStreamed: boolean } & SegmentIdentity)
   | ({ type: "message.complete"; text?: string; reasoning?: string; outcome: TurnOutcome; submissionId?: string; rowId?: string;
@@ -357,6 +360,11 @@ export function normalizeCanonicalEvent(event: CanonicalEvent): CanonicalProject
   switch (type) {
     case "message.start":
       return { type, ...turnIdentity(event) };
+    case "plugin.hermes-mobile-delivery.steering.applied":
+      if (event.admissionId && event.authorityEpoch !== undefined && event.executionGeneration !== undefined
+        && typeof payload.api_request_id === "string" && payload.api_request_id.length > 0
+        && payload.api_request_id.length <= 512) return { type: "steering.applied", admissionId: event.admissionId };
+      return;
     case "message.delta":
       return { type, ...turnIdentity(event), segment: offset(payload.segment, "消息分段"),
         text: payload.text === null ? null : string(payload.text, "增量文本"), offset: offset(payload.offset, "增量偏移量") };
