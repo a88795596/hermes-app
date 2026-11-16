@@ -60,6 +60,8 @@ async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: Jso
     } else if (path === `/api/sessions/${sessionId}`) {
       res.statusCode = sessionAvailable ? 200 : 503;
       res.end(JSON.stringify(sessionAvailable ? { session: { id: sessionId, title: 'Hermes 原生标题' } } : {}));
+    } else if (path === '/api/platforms/hermes_mobile/events' && body.kind === 'runtime') {
+      res.end(JSON.stringify({ system_prompt: '' }));
     } else if (path === '/v1/runs') {
       res.statusCode = 202;
       res.end(JSON.stringify({ run_id: runId }));

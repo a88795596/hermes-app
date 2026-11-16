@@ -35,7 +35,8 @@ export interface Topic {
 }
 
 export const DEFAULT_TOPIC_TITLE = "新会话";
-export const MAX_TOPIC_TITLE_BYTES = 256;
+// Hermes 原生标题最多 100 个 Unicode 字符，每个字符最多 4 个 UTF-8 字节。
+export const MAX_TOPIC_TITLE_BYTES = 400;
 
 export function topicTitlePreview(text: string): string {
   const characters = Array.from(text.replace(/[\s\p{Cc}]+/gu, " ").trim());
@@ -160,6 +161,7 @@ export interface SessionStatus {
 }
 
 export type TopicQueryData =
+  | { kind: "commands"; commands: NativeCommand[] }
   | { kind: "skills"; skills: Skill[] }
   | { kind: "status"; status: SessionStatus }
   | { kind: "version"; version: string };
@@ -172,6 +174,31 @@ export interface TopicQuery {
   session_id: string;
   kind: TopicQueryData["kind"];
 }
+
+export interface NativeCommand {
+  name: string;
+  description: string;
+  category: string;
+  aliases: string[];
+  args_hint?: string;
+  subcommands?: string[];
+  supported: boolean;
+  unavailable_reason?: string;
+}
+
+export interface NativeCommandResult {
+  output: string;
+  title?: string;
+  session_id?: string;
+  rewound_turns?: number;
+  reset?: true;
+  confirmation?: string;
+}
+
+export type NativeCommandRequest =
+  | { status: "pending" }
+  | { status: "ok"; native_result: NativeCommandResult }
+  | { status: "error" | "unknown"; error: string };
 
 export type TopicQueryResult = { type: "topic_query_result"; request_id: string } & (
   | { data: TopicQueryData }
@@ -226,6 +253,7 @@ export type Command = CommandEnvelope & (
   | { kind: "model_options"; body: Record<string, never> }
   | { kind: "select_model"; body: ModelSelectionRequest }
   | { kind: "select_reasoning"; body: { effort: ReasoningEffort | null } }
+  | { kind: "native_command"; body: { command: string; approval?: "once" | "always" } }
   | { kind: "watch"; body: Record<string, never> }
 );
 
@@ -239,6 +267,7 @@ export interface CommandResult {
   error?: string;
   control_status?: Control["status"];
   model_result?: ModelResult;
+  native_result?: NativeCommandResult;
   /** 兼容升级前连接器队列中的标题回执。 */
   title?: string;
 }

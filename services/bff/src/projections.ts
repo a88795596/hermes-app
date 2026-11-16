@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Command, CommandResult, Control, Message, ModelRequest, Profile, ReasoningEffort, ReasoningRequest, Topic } from "@hermes-mobile/protocol";
+import type { Command, CommandResult, Control, Message, ModelRequest, NativeCommandRequest, Profile, ReasoningEffort, ReasoningRequest, Topic } from "@hermes-mobile/protocol";
 import type { Store } from "./store.js";
 import { missing } from "./validation.js";
 
@@ -92,6 +92,15 @@ export async function reasoningRequest(store: Store, refs: Set<string>, topicId:
   if (!row.result) return { status: "pending" };
   const { status, error } = row.result;
   return status === "ok" ? { status } : { status, error: error ?? "Hermes 无法确认思考强度是否已切换。" };
+}
+
+export async function nativeCommandRequest(store: Store, refs: Set<string>, topicId: string, requestId: string): Promise<NativeCommandRequest> {
+  const row = await requestRow(store, refs, topicId, requestId);
+  if (!row || row.payload.kind !== "native_command") missing("原生命令请求");
+  if (!row.result) return { status: "pending" };
+  if (row.result.status === "ok" && row.result.native_result) return { status: "ok", native_result: row.result.native_result };
+  return { status: row.result.status === "error" ? "error" : "unknown",
+    error: row.result.error ?? "Hermes 无法确认命令的执行结果。" };
 }
 
 export function detail(store: Store, id: string, refs: Set<string>) {

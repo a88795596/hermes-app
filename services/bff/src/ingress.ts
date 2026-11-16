@@ -38,15 +38,45 @@ export async function applyResult(db: PoolClient, frame: CommandResult, refs: Se
   if (!command) missing("命令");
   const { payload, result } = command;
   const topic = await topicRow(db, payload.topic_id, refs);
-  if (payload.profile_ref !== topic.profile_ref || (payload.session_id && payload.session_id !== topic.session_id)) {
-    invalid("命令绑定已不匹配。");
-  }
+  if (payload.profile_ref !== topic.profile_ref) invalid("命令绑定已不匹配。");
   if (payload.kind === "summarize_title") return topic;
   if (result) {
-    if (!isDeepStrictEqual(result, frame)) conflict("命令结果与已保存的结果冲突。");
-    return topic;
+    // 压缩成功后绑定已旋转；相同的持久回执重发仍然需要确认。
+    if (isDeepStrictEqual(result, frame)) return topic;
+    if (payload.kind !== "native_command" || result.status !== "unknown" || frame.status === "unknown") {
+      conflict("命令结果与已保存的结果冲突。");
+    }
   }
+  // 旧会话的后台报告可以补齐原请求；任何会话变更仍须匹配当前绑定。
+  const historicalOutput = result?.status === "unknown" && payload.kind === "native_command"
+    && !/^\/(?:compress|compact|undo|new|reset)(?:[ \t]|$)/iu.test(payload.body.command)
+    && ((frame.status === "ok" && frame.native_result !== undefined && Object.keys(frame.native_result).length === 1
+      && Object.hasOwn(frame.native_result, "output")) || (frame.status === "error" && frame.native_result === undefined));
+  if (payload.session_id && payload.session_id !== topic.session_id && !historicalOutput) invalid("命令绑定已不匹配。");
   const isModel = payload.kind === "model_options" || payload.kind === "select_model";
+  const isNative = payload.kind === "native_command";
+  if ((frame.native_result !== undefined && (!isNative || frame.status !== "ok")) ||
+      (isNative && frame.status === "ok" && !frame.native_result)) invalid("命令的原生结果无效。");
+  if (isNative && (frame.session_id !== undefined || frame.admission_id !== undefined || frame.control_status !== undefined)) {
+    invalid("原生命令回执包含无关结果。");
+  }
+  const reset = frame.native_result?.reset === true;
+  if (frame.native_result?.confirmation !== undefined && (!isNative || !/^\/(?:new|reset|undo)(?:[ \t]|$)/iu.test(payload.body.command)
+    || frame.native_result.session_id !== undefined || frame.native_result.reset !== undefined
+    || frame.native_result.rewound_turns !== undefined || frame.native_result.title !== undefined)) {
+    invalid("原生命令确认回执不能包含执行结果。");
+  }
+  if (reset && (!isNative || !/^\/(?:new|reset)(?:[ \t]|$)/iu.test(payload.body.command) || !frame.native_result?.session_id)) {
+    invalid("原生命令不能重置会话。");
+  }
+  if (frame.native_result?.title !== undefined && (!isNative || (!reset && !/^\/title(?:[ \t]|$)/iu.test(payload.body.command)))) {
+    invalid("原生命令不能修改话题标题。");
+  }
+  if (frame.native_result?.session_id !== undefined && (!isNative || (!reset && !/^\/(?:compress|compact)(?:[ \t]|$)/iu.test(payload.body.command))
+    || !payload.session_id || frame.native_result.session_id === payload.session_id)) invalid("原生命令不能旋转会话绑定。");
+  if (frame.native_result?.rewound_turns !== undefined && (!isNative || !/^\/undo(?:[ \t]|$)/iu.test(payload.body.command))) {
+    invalid("原生命令不能撤回上下文。");
+  }
   if ((frame.model_result !== undefined && (!isModel || frame.status !== "ok" ||
       (frame.model_result.type === "catalog") !== (payload.kind === "model_options"))) ||
       (isModel && frame.status === "ok" && !frame.model_result)) invalid("命令的模型结果无效。");
@@ -54,7 +84,7 @@ export async function applyResult(db: PoolClient, frame: CommandResult, refs: Se
   if (frame.steering !== undefined && (frame.steering !== true || payload.kind !== "submit"
     || payload.body.steer_if_running !== true || payload.body.attachments !== undefined
     || frame.admission_id !== undefined || frame.session_id !== undefined
-    || frame.control_status !== undefined || frame.model_result !== undefined)) invalid("命令的插话结果无效。");
+    || frame.control_status !== undefined || frame.model_result !== undefined || frame.native_result !== undefined)) invalid("命令的插话结果无效。");
   if (payload.kind === "create") {
     if (frame.status === "ok" && !frame.session_id) invalid("创建结果缺少会话 ID。");
     const success = frame.status === "ok";
@@ -69,6 +99,22 @@ export async function applyResult(db: PoolClient, frame: CommandResult, refs: Se
     const status = frame.status === "ok" ? (frame.steering ? "final" : "queued") : frame.status === "error" ? "failed" : "unknown";
     await applySubmission(db, topic.id, payload.body.submission_id, status, frame.error, frame.admission_id);
     if (payload.body.attachments) await db.query("DELETE FROM submission_attachments WHERE submission_id = $1", [frame.command_id]);
+  } else if (isNative) {
+    if (frame.native_result?.session_id !== undefined) {
+      const updated = await db.query(`UPDATE topics SET session_id = $2, updated_at = clock_timestamp()
+        WHERE id = $1 AND profile_ref = $3 AND session_id = $4`,
+      [topic.id, frame.native_result.session_id, payload.profile_ref, payload.session_id]);
+      if (updated.rowCount !== 1) conflict("原生命令执行期间会话绑定已变更。");
+      topic.session_id = frame.native_result.session_id;
+    }
+    if (reset) {
+      await db.query("UPDATE topics SET reasoning_effort = NULL, reasoning_status = NULL WHERE id = $1", [topic.id]);
+      await db.query("UPDATE controls SET data = data || '{\"status\":\"closed\"}'::jsonb WHERE topic_id = $1 AND data->>'status' <> 'closed'", [topic.id]);
+    }
+    if (frame.native_result?.title !== undefined) {
+      await db.query("UPDATE topics SET title = $2, auto_title = false, updated_at = clock_timestamp() WHERE id = $1",
+        [topic.id, frame.native_result.title]);
+    }
   } else if (payload.kind === "select_reasoning") {
     await db.query("UPDATE topics SET reasoning_effort = $2, reasoning_status = $3, updated_at = clock_timestamp() WHERE id = $1", [topic.id,
       frame.status === "ok" ? payload.body.effort : topic.reasoning_effort,

@@ -40,6 +40,7 @@ function mount(props) {
       case "expo-web-browser": return {};
       case "@hermes-mobile/protocol": return { MAX_ATTACHMENTS: 5 };
       case "../ui/haptics": return { haptic() {} };
+      case "../ui/alerts": return { useAlert: () => ({ alert() {} }) };
       case "../ui/motion": return { motion: {}, useReduceMotion: () => true };
       case "../ui/text": return { profileLabel: (label) => label };
       case "../ui/theme": return {
@@ -52,6 +53,7 @@ function mount(props) {
       case "./message-attachments": return { MessageAttachments: "MessageAttachments" };
       case "./attachments": return {};
       case "./model-picker": return {};
+      case "./native-command": return { NativeCommandSheet: "NativeCommandSheet" };
       case "./settings-drawer": return {};
       case "./use-speech-input": return { useSpeechInput: (_id, _enabled, draft) => ({
         available: false, state: "idle", busy: false, start: async () => {}, stop: async () => draft,

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, type ComponentRef } from "rea
 import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import Animated from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { MAX_ATTACHMENTS, type AttachmentUpload, type Control, type Message, type MessageProcessStep, type SessionStatus, type Skill, type Topic } from "@hermes-mobile/protocol";
+import { MAX_ATTACHMENTS, type AttachmentUpload, type Control, type Message, type MessageProcessStep, type Skill, type Topic } from "@hermes-mobile/protocol";
 import type { Session } from "../auth/session";
 import type { useWorkspace } from "../sync/use-workspace";
 import { haptic } from "../ui/haptics";
@@ -14,8 +14,9 @@ import { Action, CloseButton, Field, Icon, Notice, useTheme } from "../ui/theme"
 import { AnswerMarkdown } from "./answer-markdown";
 import { AssistantStreamBorder } from "./assistant-stream-border";
 import { pickAttachments } from "./attachments";
-import { AttachmentMenu, ComposerMenu, ReasoningMenu, reasoningLabels, type ComposerCommand } from "./composer-menu";
+import { AttachmentMenu, ComposerMenu, ReasoningMenu, reasoningLabels } from "./composer-menu";
 import { ModelPicker } from "./model-picker";
+import { NativeCommandSheet } from "./native-command";
 import { MessageAttachments } from "./message-attachments";
 import { SettingsDrawer } from "./settings-drawer";
 import { useSpeechInput } from "./use-speech-input";
@@ -46,12 +47,6 @@ const approvalLabels = new Map([
 
 const transcriptGutter = 24;
 const touchSize = Platform.OS === "android" ? 48 : 44;
-const activityLabel: Record<SessionStatus["activity"], string> = {
-  idle: "空闲",
-  running: "正在响应",
-  queued: "排队中",
-  unknown: "执行状态待确认",
-};
 
 function ProcessTimeline({ steps, final }: { steps: MessageProcessStep[]; final: boolean }) {
   const { colors, styles } = useTheme();
@@ -219,7 +214,7 @@ function ControlPrompt({
 }
 
 export function Conversation({
-  id, topic, newProfileId, workspace, session, draft, onDraftChange, attachments, onAttachmentsChange, onNewTopic,
+  id, topic, newProfileId, workspace, session, draft, onDraftChange, attachments, onAttachmentsChange,
   settingsOpen, onCloseSettings, targetMessageId,
 }: {
   id: string;
@@ -234,7 +229,6 @@ export function Conversation({
   onCloseSettings: () => void;
   onDraftChange: (value: string) => void;
   onAttachmentsChange: (value: AttachmentUpload[]) => void;
-  onNewTopic: () => void;
 }) {
   const { colors, styles } = useTheme();
   const reduced = useReduceMotion();
@@ -259,7 +253,8 @@ export function Conversation({
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [commandNotice, setCommandNotice] = useState<string>();
   const [openingSkills, setOpeningSkills] = useState(false);
-  const queryPending = useRef(false);
+  const commandOpen = useRef(false);
+  const [nativeCommand, setNativeCommand] = useState<{ command: string; requestId: string }>();
   const interruptId = useRef<string>(undefined);
   const messages = workspace.detail?.messages ?? [];
   const controls = workspace.detail?.controls ?? [];
@@ -284,6 +279,7 @@ export function Conversation({
   const canSend = canWrite && workspace.ready && !sending && !picking;
   const canControl = workspace.network === "online" && workspace.connector_online === true;
   const isModelCommand = !attachments.length && draft.trim().toLowerCase() === "/model";
+  const isNativeCommand = /^\/[a-z0-9][a-z0-9_-]*(?:\s|$)/iu.test(draft.trim());
   const activeSubmission = messages.find((message) => message.role === "user" && message.status === "streaming")?.submission_id;
   const running = Boolean(activeSubmission);
   const topicBusy = sending || pending.some((item) => !item.error) || messages.some((message) => message.role === "user" &&
@@ -294,7 +290,7 @@ export function Conversation({
   const reasoningBlocked = reasoningLegacy && (reasoningStatus !== undefined || reasoning !== null);
   const attachmentsBlocked = canControl && workspace.attachments_supported !== true;
   const sendDisabled = !canSend || (!draft.trim() && !attachments.length && !speech.busy) || (!!attachments.length && attachmentsBlocked)
-    || (isModelCommand ? !canControl : reasoningBlocked);
+    || (isNativeCommand ? !canControl : reasoningBlocked);
   const speechVisible = !draft.length || speech.busy;
   const speechDisabled = !speechVisible || sending || speech.state === "stopping" || (!speech.busy && (!canWrite || picking || openingSkills));
   const attachmentDisabled = !canWrite || picking || sending || attachments.length >= MAX_ATTACHMENTS;
@@ -318,7 +314,7 @@ export function Conversation({
       controlsColor: colors.foreground,
       windowFeatures: { noopener: true, noreferrer: true },
     }).catch(() => { haptic("error"); setError("无法打开网页，请重试。"); });
-  }, [colors.foreground, colors.surface]);
+  }, [colors.foreground, colors.surface, setError]);
 
   function keepLatestVisible() {
     if (focusTarget.current && targetMessageId) {
@@ -362,44 +358,7 @@ export function Conversation({
     }
   }
 
-  async function send() {
-    if (enqueueing.current || sendDisabled) return;
-    enqueueing.current = true;
-    setSending(true);
-    setError(undefined);
-    try {
-      const finalDraft = await speech.stop();
-      if (finalDraft === null) return;
-      const text = finalDraft.trim();
-      const modelCommand = !attachments.length && text.toLowerCase() === "/model";
-      if ((!text && !attachments.length) || (modelCommand ? !canControl : reasoningBlocked)) return;
-      haptic(modelCommand ? "light" : "medium");
-      if (modelCommand) {
-        Keyboard.dismiss();
-        setCommandNotice(undefined);
-        setModelPicker(true);
-        onDraftChange("");
-        return;
-      }
-      await workspace.enqueue({ submission_id: randomUUID(), topic_id: id, text, created_at: Date.now(),
-        ...(attachments.length && { attachments }),
-        ...(newProfileId && { profile_id: newProfileId }) });
-      onDraftChange("");
-      if (attachments.length) onAttachmentsChange([]);
-      setCommandNotice(undefined);
-      focusTarget.current = false;
-      pinned.current = true;
-      scroll.current?.scrollToEnd({ animated: true });
-    } catch (failure) {
-      haptic("error");
-      setError(failure instanceof Error ? failure.message : "无法保存消息。");
-    } finally {
-      enqueueing.current = false;
-      setSending(false);
-    }
-  }
-
-  async function stop() {
+  const stop = useCallback(async () => {
     if (stopping) return;
     if (!activeSubmission || !canControl) {
       setCommandNotice(!activeSubmission ? "当前没有正在生成的回复。" : "连接 Hermes 后可停止回复。");
@@ -423,63 +382,85 @@ export function Conversation({
     } finally {
       setStopping(false);
     }
-  }
+  }, [activeSubmission, canControl, id, setCommandNotice, setError, setStopping, stopping, workspace]);
 
-  async function runCommand(command: ComposerCommand) {
-    if (command === "skills") {
-      await openSkills();
-      return;
-    }
-    setMenu(undefined);
-    if (queryPending.current && (command === "status" || command === "version")) return;
-    setError(undefined);
-    setCommandNotice(undefined);
-    if (command === "stop") {
-      await stop();
-    } else if (command === "model") {
-      if (canControl) setModelPicker(true);
-      else setCommandNotice("连接 Hermes 后可选择模型。");
-    } else if (command === "new") {
-      onNewTopic();
-    } else {
-      if (!canControl) return;
-      queryPending.current = true;
-      setCommandNotice(command === "version" ? "正在查询 Hermes 版本…" : "正在查询会话状态…");
-      try {
-        if (newProfileId && topic?.status !== "ready") await workspace.prepareTopic(id, newProfileId);
-        if (command === "version") {
-          setCommandNotice(`Hermes ${await workspace.call<string>(`/topics/${id}/version`)}`);
-        } else {
-          const status = await workspace.call<SessionStatus>(`/topics/${id}/status`);
-          setCommandNotice(["/status", activityLabel[status.activity], status.model,
-            status.message_count === undefined ? undefined : `${status.message_count} 条消息`,
-          ].filter(Boolean).join(" · "));
-        }
-      } catch (failure) {
-        haptic("error");
-        setCommandNotice(undefined);
-        setError(failure instanceof Error ? failure.message : "无法完成 Hermes 查询。");
-      } finally {
-        queryPending.current = false;
-      }
-    }
-  }
-
-  async function openSkills() {
+  const openMenu = useCallback(async (kind: "skills" | "commands") => {
     if (openingSkills) return;
     setOpeningSkills(true);
     setMenu(undefined);
     setError(undefined);
     try {
       if (newProfileId && topic?.status !== "ready") await workspace.prepareTopic(id, newProfileId);
-      setMenu("skills");
+      setMenu(kind);
     } catch (failure) {
       haptic("error");
-      setError(failure instanceof Error ? failure.message : "无法加载技能。");
+      setError(failure instanceof Error ? failure.message : "无法加载 Hermes 菜单。");
     } finally {
       setOpeningSkills(false);
     }
-  }
+  }, [id, newProfileId, openingSkills, setError, setMenu, setOpeningSkills, topic, workspace]);
+
+  const runCommand = useCallback((command: string) => {
+    if (!canControl || commandOpen.current) return;
+    setMenu(undefined);
+    setError(undefined);
+    setCommandNotice(undefined);
+    const name = command.trim().toLowerCase();
+    if (name === "/stop") {
+      void stop();
+    } else if (name === "/skills") {
+      void openMenu("skills");
+    } else if (name === "/model") {
+      setModelPicker(true);
+    } else if (name === "/reasoning") {
+      setMenu("reasoning");
+    } else {
+      commandOpen.current = true;
+      setNativeCommand({ command, requestId: randomUUID() });
+    }
+  }, [canControl, openMenu, setCommandNotice, setError, setMenu, setModelPicker, setNativeCommand, stop]);
+
+  const send = useCallback(async () => {
+    if (enqueueing.current || sendDisabled) return;
+    enqueueing.current = true;
+    setSending(true);
+    setError(undefined);
+    try {
+      const finalDraft = await speech.stop();
+      if (finalDraft === null) return;
+      const text = finalDraft.trim();
+      const native = /^\/[a-z0-9][a-z0-9_-]*(?:\s|$)/iu.test(text);
+      if ((!text && !attachments.length) || (native ? !canControl : reasoningBlocked)) return;
+      if (native && attachments.length) {
+        setError("命令不能附带文件，请先移除附件。");
+        return;
+      }
+      haptic(native ? "light" : "medium");
+      if (native) {
+        Keyboard.dismiss();
+        if (newProfileId && topic?.status !== "ready") await workspace.prepareTopic(id, newProfileId);
+        runCommand(finalDraft.trimStart());
+        onDraftChange("");
+        return;
+      }
+      await workspace.enqueue({ submission_id: randomUUID(), topic_id: id, text, created_at: Date.now(),
+        ...(attachments.length && { attachments }),
+        ...(newProfileId && { profile_id: newProfileId }) });
+      onDraftChange("");
+      if (attachments.length) onAttachmentsChange([]);
+      setCommandNotice(undefined);
+      focusTarget.current = false;
+      pinned.current = true;
+      scroll.current?.scrollToEnd({ animated: true });
+    } catch (failure) {
+      haptic("error");
+      setError(failure instanceof Error ? failure.message : "无法保存消息。");
+    } finally {
+      enqueueing.current = false;
+      setSending(false);
+    }
+  }, [attachments, canControl, id, newProfileId, onAttachmentsChange, onDraftChange, reasoningBlocked, runCommand,
+    sendDisabled, setCommandNotice, setError, setSending, speech, topic, workspace]);
 
   function selectSkill(skill: Skill) {
     setMenu(undefined);
@@ -522,11 +503,14 @@ export function Conversation({
         <ComposerMenu kind={menu} id={id} call={workspace.call}
           profile={workspace.profiles.find((item) => item.profile_id === (topic?.profile_id ?? newProfileId))?.label}
           connected={canControl}
-          canStop={running && canControl && !stopping}
+          reasoningSupported={workspace.reasoning_supported === true}
           onClose={() => setMenu(undefined)}
-          onCommand={(command) => void runCommand(command)}
+          onCommand={runCommand}
           onSkill={selectSkill} />
       )}
+      {nativeCommand && <NativeCommandSheet key={nativeCommand.requestId} {...nativeCommand} onOpenLink={openLink}
+        onClose={() => { commandOpen.current = false; setNativeCommand(undefined); }}
+        onRequest={(requestId, command, signal, approval) => workspace.requestNativeCommand(id, requestId, command, signal, approval)} />}
       <ScrollView
         ref={scroll}
         contentContainerStyle={[chat.column, chat.transcript]}
@@ -648,14 +632,15 @@ export function Conversation({
         {(error ?? speech.error) && <Notice>{error ?? speech.error}</Notice>}
         {commandNotice && <Text accessibilityLiveRegion="polite" style={styles.muted}>{commandNotice}</Text>}
         {isModelCommand && !canControl && <Text style={styles.muted}>连接 Hermes 后即可选择模型。</Text>}
+        {isNativeCommand && !isModelCommand && !canControl && <Text style={styles.muted}>连接 Hermes 后即可执行命令。</Text>}
         {reasoningBlocked && <Text accessibilityLiveRegion="polite" style={styles.muted}>更新 Hermes 连接器后可继续发送。</Text>}
         {!!attachments.length && attachmentsBlocked && <Notice>更新服务端和连接器后可发送附件。</Notice>}
         <ScrollView horizontal accessibilityLabel="会话操作" keyboardShouldPersistTaps="handled"
           showsHorizontalScrollIndicator={false} style={chat.toolbarScroll} contentContainerStyle={chat.toolbar}>
-          <Action compact icon="command" title="命令" disabled={!canWrite || speech.busy} onPress={() => { Keyboard.dismiss(); setMenu("commands"); }} />
+          <Action compact icon="command" title="命令" disabled={!canWrite || speech.busy || openingSkills} onPress={() => { Keyboard.dismiss(); void openMenu("commands"); }} />
           <Action compact icon="skill" title={openingSkills ? "正在加载技能…" : "技能"}
             disabled={!canWrite || speech.busy || openingSkills || (topic?.status !== "ready" && !canControl)}
-            onPress={() => { Keyboard.dismiss(); void openSkills(); }} />
+            onPress={() => { Keyboard.dismiss(); void openMenu("skills"); }} />
           {running && (
             <Action compact title={stopping ? "停止中…" : "停止回复"} icon="stop"
               feedback="warning"
@@ -760,7 +745,7 @@ export function Conversation({
         onModel={() => setModelPicker(true)} onReasoning={() => setMenu("reasoning")}
         onClose={() => { setModelPicker(false); setMenu(undefined); onCloseSettings(); }}>
         {modelSelection || reasoningSelection || undefined}
-      </SettingsDrawer> : modelSelection}
+      </SettingsDrawer> : modelSelection || reasoningSelection}
     </KeyboardAvoidingView>
   );
 }

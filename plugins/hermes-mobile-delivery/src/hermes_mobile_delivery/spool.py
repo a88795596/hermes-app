@@ -1,6 +1,7 @@
 """Hermes 插件私有的持久化投递队列。"""
 
 from contextlib import closing, contextmanager
+import json
 import mimetypes
 from pathlib import Path
 import os
@@ -68,10 +69,56 @@ def _connect(path: Path):
             profile_ref TEXT PRIMARY KEY,
             paused_until REAL NOT NULL
         )""")
+        db.execute("""CREATE TABLE IF NOT EXISTS command_receipts (
+            request_id TEXT PRIMARY KEY,
+            profile_ref TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            command TEXT NOT NULL,
+            result TEXT
+        )""")
         now = time.time()
         db.execute("""INSERT OR IGNORE INTO delivery_state (delivery_id, created_at, next_attempt_at)
             SELECT delivery_id, ?, ? FROM deliveries""", (now, now))
         yield db
+
+
+def start_command(path: Path, profile_ref: str, request_id: str, session_id: str,
+                  command: str) -> tuple[bool, dict | None]:
+    with _connect(path) as db:
+        inserted = db.execute("""INSERT OR IGNORE INTO command_receipts
+            (request_id, profile_ref, session_id, command) VALUES (?, ?, ?, ?)""",
+            (request_id, profile_ref, session_id, command)).rowcount
+        if inserted:
+            return True, None
+        row = db.execute("""SELECT profile_ref, session_id, command, result
+            FROM command_receipts WHERE request_id = ?""", (request_id,)).fetchone()
+        if row[:3] != (profile_ref, session_id, command):
+            raise ValueError("同一命令请求编号不能用于其他档案、会话或命令")
+        return False, json.loads(row[3]) if row[3] is not None else {
+            "ok": False, "status": "unknown", "error": "无法确认此前命令是否已执行，请勿重复执行。",
+        }
+
+
+def finish_command(path: Path, profile_ref: str, request_id: str, result: dict) -> None:
+    with _connect(path) as db:
+        changed = db.execute("""UPDATE command_receipts SET result = ?
+            WHERE request_id = ? AND profile_ref = ?""",
+            (json.dumps(result, ensure_ascii=False, allow_nan=False), request_id, profile_ref)).rowcount
+        if not changed:
+            raise ValueError("命令回执不存在或不属于当前配置档案")
+
+
+def read_command(path: Path, profile_ref: str, request_id: str, session_id: str) -> dict | None:
+    with _connect(path) as db:
+        row = db.execute("""SELECT profile_ref, session_id, result FROM command_receipts
+            WHERE request_id = ?""", (request_id,)).fetchone()
+        if row is None:
+            return None
+        if row[:2] != (profile_ref, session_id):
+            raise ValueError("命令回执不属于当前配置档案或会话")
+        return json.loads(row[2]) if row[2] is not None else {
+            "ok": False, "status": "unknown", "error": "命令尚无最终回执，请查询原请求，不要重新执行。",
+        }
 
 
 def enqueue(path: Path, profile_ref: str, text: str, files=(), *, session_id: str | None = None) -> str:

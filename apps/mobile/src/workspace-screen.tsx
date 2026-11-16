@@ -286,6 +286,7 @@ function Workspace() {
             <Icon name="settings" size={22} color={colors.accent} />
           </Pressable>} />
         <Conversation
+          key={id}
           id={id}
           targetMessageId={typeof params.messageId === "string" ? params.messageId : undefined}
           topic={topic}
@@ -298,10 +299,6 @@ function Workspace() {
           onDraftChange={(value) => setDrafts((current) => ({ ...current, [id]: value }))}
           attachments={draftAttachments[id] ?? []}
           onAttachmentsChange={(value) => setDraftAttachments((current) => ({ ...current, [id]: value }))}
-          onNewTopic={() => {
-            const profileId = topic?.profile_id ?? newProfileId;
-            if (profileId) startConversation(profileId);
-          }}
         />
         {workspace.detail?.topic.topic_id === id && (workspace.activity === undefined
           ? workspace.detail.messages.some((message) => message.status === "streaming")

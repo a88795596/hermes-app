@@ -196,7 +196,8 @@ test('legacy HTTP sessions ignore automatic steering policy and create an ordina
   const server = createServer((req, res) => {
     calls.push(`${req.method} ${req.url}`);
     res.setHeader('content-type', 'application/json');
-    if (req.method === 'POST') res.writeHead(202).end(JSON.stringify({ run_id: 'run_' + '1'.repeat(32) }));
+    if (req.url === '/p/default/api/platforms/hermes_mobile/events') res.end(JSON.stringify({ system_prompt: '' }));
+    else if (req.method === 'POST') res.writeHead(202).end(JSON.stringify({ run_id: 'run_' + '1'.repeat(32) }));
     else res.end(JSON.stringify({ run_id: 'run_' + '1'.repeat(32), status: 'completed', output: 'done' }));
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -212,5 +213,6 @@ test('legacy HTTP sessions ignore automatic steering policy and create an ordina
   assert.equal(result.status, 'ok');
   assert.equal(result.steering, undefined);
   assert.equal(result.admission_id, 'run_' + '1'.repeat(32));
-  assert.deepEqual(calls.filter((call) => call.startsWith('POST')), ['POST /p/default/v1/runs']);
+  assert.deepEqual(calls.filter((call) => call.startsWith('POST')),
+    ['POST /p/default/api/platforms/hermes_mobile/events', 'POST /p/default/v1/runs']);
 });

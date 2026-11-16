@@ -8,6 +8,7 @@ import { CanonicalConnector } from './connector.js';
 import type { JsonObject } from './gateway.js';
 import { createHttpConnector } from './http-mode.js';
 import { createDashboardManagement } from './management.js';
+import { createNativeCommands } from './native-commands.js';
 import { Spool } from './spool.js';
 import { QueryUnavailable } from './topic-query.js';
 import { bridgeFrame, commandDigest, result } from './wire.js';
@@ -58,10 +59,11 @@ async function main(): Promise<void> {
 
   const downloadAttachment = attachmentDownloader(url, token, shutdown.signal);
   const receiveAttachments = attachmentReceiver(url, token, webapp, shutdown.signal);
+  const nativeCommands = httpUrl && httpKey ? createNativeCommands(httpUrl, httpKey) : undefined;
   const canonical = new CanonicalConnector(webapp ?? process.env.HERMES_BIN ?? 'hermes',
-    spool, () => socket?.terminate(), downloadAttachment, receiveAttachments);
+    spool, () => socket?.terminate(), downloadAttachment, receiveAttachments, nativeCommands);
   const legacy = httpUrl && httpKey ? createHttpConnector({
-    url: httpUrl, token: httpKey, spool, send: () => flush(), downloadAttachment, receiveAttachments, webapp, manage,
+    url: httpUrl, token: httpKey, spool, send: () => flush(), downloadAttachment, receiveAttachments, webapp, manage, nativeCommands,
   }) : undefined;
   for (const id of spool.unfinished()) {
     spool.finish(id, { ...result(id, 'unknown', { error: 'Hermes 无法确认执行结果' }) });
@@ -73,13 +75,14 @@ async function main(): Promise<void> {
       const started = Date.now();
       const peer = new WebSocket(url, {
         headers: { Authorization: `Bearer ${token}`, 'X-Hermes-Mobile-Topic-Query': '1', 'X-Hermes-Mobile-Reasoning': '1',
-          'X-Hermes-Mobile-Attachments': '1',
+          'X-Hermes-Mobile-Attachments': '1', 'X-Hermes-Mobile-Native-Commands': '1',
           ...(manage && { 'X-Hermes-Mobile-Management': '1' }) },
         handshakeTimeout: 10_000, maxPayload: 1024 * 1024, perMessageDeflate: false,
       });
       socket = peer;
       const current = () => !shutdown.signal.aborted && socket === peer && peer.readyState === WebSocket.OPEN;
       const resultIds = new Set<string>();
+      const sentResults = new Map<string, string>();
       const eventIds = new Set<string>();
       const assigned = new Set<string>();
       const awaitingCreateAck = new Map<string, string>();
@@ -98,6 +101,7 @@ async function main(): Promise<void> {
           for (const { id, body } of spool.results(resultIds, 64 - resultIds.size - eventIds.size)) {
             if (!send(body)) return;
             resultIds.add(id);
+            sentResults.set(id, JSON.stringify(body));
             if (body.status === 'ok' && typeof body.session_id === 'string'
               && spool.binding(id)?.sessionId === body.session_id) awaitingCreateAck.set(id, id);
           }
@@ -143,7 +147,8 @@ async function main(): Promise<void> {
           const { id } = frame;
           if (resultIds.delete(id) || eventIds.delete(id)) {
             try {
-              spool.ack(id);
+              spool.ack(id, sentResults.get(id));
+              sentResults.delete(id);
             } catch {
               peer.terminate();
               return;
@@ -164,7 +169,7 @@ async function main(): Promise<void> {
             return;
           }
           querying += 1;
-          const backend = frame.session_id.startsWith('mobile_') ? legacy : canonical;
+          const backend = spool.transport(frame.topic_id) === 'http' ? legacy : canonical;
           const query = backend ? backend.query(frame) : Promise.reject(new QueryUnavailable());
           void query.then((data) => {
             const response: TopicQueryResult = { ...base, data };
@@ -196,7 +201,7 @@ async function main(): Promise<void> {
         queued += 1;
         serial = serial.then(async () => {
           if (current()) {
-            const backend = frame.session_id?.startsWith('mobile_') ? legacy : canonical;
+            const backend = spool.transport(frame.topic_id) === 'http' ? legacy : canonical;
             if (backend) {
               await backend.command(frame, current);
             } else if (frame.kind !== 'watch' && spool.begin(frame.command_id, commandDigest(frame))) {

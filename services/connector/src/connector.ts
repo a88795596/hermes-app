@@ -1,18 +1,20 @@
+import { setTimeout as delay } from 'node:timers/promises';
 import { deliveryInstructions } from './delivery-context.js';
 import {
   canonicalInteger, encodeControlResponse, normalizeCanonicalEvent, normalizeTurnOutcome,
   parseAdmissionReceipt, parseCanonicalEvent, parseControlReceipt, parseServerRequest, parseSessionSnapshot,
 } from '@hermes-mobile/hermes-adapter';
 import type { CanonicalAdmission, CanonicalPrompt, ServerRequest, SessionSnapshot } from '@hermes-mobile/hermes-adapter';
-import type { Command, CommandResult, ConnectorEvent, Control, TopicQuery, TopicQueryData } from '@hermes-mobile/protocol';
+import type { Command, CommandResult, ConnectorEvent, Control, NativeCommandResult, TopicQuery, TopicQueryData } from '@hermes-mobile/protocol';
 import { MAX_CLARIFY_CHOICE_BYTES, MAX_MESSAGE_PROCESS_TEXT_BYTES } from '@hermes-mobile/protocol';
 import { attachmentBytes, attachmentFilename, hasReceivedAttachments, type DownloadAttachment, type ReceiveAttachments } from './attachments.js';
 import { Gateway, GatewayRefusal, integer, object } from './gateway.js';
 import type { JsonObject, WebappAccess } from './gateway.js';
 import { addProcessText, redactProcessText, removeStreamedCommentary, updateProcessTool } from './message-process.js';
 import { hasModel, modelCatalog } from './models.js';
+import { enableNativeCommands, NativeCommandFailure, nativeStatusOutput, resolveNativeCommand, tuiCommandList, type NativeCommands } from './native-commands.js';
 import { Spool } from './spool.js';
-import type { Binding, Cursor, Turn } from './spool.js';
+import type { Binding, Cursor, NativePending, Turn } from './spool.js';
 import { QueryUnavailable, queryTimeout, runtimeVersion, sessionStatus, skillList, webappSkills } from './topic-query.js';
 import { topicTitleEvent } from './topic-title.js';
 import { boundedText, commandDigest, result, stableId, text } from './wire.js';
@@ -24,6 +26,8 @@ type Target =
 type BufferState = { frames: JsonObject[]; bytes: number };
 
 const maxReasoningBytes = 2 * MAX_MESSAGE_PROCESS_TEXT_BYTES;
+const nativeSessionMutations = new Set(['undo', 'compress', 'new', 'reset']);
+const nativeMutationUnavailable = '此原生处理程序属于 HTTP Runs 会话，当前网关未提供可验证的会话缓存重载与续接接口。';
 
 type Session = {
   binding: Binding;
@@ -64,6 +68,9 @@ export class CanonicalConnector {
   readonly #bindings = new Map<string, Binding>();
   readonly #attaching = new Map<string, Promise<Session>>();
   readonly #receiving = new Set<string>();
+  readonly #topicQueues = new Map<string, Promise<void>>();
+  readonly #nativeWatchers = new Set<string>();
+  readonly #shutdown = new AbortController();
   #closed = false;
 
   constructor(
@@ -72,12 +79,24 @@ export class CanonicalConnector {
     readonly onReconnect: () => void,
     readonly downloadAttachment: DownloadAttachment,
     readonly receiveAttachments?: ReceiveAttachments,
+    readonly nativeCommands?: NativeCommands,
   ) {
     for (const binding of spool.bindings()) this.#bindings.set(binding.topicId, binding);
+    // Existing uncertain native mutations must retain their admission fence.
+    // The API plugin cannot verify that a canonical gateway reloaded its cache.
+    for (const pending of spool.nativePending()) if (spool.transport(pending.binding.topicId) === 'canonical') {
+      spool.finishNative(pending.commandId, { ...result(pending.commandId, 'unknown', {
+        error: '原生命令的会话变更尚未确认；当前网关无法验证缓存重载，请先检查 Hermes 会话。',
+      }) });
+    }
+    for (const pending of spool.nativeRequests()) {
+      if (pending.mutating === false && spool.transport(pending.binding.topicId) === 'canonical') this.#watchNative(pending);
+    }
   }
 
   close(): void {
     this.#closed = true;
+    this.#shutdown.abort();
     for (const profile of this.#profiles.values()) {
       void profile.gateway.then((gateway) => gateway.close(), () => {});
     }
@@ -115,14 +134,38 @@ export class CanonicalConnector {
     }
   }
 
+  async #commandCatalog(binding: Binding, gateway: Gateway) {
+    if (this.nativeCommands) {
+      try {
+        const native = await this.nativeCommands.catalog(binding.profileRef, this.#shutdown.signal);
+        return {
+          commands: enableNativeCommands(native, ['status', 'version']).map((entry) => nativeSessionMutations.has(entry.name)
+            ? { ...entry, supported: false, unavailable_reason: nativeMutationUnavailable } : entry),
+          native: new Set(native.filter((entry) => entry.supported).map((entry) => entry.name)),
+        };
+      } catch (error) {
+        if (!(error instanceof QueryUnavailable)) throw error;
+      }
+    }
+    try {
+      return { commands: enableNativeCommands(tuiCommandList(await gateway.rpc('commands.catalog', { session_id: binding.sessionId }, undefined, queryTimeout)),
+        ['status', 'version']), native: new Set<string>() };
+    } catch (error) {
+      if (error instanceof GatewayRefusal && error.code === -32601) throw new QueryUnavailable();
+      throw error;
+    }
+  }
+
   async query({ kind, topic_id, profile_ref, session_id }: TopicQuery): Promise<TopicQueryData> {
     const binding = this.#bindings.get(topic_id);
     if (!binding || binding.profileRef !== profile_ref || binding.sessionId !== session_id) {
       throw new Error('无法验证 Hermes 会话绑定');
     }
+    if (this.spool.nativePending(topic_id).length) throw new QueryUnavailable();
     const session = await this.#attach(binding);
     const { gateway } = session;
     try {
+      if (kind === 'commands') return { kind, commands: (await this.#commandCatalog(binding, gateway)).commands };
       if (kind === 'skills' && typeof this.access !== 'string') {
         return { kind, skills: await webappSkills(this.access, profile_ref) };
       }
@@ -163,10 +206,26 @@ export class CanonicalConnector {
     }
   }
 
-  async command(command: Command, current: () => boolean): Promise<void> {
+  #enqueue(topicId: string, task: () => Promise<void>): Promise<void> {
+    const previous = this.#topicQueues.get(topicId) ?? Promise.resolve();
+    const next = previous.catch(() => {}).then(task);
+    this.#topicQueues.set(topicId, next);
+    void next.finally(() => {
+      if (this.#topicQueues.get(topicId) === next) this.#topicQueues.delete(topicId);
+    }).catch(() => {});
+    return next;
+  }
+
+  command(command: Command, current: () => boolean): Promise<void> {
+    return this.#enqueue(command.topic_id, () => this.#command(command, current));
+  }
+
+  async #command(command: Command, current: () => boolean): Promise<void> {
+    if (this.#closed || !current()) return;
     const { command_id: id, topic_id: topicId, profile_ref: ref } = command;
     const binding = this.#bindings.get(topicId);
     if (command.kind === 'watch') {
+      if (this.spool.nativePending(topicId).length) return;
       if (binding?.sessionId === command.session_id && binding?.profileRef === ref) {
         try {
           await this.#attach(binding);
@@ -228,6 +287,10 @@ export class CanonicalConnector {
       finish('error', { error: '无法验证 Hermes 会话绑定' });
       return;
     }
+    if (this.spool.nativePending(topicId).length && command.kind !== 'model_options') {
+      finish('error', { error: '上一条原生命令的会话变更尚未确认，请等待结果后继续。' });
+      return;
+    }
     let session: Session;
     try {
       session = await this.#attach(binding);
@@ -237,6 +300,50 @@ export class CanonicalConnector {
       return;
     }
     if (!current() || !session.gateway.connected) return;
+    if (command.kind === 'native_command') {
+      if (!this.spool.begin(id, digest)) return;
+      let dispatched = false;
+      let pending: NativePending | undefined;
+      let receipt: CommandResult;
+      try {
+        const catalog = await this.#commandCatalog(binding, session.gateway);
+        const { entry, args } = resolveNativeCommand(command.body.command, catalog.commands);
+        if (!entry.supported) throw new NativeCommandFailure(entry.unavailable_reason || '当前会话通道未开放此原生命令。');
+        if (!current() || !session.gateway.connected) throw new NativeCommandFailure('连接已中断，命令尚未执行。');
+        if ((entry.name === 'status' || entry.name === 'version') && !catalog.native.has(entry.name)) {
+          if (args) throw new NativeCommandFailure(`/${entry.name} 不接受参数。`);
+          const data = await this.query({ type: 'topic_query', request_id: id, kind: entry.name,
+            topic_id: topicId, profile_ref: ref, session_id: binding.sessionId });
+          const output = data.kind === 'status' ? nativeStatusOutput(data.status)
+            : data.kind === 'version' ? `Hermes ${data.version}` : undefined;
+          if (output === undefined) throw new Error('Hermes 查询类型不匹配');
+          receipt = result(id, 'ok', { native_result: { output } });
+        } else {
+          if (!this.nativeCommands) throw new NativeCommandFailure('请配置 Hermes 原生命令插件连接。');
+          const request = { commandId: id, name: entry.name, binding, mutating: false };
+          this.spool.beginNative(request);
+          pending = request;
+          dispatched = true;
+          const native_result = await this.nativeCommands.execute(ref, binding.sessionId, id, command.body.command,
+            this.#shutdown.signal, command.body.approval);
+          this.#validateNativeMutation(entry.name, native_result);
+          receipt = result(id, 'ok', { native_result });
+        }
+      } catch (error) {
+        receipt = result(id, error instanceof NativeCommandFailure ? error.status : dispatched ? 'unknown' : 'error', {
+          error: error instanceof NativeCommandFailure ? error.message
+            : error instanceof QueryUnavailable ? '当前 Hermes 连接未提供原生命令目录。' : 'Hermes 无法确认原生命令的结果。',
+        });
+      }
+      if (this.#closed) return;
+      if (pending) {
+        this.spool.finishNative(id, { ...receipt });
+        if (receipt.status === 'unknown') this.#watchNative(pending);
+      } else {
+        this.spool.finish(id, { ...receipt });
+      }
+      return;
+    }
     if (command.kind === 'select_reasoning') {
       if (!this.spool.begin(id, digest)) return;
       try {
@@ -496,7 +603,53 @@ export class CanonicalConnector {
     }) });
   }
 
+  #validateNativeMutation(name: string, receipt: NativeCommandResult): void {
+    if (receipt.session_id !== undefined || receipt.rewound_turns !== undefined || receipt.reset !== undefined
+      || (receipt.title !== undefined && name !== 'title')) {
+      throw new NativeCommandFailure('当前网关无法验证此原生命令返回的会话变更，执行结果尚未确认。', 'unknown');
+    }
+  }
+
+  #watchNative(pending: NativePending): void {
+    if (!this.nativeCommands || pending.mutating !== false || this.#closed || this.#nativeWatchers.has(pending.commandId)) return;
+    this.#nativeWatchers.add(pending.commandId);
+    const native = this.nativeCommands;
+    const exists = () => !this.#closed && this.spool.nativeRequests(pending.binding.topicId)
+      .some(({ commandId }) => commandId === pending.commandId);
+    void (async () => {
+      while (exists()) {
+        await delay(1500, undefined, { signal: this.#shutdown.signal });
+        if (!exists()) return;
+        let receipt: CommandResult;
+        try {
+          // Read the original receipt only; an unknown execution must never be dispatched again.
+          const native_result = await native.result(pending.binding.profileRef, pending.binding.sessionId,
+            pending.commandId, this.#shutdown.signal);
+          this.#validateNativeMutation(pending.name, native_result);
+          receipt = result(pending.commandId, 'ok', { native_result });
+        } catch (error) {
+          if (!(error instanceof NativeCommandFailure) || error.status !== 'error') continue;
+          receipt = result(pending.commandId, 'error', { error: error.message });
+        }
+        await this.#enqueue(pending.binding.topicId, async () => {
+          if (exists()) this.spool.finishNative(pending.commandId, { ...receipt });
+        });
+        return;
+      }
+    })().catch(() => {}).finally(() => { this.#nativeWatchers.delete(pending.commandId); });
+  }
+
+  #currentSession(session: Session): boolean {
+    const current = this.#bindings.get(session.binding.topicId);
+    return !this.#closed && this.#sessions.get(session.binding.topicId) === session
+      && current?.sessionId === session.binding.sessionId && current.profileRef === session.binding.profileRef
+      && current.profileId === session.binding.profileId;
+  }
+
   async #attach(binding: Binding): Promise<Session> {
+    const current = this.#bindings.get(binding.topicId);
+    if (this.#closed || current?.sessionId !== binding.sessionId || current.profileRef !== binding.profileRef
+      || current.profileId !== binding.profileId) throw new GatewayRefusal(4001, 'session_identity_mismatch');
     const inflight = this.#attaching.get(binding.topicId);
     if (inflight) return inflight;
     const previous = this.#sessions.get(binding.topicId);
@@ -506,7 +659,7 @@ export class CanonicalConnector {
     try {
       return await attach;
     } finally {
-      this.#attaching.delete(binding.topicId);
+      if (this.#attaching.get(binding.topicId) === attach) this.#attaching.delete(binding.topicId);
     }
   }
 
@@ -529,12 +682,14 @@ export class CanonicalConnector {
       if (!Array.isArray(replay.events) || typeof replay.snapshot_required !== 'boolean') {
         throw new Error('Hermes 回放响应无效');
       }
+      if (!this.#currentSession(session)) throw new GatewayRefusal(4001, 'session_identity_mismatch');
       if (!replay.snapshot_required) {
         for (const params of replay.events) this.#frame(session, { jsonrpc: '2.0', method: 'event', params });
       }
       const snapshot = parseSessionSnapshot(await gateway.rpc('session.resume', {
         session_id: binding.sessionId, omit_messages: true,
       }));
+      if (!this.#currentSession(session)) throw new GatewayRefusal(4001, 'session_identity_mismatch');
       this.#checkSnapshot(session, snapshot);
       this.#restoreSnapshot(session, snapshot);
       await this.#enableReasoning(session);
@@ -588,6 +743,7 @@ export class CanonicalConnector {
   }
 
   #snapshot(session: Session, snapshot: SessionSnapshot): void {
+    if (!this.#currentSession(session) || this.spool.nativePending(session.binding.topicId).length) return;
     const cursor = { epoch: snapshot.replayEpoch, sequence: snapshot.lastSequence };
     if (session.cursor && session.cursor.epoch !== cursor.epoch) session.reasoning.clear();
     const open = new Set<string>();
@@ -683,6 +839,7 @@ export class CanonicalConnector {
   }
 
   #frame(session: Session, frame: JsonObject): void {
+    if (!this.#currentSession(session) || this.spool.nativePending(session.binding.topicId).length) return;
     const { binding } = session;
     if (frame.method !== 'event') {
       const request = parseServerRequest(frame);
@@ -801,7 +958,7 @@ export class CanonicalConnector {
       void this.receiveAttachments(session.binding.profileRef, turn.topicId, turn.admissionId, turn.text).then((received) => {
         if (!this.#closed) this.#recordTurn(session, { ...turn, ...received }, key, true);
       }).catch(() => {
-        if (!this.#closed) session.gateway.close();
+        if (this.#currentSession(session)) session.gateway.close();
       }).finally(() => { this.#receiving.delete(receivingKey); });
       return;
     }
@@ -809,6 +966,7 @@ export class CanonicalConnector {
   }
 
   #recordTurn(session: Session, turn: Turn, key: string[], publishMessage = false, cursor?: Cursor): void {
+    if (!this.#currentSession(session) || this.spool.nativePending(session.binding.topicId).length) return;
     const topicId = session.binding.topicId;
     const eventId = (kind: string) => stableId([topicId, kind, ...key]);
     const frames: ConnectorEvent[] = [];
@@ -872,6 +1030,7 @@ export class CanonicalConnector {
   }
 
   #saveControl(session: Session, control: Control, key: string[]): void {
+    if (!this.#currentSession(session) || this.spool.nativePending(session.binding.topicId).length) return;
     const topicId = session.binding.topicId;
     const clean = {
       ...control,

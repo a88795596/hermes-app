@@ -49,7 +49,7 @@ export function bridgeFrame(source: string): BridgeFrame {
   if (frame?.type === 'ack' && uuid(frame.id)) return { type: 'ack', id: frame.id };
   if (frame?.type === 'topic_query' && uuid(frame.request_id) && uuid(frame.topic_id)
     && typeof frame.profile_ref === 'string' && /^[a-z0-9][a-z0-9_-]{0,63}$/u.test(frame.profile_ref)
-    && text(frame.session_id, 512) && (frame.kind === 'skills' || frame.kind === 'status' || frame.kind === 'version')) {
+    && text(frame.session_id, 512) && (frame.kind === 'skills' || frame.kind === 'status' || frame.kind === 'version' || frame.kind === 'commands')) {
     const { type, request_id, topic_id, profile_ref, session_id, kind } = frame;
     return { type, request_id, topic_id, profile_ref, session_id, kind };
   }
@@ -75,6 +75,15 @@ export function bridgeFrame(source: string): BridgeFrame {
   if (!body || !text(frame.session_id, 512)) throw new Error('BFF 命令的会话信息无效');
   const session_id = frame.session_id;
   switch (frame.kind) {
+    case 'native_command':
+      if (Object.keys(body).every((key) => key === 'command' || key === 'approval')
+        && (body.approval === undefined || body.approval === 'once' || body.approval === 'always')
+        && text(body.command, 8 * 1024) && /^\/\S/u.test(body.command)
+        && !/[\r\n\u2028\u2029]/u.test(body.command)) {
+        return { ...base, session_id, kind: 'native_command', body: { command: body.command,
+          ...(body.approval === undefined ? {} : { approval: body.approval }) } };
+      }
+      break;
     case 'watch':
       return { ...base, session_id, kind: 'watch', body: {} };
     case 'model_options':

@@ -6,6 +6,7 @@ import type { JsonObject } from './gateway.js';
 
 type CommandRow = { digest: string; result: string | null };
 export type Binding = { topicId: string; sessionId: string; profileId: string; profileRef: string };
+export type NativePending = { commandId: string; name: string; binding: Binding; mutating?: boolean };
 export type Cursor = { epoch: string; sequence: string };
 export type Turn = {
   topicId: string;
@@ -42,6 +43,10 @@ export class Spool {
         topic_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, profile_id TEXT NOT NULL,
         profile_ref TEXT NOT NULL, UNIQUE(profile_ref, session_id)
       );
+      CREATE TABLE IF NOT EXISTS native_pending (
+        command_id TEXT PRIMARY KEY, topic_id TEXT NOT NULL, body TEXT NOT NULL, mutating INTEGER NOT NULL DEFAULT 1
+      );
+      CREATE TABLE IF NOT EXISTS native_runtime_capabilities (profile_ref TEXT PRIMARY KEY);
       CREATE TABLE IF NOT EXISTS model_selections (
         topic_id TEXT PRIMARY KEY, provider TEXT NOT NULL, model TEXT NOT NULL
       );
@@ -66,6 +71,18 @@ export class Spool {
       );
     `);
     this.#transaction(() => {
+      if (!this.#db.prepare('PRAGMA table_info(native_pending)').all().some((column) => column.name === 'mutating')) {
+        this.#db.exec(`ALTER TABLE native_pending RENAME TO native_pending_previous;
+          CREATE TABLE native_pending (
+            command_id TEXT PRIMARY KEY, topic_id TEXT NOT NULL, body TEXT NOT NULL, mutating INTEGER NOT NULL DEFAULT 1
+          );
+          INSERT INTO native_pending (command_id, topic_id, body) SELECT command_id, topic_id, body FROM native_pending_previous;
+          DROP TABLE native_pending_previous;`);
+      }
+      this.#db.exec('CREATE UNIQUE INDEX IF NOT EXISTS native_mutation_topic ON native_pending (topic_id) WHERE mutating = 1');
+      if (!this.#db.prepare('PRAGMA table_info(bindings)').all().some((column) => column.name === 'transport')) {
+        this.#db.exec('ALTER TABLE bindings ADD COLUMN transport TEXT');
+      }
       if (!this.#db.prepare('PRAGMA table_info(turns)').all().some((column) => column.name === 'process')) {
         this.#db.exec('ALTER TABLE turns ADD COLUMN process TEXT');
       }
@@ -126,6 +143,7 @@ export class Spool {
   finish(id: string, result: JsonObject, binding?: Binding, turn?: Turn,
     selection?: (ModelSelection | { effort: ReasoningEffort | null }) & { topicId: string }): void {
     this.#transaction(() => {
+      if (this.command(id)?.result !== null) return;
       if (binding) {
         this.#db.prepare(`
           INSERT INTO bindings (topic_id, session_id, profile_id, profile_ref) VALUES (?, ?, ?, ?)
@@ -147,6 +165,86 @@ export class Spool {
       }
       this.#db.prepare('UPDATE commands SET result = ? WHERE id = ? AND result IS NULL')
         .run(JSON.stringify(result), id);
+    });
+  }
+
+  transport(topicId: string): 'http' | 'canonical' | undefined {
+    const binding = this.#db.prepare('SELECT session_id, transport FROM bindings WHERE topic_id = ?').get(topicId);
+    if (!binding) return;
+    return binding.transport === 'http' || (binding.transport === null && String(binding.session_id).startsWith('mobile_'))
+      ? 'http' : 'canonical';
+  }
+
+  nativeRuntimeSupported(profileRef: string): boolean {
+    return this.#db.prepare('SELECT 1 FROM native_runtime_capabilities WHERE profile_ref = ?').get(profileRef) !== undefined;
+  }
+
+  markNativeRuntimeSupported(profileRef: string): void {
+    this.#db.prepare('INSERT OR IGNORE INTO native_runtime_capabilities (profile_ref) VALUES (?)').run(profileRef);
+  }
+
+  nativePending(topicId?: string): NativePending[] {
+    const rows = topicId === undefined ? this.#db.prepare('SELECT body FROM native_pending WHERE mutating = 1').all()
+      : this.#db.prepare('SELECT body FROM native_pending WHERE topic_id = ? AND mutating = 1').all(topicId);
+    return rows.map((row) => JSON.parse(row.body as string) as NativePending);
+  }
+
+  nativeRequests(topicId?: string): NativePending[] {
+    const rows = topicId === undefined ? this.#db.prepare('SELECT body FROM native_pending').all()
+      : this.#db.prepare('SELECT body FROM native_pending WHERE topic_id = ?').all(topicId);
+    return rows.map((row) => JSON.parse(row.body as string) as NativePending);
+  }
+
+  beginNative(pending: NativePending): void {
+    this.#transaction(() => {
+      const { binding, commandId } = pending;
+      const current = this.binding(binding.topicId);
+      if (this.command(commandId)?.result !== null || current?.sessionId !== binding.sessionId
+        || current.profileRef !== binding.profileRef || current.profileId !== binding.profileId
+        || (pending.mutating !== false && (this.activeTurns(binding.topicId).length || this.nativePending(binding.topicId).length))) {
+        throw new Error('请等待当前会话任务结束并确认结果后再执行此命令。');
+      }
+      this.#db.prepare('INSERT INTO native_pending (command_id, topic_id, body, mutating) VALUES (?, ?, ?, ?)')
+        .run(commandId, binding.topicId, JSON.stringify(pending), pending.mutating === false ? 0 : 1);
+    });
+  }
+
+  /** Publish a native receipt and any authorized session continuation as one durable change. */
+  finishNative(id: string, result: JsonObject, sessionId?: string): void {
+    this.#transaction(() => {
+      const raw = this.#db.prepare('SELECT body FROM native_pending WHERE command_id = ?').get(id);
+      if (!raw) return; // A replayed final receipt must not restore an older binding.
+      const { binding, name, mutating } = JSON.parse(raw.body as string) as NativePending;
+      if (mutating === false && sessionId !== undefined) throw new Error('此原生命令不能替换会话绑定。');
+      if (mutating === false && name === 'title' && result.status === 'ok'
+        && this.binding(binding.topicId)?.sessionId !== binding.sessionId && result.native_result) {
+        const { title: _title, ...historical } = result.native_result as JsonObject;
+        result = { ...result, native_result: historical };
+      }
+      if (result.status === 'ok' && mutating !== false) {
+        const current = this.binding(binding.topicId);
+        if (current?.sessionId !== binding.sessionId || current.profileRef !== binding.profileRef
+          || current.profileId !== binding.profileId || this.activeTurns(binding.topicId).length) {
+          throw new Error('原生命令执行后的会话绑定已改变，结果需要确认。');
+        }
+        if (sessionId && sessionId !== binding.sessionId) {
+          const transport = this.transport(binding.topicId);
+          const updated = this.#db.prepare(`UPDATE bindings SET session_id = ?, transport = ?
+            WHERE topic_id = ? AND session_id = ? AND profile_ref = ? AND profile_id = ?`)
+            .run(sessionId, transport!, binding.topicId, binding.sessionId, binding.profileRef, binding.profileId);
+          if (updated.changes !== 1) throw new Error('原生命令的会话续接未确认。');
+          this.#db.prepare('DELETE FROM cursors WHERE topic_id = ?').run(binding.topicId);
+          this.#db.prepare('DELETE FROM controls WHERE topic_id = ?').run(binding.topicId);
+        }
+        if ((name === 'new' || name === 'reset') && (result.native_result as JsonObject | undefined)?.reset === true) {
+          this.#db.prepare('DELETE FROM controls WHERE topic_id = ?').run(binding.topicId);
+          this.#db.prepare('DELETE FROM model_selections WHERE topic_id = ?').run(binding.topicId);
+          this.#db.prepare('DELETE FROM reasoning_selections WHERE topic_id = ?').run(binding.topicId);
+        }
+      }
+      this.#db.prepare('UPDATE commands SET result = ?, acknowledged = 0 WHERE id = ?')
+        .run(JSON.stringify(result), id);
+      if (result.status !== 'unknown') this.#db.prepare('DELETE FROM native_pending WHERE command_id = ?').run(id);
     });
   }
 
@@ -236,8 +334,9 @@ export class Spool {
     `).all(JSON.stringify([...topics]), JSON.stringify([...sent]), limit).map((row) => ({ id: row.id as string, body: JSON.parse(row.body as string) as JsonObject }));
   }
 
-  ack(id: string): void {
-    this.#db.prepare('UPDATE commands SET acknowledged = 1 WHERE id = ?').run(id);
+  ack(id: string, expectedResult?: string): void {
+    if (expectedResult === undefined) this.#db.prepare('UPDATE commands SET acknowledged = 1 WHERE id = ?').run(id);
+    else this.#db.prepare('UPDATE commands SET acknowledged = 1 WHERE id = ? AND result = ?').run(id, expectedResult);
     this.#db.prepare('DELETE FROM events WHERE id = ?').run(id);
   }
 

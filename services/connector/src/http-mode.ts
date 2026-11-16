@@ -1,15 +1,16 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { randomBytes } from 'node:crypto';
-import type { Command, ConnectorEvent, Control, ModelSelection, ReasoningEffort, TopicQuery, TopicQueryData } from '@hermes-mobile/protocol';
-import { MAX_CLARIFY_CHOICE_BYTES } from '@hermes-mobile/protocol';
+import type { Command, ConnectorEvent, Control, ModelSelection, NativeCommandResult, ReasoningEffort, TopicQuery, TopicQueryData } from '@hermes-mobile/protocol';
+import { MAX_CLARIFY_CHOICE_BYTES, MAX_TOPIC_TITLE_BYTES } from '@hermes-mobile/protocol';
 import { attachmentBytes, attachmentFilename, type DownloadAttachment, type ReceiveAttachments } from './attachments.js';
 import { deliveryInstructions } from './delivery-context.js';
 import { integer, object, string } from './gateway.js';
 import type { JsonObject, WebappAccess } from './gateway.js';
 import { addProcessText, removeStreamedCommentary, updateProcessTool } from './message-process.js';
 import { hasModel, modelCatalog } from './models.js';
+import { createNativeCommands, enableNativeCommands, NativeCommandFailure, nativeStatusOutput, nativeTitle, resolveNativeCommand, type NativeCommands } from './native-commands.js';
 import type { createDashboardManagement } from './management.js';
-import type { Binding, Spool, Turn } from './spool.js';
+import type { Binding, NativePending, Spool, Turn } from './spool.js';
 import { QueryUnavailable, queryTimeout, runtimeVersion, sessionStatus, skillList, webappSkills } from './topic-query.js';
 import { topicTitleEvent } from './topic-title.js';
 import { boundedText, commandDigest, result, stableId, text } from './wire.js';
@@ -74,9 +75,10 @@ type Options = {
   receiveAttachments?: ReceiveAttachments;
   webapp?: WebappAccess;
   manage?: ReturnType<typeof createDashboardManagement>;
+  nativeCommands?: NativeCommands;
 };
 
-export function createHttpConnector({ url, token, send, spool, downloadAttachment, receiveAttachments, webapp, manage }: Options) {
+export function createHttpConnector({ url, token, send, spool, downloadAttachment, receiveAttachments, webapp, manage, nativeCommands }: Options) {
   const endpoint = URL.parse(url);
   if (!endpoint || !['http:', 'https:'].includes(endpoint.protocol) ||
       !['127.0.0.1', '[::1]'].includes(endpoint.hostname) || endpoint.username || endpoint.password ||
@@ -84,8 +86,12 @@ export function createHttpConnector({ url, token, send, spool, downloadAttachmen
     throw new Error('Hermes HTTP 模式需要本机回环地址和 API 密钥');
   }
   const origin = endpoint.origin;
+  const native = nativeCommands ?? createNativeCommands(origin, token);
   const shutdown = new AbortController();
   const watchers = new Map<string, AbortController>();
+  const watcherTopics = new Map<string, string>();
+  const nativeWatchers = new Set<string>();
+  const topicQueues = new Map<string, Promise<void>>();
   const commands = new Set<string>();
   const modelConfirmations = new Map<string, { selection: string; expires: number }>();
 
@@ -138,8 +144,11 @@ export function createHttpConnector({ url, token, send, spool, downloadAttachmen
 
   async function query({ kind, topic_id, profile_ref, session_id }: TopicQuery): Promise<TopicQueryData> {
     const binding = spool.binding(topic_id);
-    if (!binding || binding.profileRef !== profile_ref || binding.sessionId !== session_id || !session_id.startsWith('mobile_')) {
+    if (!binding || binding.profileRef !== profile_ref || binding.sessionId !== session_id || spool.transport(topic_id) !== 'http') {
       throw new Error('无法验证 Hermes 会话绑定');
+    }
+    if (kind === 'commands') {
+      return { kind, commands: enableNativeCommands(await native.catalog(profile_ref, shutdown.signal), ['status', 'title']) };
     }
     const path = kind === 'skills' ? '/v1/skills'
       : kind === 'version' ? '/v1/health'
@@ -164,7 +173,7 @@ export function createHttpConnector({ url, token, send, spool, downloadAttachmen
   async function syncTitle(binding: Binding) {
     const session = await json(binding.profileRef, `/api/sessions/${encodeURIComponent(binding.sessionId)}`)
       .then(({ response, data }) => response.ok ? object(data?.session) : undefined, () => undefined);
-    if (session?.id !== binding.sessionId || shutdown.signal.aborted) return;
+    if (session?.id !== binding.sessionId || shutdown.signal.aborted || spool.binding(binding.topicId)?.sessionId !== binding.sessionId) return;
     const event = topicTitleEvent(binding, session.title, [String(session.last_active ?? '')]);
     if (event) {
       spool.record(binding.topicId, [event]);
@@ -288,6 +297,7 @@ export function createHttpConnector({ url, token, send, spool, downloadAttachmen
     const controller = new AbortController();
     const { signal } = controller;
     watchers.set(id, controller);
+    watcherTopics.set(id, binding.topicId);
     let reading: Promise<void> | undefined;
     let finishing = false;
     void (async () => {
@@ -350,15 +360,93 @@ export function createHttpConnector({ url, token, send, spool, downloadAttachmen
     })().catch(() => undefined).finally(() => {
       controller.abort();
       watchers.delete(id);
+      watcherTopics.delete(id);
     });
   }
 
-  async function command(command: Command, current: () => boolean): Promise<void> {
+  function validateNativeMutation(name: string, receipt: NativeCommandResult): void {
+    const resetting = (name === 'new' || name === 'reset') && receipt.reset === true;
+    if ((receipt.session_id !== undefined && name !== 'compress' && !resetting)
+      || (receipt.rewound_turns !== undefined && name !== 'undo')
+      || (receipt.title !== undefined && name !== 'title' && !resetting)
+      || (receipt.reset !== undefined && !resetting)
+      || (receipt.confirmation !== undefined && !['new', 'reset', 'undo'].includes(name))) {
+      throw new NativeCommandFailure('Hermes 返回了与命令不匹配的会话变更回执。', 'unknown');
+    }
+  }
+
+  async function stopForReset(binding: Binding): Promise<void> {
+    const active = spool.activeTurns(binding.topicId);
+    if (!active.length) return;
+    for (const turn of active) {
+      if (!runId.test(turn.admissionId)) throw new NativeCommandFailure('当前任务状态尚未确认，无法重置会话。');
+      const { response, data } = await json(binding.profileRef, `/v1/runs/${turn.admissionId}/stop`, {});
+      if (!response.ok || data?.run_id !== turn.admissionId) throw new NativeCommandFailure('无法确认当前回复已停止，尚未重置会话。');
+    }
+    const deadline = Date.now() + 15_000;
+    while (spool.activeTurns(binding.topicId).length && Date.now() < deadline && !shutdown.signal.aborted) {
+      for (const turn of spool.activeTurns(binding.topicId)) {
+        const { response, data } = await json(binding.profileRef, `/v1/runs/${turn.admissionId}`);
+        if (!response.ok || data?.run_id !== turn.admissionId) continue;
+        const state = terminalStatus(data.status);
+        if (state && state !== 'unknown') {
+          watchers.get(turn.admissionId)?.abort();
+          await finishRun(binding, turn, state, data.output);
+        }
+      }
+      if (spool.activeTurns(binding.topicId).length) await delay(250, undefined, { signal: shutdown.signal });
+    }
+    if (spool.activeTurns(binding.topicId).length) throw new NativeCommandFailure('已请求停止回复，等待执行结束后才能重置会话。');
+  }
+
+  function finishNative(pending: NativePending, receipt: ReturnType<typeof result>): void {
+    const sessionId = receipt.status === 'ok' ? receipt.native_result?.session_id : undefined;
+    spool.finishNative(pending.commandId, { ...receipt }, sessionId);
+    if (sessionId && sessionId !== pending.binding.sessionId) {
+      for (const [id, topicId] of watcherTopics) if (topicId === pending.binding.topicId) watchers.get(id)?.abort();
+    }
+    const saved = spool.command(pending.commandId)?.result;
+    if (saved) send(JSON.parse(saved) as JsonObject);
+  }
+
+  function watchNative(pending: NativePending): void {
+    if (nativeWatchers.has(pending.commandId) || shutdown.signal.aborted) return;
+    nativeWatchers.add(pending.commandId);
+    void (async () => {
+      while (!shutdown.signal.aborted && spool.nativeRequests(pending.binding.topicId)
+        .some(({ commandId }) => commandId === pending.commandId)) {
+        await delay(1500, undefined, { signal: shutdown.signal });
+        try {
+          const native_result = await native.result(pending.binding.profileRef, pending.binding.sessionId,
+            pending.commandId, shutdown.signal);
+          validateNativeMutation(pending.name, native_result);
+          finishNative(pending, result(pending.commandId, 'ok', { native_result }));
+          return;
+        } catch (error) {
+          if (error instanceof NativeCommandFailure && error.status === 'error') {
+            finishNative(pending, result(pending.commandId, 'error', { error: error.message }));
+            return;
+          }
+          // A missing, pending, or unverified receipt leaves the durable admission fence in place.
+        }
+      }
+    })().catch(() => {}).finally(() => { nativeWatchers.delete(pending.commandId); });
+  }
+
+  function command(command: Command, current: () => boolean): Promise<void> {
+    const previous = topicQueues.get(command.topic_id) ?? Promise.resolve();
+    const next = previous.catch(() => {}).then(() => runCommand(command, current));
+    topicQueues.set(command.topic_id, next);
+    void next.finally(() => { if (topicQueues.get(command.topic_id) === next) topicQueues.delete(command.topic_id); }).catch(() => {});
+    return next;
+  }
+
+  async function runCommand(command: Command, current: () => boolean): Promise<void> {
     if (!current() || shutdown.signal.aborted) return;
     const { command_id, topic_id, profile_ref } = command;
     const existing = spool.binding(topic_id);
     const bound = existing?.profileRef === profile_ref && existing.sessionId === command.session_id &&
-      existing.sessionId.startsWith('mobile_') ? existing : undefined;
+      spool.transport(topic_id) === 'http' ? existing : undefined;
     if (command.kind === 'watch') {
       if (bound) {
         for (const turn of spool.activeTurns(topic_id)) watch(bound, turn);
@@ -399,11 +487,69 @@ export function createHttpConnector({ url, token, send, spool, downloadAttachmen
     let receipt = result(command_id, 'unknown', { error: unknown });
     let turn: Turn | undefined;
     let selection: ((ModelSelection | { effort: ReasoningEffort | null }) & { topicId: string }) | undefined;
+    let pendingNative: NativePending | undefined;
     try {
       if (!profileName.test(profile_ref)) {
         receipt = result(command_id, 'error', { error: 'Hermes 配置档案无效' });
       } else if (!bound) {
         receipt = result(command_id, 'error', { error: 'Hermes 会话与话题的绑定不匹配' });
+      } else if (spool.nativePending(topic_id).length && command.kind !== 'native_command' && command.kind !== 'model_options') {
+        receipt = result(command_id, 'error', { error: '上一条原生命令的会话变更尚未确认，请等待结果后继续。' });
+      } else if (command.kind === 'native_command') {
+        let dispatched = false;
+        try {
+          const originalCatalog = await native.catalog(profile_ref, shutdown.signal);
+          const catalog = enableNativeCommands(originalCatalog, ['status', 'title']);
+          const { entry, args } = resolveNativeCommand(command.body.command, catalog);
+          if (!entry.supported) throw new NativeCommandFailure(entry.unavailable_reason || '当前会话通道未开放此原生命令。');
+          if (spool.nativePending(topic_id).length && (args || !['help', 'commands', 'version', 'status', 'usage', 'context',
+            'profile', 'bundles', 'title', 'restart'].includes(entry.name))) {
+            throw new NativeCommandFailure('上一条原生命令的会话变更尚未确认，请等待结果后继续。');
+          }
+          if (!current() || shutdown.signal.aborted) throw new NativeCommandFailure('连接已中断，命令尚未执行。');
+          if (entry.name === 'new' || entry.name === 'reset') await stopForReset(bound);
+          if (['undo', 'compress', 'new', 'reset'].includes(entry.name)) {
+            pendingNative = { commandId: command_id, name: entry.name, binding: bound };
+            try { spool.beginNative(pendingNative); }
+            catch { pendingNative = undefined; throw new NativeCommandFailure('请等待当前会话任务结束并确认结果后再执行此命令。'); }
+          }
+          if ((entry.name === 'status' || entry.name === 'title') && !originalCatalog.find(({ name }) => name === entry.name)?.supported) {
+            if (entry.name === 'status' && args) throw new NativeCommandFailure('/status 不接受参数。');
+            const writing = entry.name === 'title' && !!args;
+            const expectedTitle = writing ? nativeTitle(args) : undefined;
+            dispatched = writing;
+            const response = await request(profile_ref, `/api/sessions/${encodeURIComponent(bound.sessionId)}`, writing ? {
+              method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: args }),
+            } : {});
+            const data = object(await response.json().catch(() => undefined));
+            if (!response.ok) throw new NativeCommandFailure(`Hermes 拒绝了会话命令（${response.status}）。`,
+              writing && response.status >= 500 ? 'unknown' : 'error');
+            const snapshot = object(data?.session);
+            if (snapshot?.id !== bound.sessionId || (writing
+              && (!text(snapshot.title, MAX_TOPIC_TITLE_BYTES) || snapshot.title !== expectedTitle))) {
+              throw new NativeCommandFailure('Hermes 返回了不匹配的会话命令回执。', writing ? 'unknown' : 'error');
+            }
+            const output = entry.name === 'status' ? nativeStatusOutput(sessionStatus(snapshot, spool.activeTurns(topic_id)))
+              : `会话标题：${typeof snapshot.title === 'string' && snapshot.title ? snapshot.title : '未命名'}`;
+            receipt = result(command_id, 'ok', { native_result: { output, ...(writing && { title: snapshot.title as string }) } });
+          } else {
+            if (!pendingNative) {
+              const pending = { commandId: command_id, name: entry.name, binding: bound, mutating: false };
+              spool.beginNative(pending);
+              pendingNative = pending;
+            }
+            dispatched = true;
+            const native_result = await native.execute(profile_ref, bound.sessionId, command_id, command.body.command,
+              shutdown.signal, command.body.approval);
+            validateNativeMutation(entry.name, native_result);
+            receipt = result(command_id, 'ok', { native_result });
+          }
+        } catch (error) {
+          receipt = result(command_id, error instanceof NativeCommandFailure ? error.status : dispatched ? 'unknown' : 'error', {
+            error: error instanceof NativeCommandFailure ? error.message
+              : error instanceof QueryUnavailable ? '请更新并启用 Hermes 移动端命令插件。' : 'Hermes 无法确认原生命令的结果。',
+          });
+        }
       } else if (command.kind === 'model_options' || command.kind === 'select_model') {
         receipt = result(command_id, 'error', { error: 'Hermes 无法加载模型目录' });
         const { response, data } = await json(profile_ref, '/api/model/options?include_unconfigured=false');
@@ -466,10 +612,21 @@ export function createHttpConnector({ url, token, send, spool, downloadAttachmen
           receipt = result(command_id, 'ok');
         }
       } else if (command.kind === 'submit') {
+        let systemPrompt: string;
+        try {
+          systemPrompt = await native.runtime(profile_ref, bound.sessionId, shutdown.signal);
+          spool.markNativeRuntimeSupported(profile_ref);
+        } catch (error) {
+          if (error instanceof QueryUnavailable && !spool.nativeRuntimeSupported(profile_ref)) systemPrompt = '';
+          else {
+            receipt = result(command_id, 'error', { error: '无法读取 Hermes 当前人格配置，请检查原生命令插件连接后重试。' });
+            throw new Error('Native runtime configuration unavailable before admission');
+          }
+        }
         const effort = spool.reasoningEffort(topic_id);
         const { response, data } = await json(profile_ref, '/v1/runs', {
           session_id: bound.sessionId, input: input ?? command.body.text, ...spool.modelSelection(topic_id),
-          instructions: deliveryInstructions(bound.profileRef, bound.sessionId),
+          instructions: [systemPrompt, deliveryInstructions(bound.profileRef, bound.sessionId)].filter(Boolean).join('\n\n'),
           ...(effort && { model_options: { reasoning_effort: effort } }),
         }, command_id);
         const id = string(data?.run_id);
@@ -533,11 +690,19 @@ export function createHttpConnector({ url, token, send, spool, downloadAttachmen
     } finally {
       commands.delete(command_id);
     }
-    if (shutdown.signal.aborted) return;
-    spool.finish(command_id, { ...receipt }, undefined, turn, selection);
-    send({ ...receipt });
+    if (pendingNative) {
+      try { finishNative(pendingNative, receipt); }
+      catch { finishNative(pendingNative, result(command_id, 'unknown', { error: '原生命令的会话变更尚未确认，请等待原生回执。' })); }
+      if (spool.nativeRequests(topic_id).some(({ commandId }) => commandId === command_id)) watchNative(pendingNative);
+    } else {
+      if (shutdown.signal.aborted) return;
+      spool.finish(command_id, { ...receipt }, undefined, turn, selection);
+      send({ ...receipt });
+    }
     if (turn && bound) watch(bound, turn);
   }
+
+  for (const pending of spool.nativeRequests()) if (spool.transport(pending.binding.topicId) === 'http') watchNative(pending);
 
   return {
     command,

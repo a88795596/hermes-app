@@ -106,6 +106,70 @@ async function workspace(cache, submit, messages = [], options = {}) {
 
 const supplemental = { submission_id: "supplemental-id", topic_id: "topic", text: "加上预算", created_at: 1 };
 
+test("原生命令断线后用同一请求编号查询，不生成普通聊天消息", async (t) => {
+  const calls = [];
+  let interrupted = true;
+  const app = await workspace(memoryCache(), async (path, options) => {
+    calls.push({ path, method: options.method, body: options.body });
+    if (options.method === "POST") return { status: "pending" };
+    if (interrupted) { interrupted = false; throw new Error("连接中断"); }
+    return { status: "ok", native_result: { output: "原生命令输出" } };
+  });
+  t.after(app.close);
+  const run = () => app.current.requestNativeCommand("topic", "same-request", "/commands 2", new AbortController().signal);
+  await assert.rejects(run(), /连接中断/);
+  assert.deepEqual(await run(), { status: "ok", native_result: { output: "原生命令输出" } });
+  assert.deepEqual(calls, [
+    { path: "/topics/topic/command-requests", method: "POST", body: { request_id: "same-request", command: "/commands 2" } },
+    { path: "/topics/topic/command-requests/same-request", method: undefined, body: undefined },
+    { path: "/topics/topic/command-requests", method: "POST", body: { request_id: "same-request", command: "/commands 2" } },
+    { path: "/topics/topic/command-requests/same-request", method: undefined, body: undefined },
+  ]);
+  assert.deepEqual(app.current.pending, []);
+  assert.deepEqual(app.current.detail.messages, []);
+});
+
+test("原生命令审批原样提交，断线重试保留请求编号、命令和审批选择", async (t) => {
+  const cache = memoryCache(), calls = [], expected = [], interrupted = new Set();
+  const app = await workspace(cache, async (path, options) => {
+    calls.push({ path, method: options.method, body: options.body });
+    if (options.method === "POST") return { status: "pending" };
+    if (!interrupted.has(path)) { interrupted.add(path); throw new Error("审批后连接中断"); }
+    return { status: "ok", native_result: { output: "原生命令输出" } };
+  });
+  t.after(app.close);
+  for (const approval of ["once", "always"]) {
+    const requestId = `approval-${approval}`, command = "/restart";
+    const run = () => app.current.requestNativeCommand("topic", requestId, command, new AbortController().signal, approval);
+    await assert.rejects(run(), /审批后连接中断/);
+    assert.deepEqual(await run(), { status: "ok", native_result: { output: "原生命令输出" } });
+    for (let attempt = 0; attempt < 2; attempt++) expected.push(
+      { path: "/topics/topic/command-requests", method: "POST", body: { request_id: requestId, command, approval } },
+      { path: `/topics/topic/command-requests/${requestId}`, method: undefined, body: undefined },
+    );
+  }
+  assert.deepEqual(calls, expected);
+  assert.deepEqual(app.current.pending, []);
+  assert.deepEqual(app.current.detail.messages, []);
+  assert.deepEqual(await cache.list("pending:"), []);
+});
+
+test("原生命令结束后重新加载服务端会话投影并更新本地缓存", async (t) => {
+  const messages = [{ message_id: "last-user", role: "user", status: "final", text: "撤回这条" }];
+  const cache = memoryCache();
+  const app = await workspace(cache, async (_path, options) => {
+    if (options.method === "POST") return { status: "pending" };
+    messages.splice(0);
+    return { status: "ok", native_result: { output: "已撤回", rewound_turns: 1 } };
+  }, messages);
+  t.after(app.close);
+  assert.equal(app.current.detail.messages.length, 1);
+  await app.current.requestNativeCommand("topic", "undo-request", "/undo", new AbortController().signal);
+  await app.settle();
+  assert.deepEqual(app.current.detail.messages, []);
+  assert.deepEqual((await cache.list("topic:"))[0].messages, []);
+});
+
 test("后台子任务仍执行时独立更新会话状态，不触发下拉刷新或改写已完成消息", async (t) => {
   let activity = "running", calls = 0;
   const messages = [{ role: "user", status: "final" }, { role: "assistant", status: "final" }];

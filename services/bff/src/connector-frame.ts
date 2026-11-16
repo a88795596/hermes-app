@@ -1,4 +1,4 @@
-import type { ConnectorFrame, MessageProcessStep, ModelResult } from "@hermes-mobile/protocol";
+import type { ConnectorFrame, MessageProcessStep, ModelResult, NativeCommand, NativeCommandResult } from "@hermes-mobile/protocol";
 import { MAX_CLARIFY_CHOICE_BYTES, MAX_INBOX_TITLE_BYTES, MAX_MESSAGE_PROCESS_STEPS, MAX_MESSAGE_PROCESS_TEXT_BYTES, MAX_TOPIC_TITLE_BYTES } from "@hermes-mobile/protocol";
 import { deliverySessionId, invalid, record, string, uuid } from "./validation.js";
 import { receivedAttachmentReferences } from "./received-attachments.js";
@@ -55,6 +55,34 @@ function modelResult(value: unknown): ModelResult {
   invalid("模型结果无效。");
 }
 
+function nativeResult(value: unknown): NativeCommandResult {
+  const body = record(value, ["output", "title", "session_id", "rewound_turns", "reset", "confirmation"]);
+  if (body.reset !== undefined && body.reset !== true) invalid("会话重置回执无效。");
+  if (body.rewound_turns !== undefined && (typeof body.rewound_turns !== "number" || !Number.isSafeInteger(body.rewound_turns)
+    || body.rewound_turns < 0)) invalid("撤回轮数无效。");
+  return { output: string(body.output, "命令输出", 256 * 1024, true),
+    ...(body.title === undefined ? {} : { title: string(body.title, "话题标题", MAX_TOPIC_TITLE_BYTES) }),
+    ...(body.session_id === undefined ? {} : { session_id: string(body.session_id, "会话 ID", 512) }),
+    ...(body.rewound_turns === undefined ? {} : { rewound_turns: body.rewound_turns as number }),
+    ...(body.reset === true ? { reset: true } : {}),
+    ...(body.confirmation === undefined ? {} : { confirmation: string(body.confirmation, "原生命令确认提示", 16 * 1024) }) };
+}
+
+function nativeCommands(value: unknown): NativeCommand[] {
+  if (!Array.isArray(value) || value.length > 1024) invalid("命令目录无效。");
+  return value.map((raw) => {
+    const row = record(raw, ["name", "description", "category", "aliases", "args_hint", "subcommands", "supported", "unavailable_reason"]);
+    if (typeof row.supported !== "boolean" || !Array.isArray(row.aliases) || row.aliases.length > 32) invalid("命令目录条目无效。");
+    if (row.subcommands !== undefined && (!Array.isArray(row.subcommands) || row.subcommands.length > 64)) invalid("命令子选项无效。");
+    return { name: string(row.name, "命令名称", 128), description: string(row.description, "命令描述", 8192, true),
+      category: string(row.category, "命令分类", 128, true), aliases: row.aliases.map((alias) => string(alias, "命令别名", 128)),
+      supported: row.supported,
+      ...(row.args_hint === undefined ? {} : { args_hint: string(row.args_hint, "命令参数", 1024, true) }),
+      ...(row.subcommands === undefined ? {} : { subcommands: (row.subcommands as unknown[]).map((item) => string(item, "命令子选项", 256)) }),
+      ...(row.unavailable_reason === undefined ? {} : { unavailable_reason: string(row.unavailable_reason, "不可用原因", 2048, true) }) };
+  });
+}
+
 export function connectorFrame(value: unknown): ConnectorFrame {
   const { type } = record(value);
   switch (type) {
@@ -68,7 +96,7 @@ export function connectorFrame(value: unknown): ConnectorFrame {
       invalid("管理操作结果无效。");
     }
     case "command_result": {
-      const body = record(value, ["type", "command_id", "status", "session_id", "admission_id", "error", "control_status", "model_result", "title", "steering"]);
+      const body = record(value, ["type", "command_id", "status", "session_id", "admission_id", "error", "control_status", "model_result", "native_result", "title", "steering"]);
       if (body.steering !== undefined && body.steering !== true) invalid("连接器的插话结果标记无效。");
       return { type, command_id: uuid(body.command_id, "命令 ID"), status: option(body.status, ["ok", "error", "unknown"]),
         ...(body.steering === true ? { steering: true } : {}),
@@ -77,6 +105,7 @@ export function connectorFrame(value: unknown): ConnectorFrame {
         ...(body.error === undefined ? {} : { error: string(body.error, "错误提示", 1024) }),
         ...(body.control_status === undefined ? {} : { control_status: option(body.control_status, controlStatuses) }),
         ...(body.model_result === undefined ? {} : { model_result: modelResult(body.model_result) }),
+        ...(body.native_result === undefined ? {} : { native_result: nativeResult(body.native_result) }),
         ...(body.title === undefined ? {} : { title: string(body.title, "话题标题", MAX_TOPIC_TITLE_BYTES) }) };
     }
     case "topic_query_result": {
@@ -87,6 +116,7 @@ export function connectorFrame(value: unknown): ConnectorFrame {
         return { type, request_id, error: option(body.error, ["unavailable", "failed", "too_large"]) };
       }
       const data = record(body.data);
+      if (data.kind === "commands") return { type, request_id, data: { kind: "commands", commands: nativeCommands(data.commands) } };
       if (data.kind === "skills" && Array.isArray(data.skills)) {
         const skills = data.skills.map((raw) => {
           const skill = record(raw, ["name", "description", "category"]);

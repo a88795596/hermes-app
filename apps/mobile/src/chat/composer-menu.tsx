@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import Animated from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { reasoningEfforts, type ReasoningEffort, type Skill } from "@hermes-mobile/protocol";
+import { reasoningEfforts, type NativeCommand, type ReasoningEffort, type Skill } from "@hermes-mobile/protocol";
 import type { useWorkspace } from "../sync/use-workspace";
 import { haptic } from "../ui/haptics";
 import { motion, useReduceMotion } from "../ui/motion";
@@ -12,16 +12,25 @@ import { PageHeader } from "../ui/page-header";
 import { profileLabel } from "../ui/text";
 import { Action, CloseButton, Field, Icon, Notice, useTheme, type IconName } from "../ui/theme";
 
-const commands = [
-  { name: "status", label: "查看会话状态", icon: "chat" },
-  { name: "model", label: "选择模型", icon: "model" },
-  { name: "stop", label: "停止当前回复", icon: "stop" },
-  { name: "skills", label: "浏览技能", icon: "skill" },
-  { name: "new", label: "新建会话", icon: "compose" },
-  { name: "version", label: "查看 Hermes 版本", icon: "activity" },
-] as const satisfies readonly { name: string; label: string; icon: IconName }[];
+const commandLabels: Record<string, string> = {
+  help: "查看帮助", commands: "浏览原生命令", status: "查看会话状态", version: "查看 Hermes 版本",
+  model: "选择模型", reasoning: "调整思考强度", stop: "停止执行", restart: "重启 Hermes 网关",
+  new: "新建会话", sessions: "浏览历史会话", resume: "恢复会话", title: "修改会话标题",
+  retry: "重试上一条消息", undo: "回退会话", branch: "创建会话分支", compress: "压缩上下文",
+  context: "查看上下文", usage: "查看用量", insights: "查看使用统计", diff: "查看代码改动",
+  queue: "排队执行", steer: "补充指令", background: "后台执行", agents: "查看运行任务",
+  goal: "管理持续目标", subgoal: "管理子目标", rollback: "恢复文件检查点", moa: "多模型执行",
+  fast: "切换快速模式", personality: "选择人格", approve: "批准操作", deny: "拒绝操作",
+  approvals: "设置审批模式", yolo: "切换免审批模式", skills: "管理技能", bundles: "查看技能组合",
+  "reload-skills": "重新加载技能", "reload-mcp": "重新加载 MCP", memory: "管理记忆审批",
+  learn: "学习技能", cron: "管理定时任务", profile: "查看配置档案", whoami: "查看命令权限",
+  update: "更新 Hermes", platform: "管理消息平台", sethome: "设置默认投递频道", voice: "设置语音模式",
+  suggestions: "查看自动化建议", blueprint: "使用自动化模板", kanban: "管理协作看板",
+};
 
-export type ComposerCommand = (typeof commands)[number]["name"];
+function commandLabel(command: NativeCommand) {
+  return Object.hasOwn(commandLabels, command.name) ? commandLabels[command.name] : command.description;
+}
 
 export const reasoningLabels: Record<ReasoningEffort, string> = {
   none: "关闭", minimal: "最低", low: "低", medium: "中", high: "高", xhigh: "很高", max: "最高", ultra: "极限",
@@ -258,44 +267,128 @@ function Skills({ call, path, onSelect }: {
   );
 }
 
+function Commands({ call, path, connected, reasoningSupported, onClose, onCommand }: {
+  call: ReturnType<typeof useWorkspace>["call"];
+  path: string;
+  connected: boolean;
+  reasoningSupported: boolean;
+  onClose: () => void;
+  onCommand: (command: string) => void;
+}) {
+  const { colors, styles } = useTheme();
+  const [attempt, setAttempt] = useState(0);
+  const [commands, setCommands] = useState<NativeCommand[]>();
+  const [error, setError] = useState<string>();
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState<NativeCommand>();
+  const [args, setArgs] = useState("");
+  const query = search.trim().toLowerCase();
+
+  useEffect(() => {
+    if (!connected) return;
+    const request = new AbortController();
+    void call<NativeCommand[]>(path + "/commands", { signal: request.signal }).then((items) => {
+      if (!request.signal.aborted) setCommands(items);
+    }, (failure: unknown) => {
+      if (!request.signal.aborted) setError(failure instanceof Error ? failure.message : "无法加载原生命令目录。");
+    });
+    return () => request.abort();
+  }, [attempt, call, connected, path]);
+
+  function back() {
+    setSelected(undefined);
+    setArgs("");
+  }
+
+  const preview = selected ? `/${selected.name}${args ? ` ${args}` : ""}` : "";
+  const canExecute = selected?.supported || !args.trim();
+  const content = !connected ? <Text style={styles.muted}>连接 Hermes 后可读取原生命令目录。</Text>
+    : error ? <>
+    <Notice>{error}</Notice>
+    <Action title="重试" onPress={() => { setError(undefined); setAttempt((value) => value + 1); }} />
+  </> : !commands ? <ActivityIndicator accessibilityLabel="正在加载原生命令目录" color={colors.accent} />
+    : selected ? <>
+    <Text style={styles.caption}>/{selected.name} {selected.args_hint}</Text>
+    {!!selected.subcommands?.length && <ScrollView style={menu.argumentOptions} keyboardShouldPersistTaps="handled">
+      {selected.subcommands.map((option) => <PickerRow key={option} title={option} selected={args === option}
+        disabled={false} onPress={() => setArgs(option)} />)}
+    </ScrollView>}
+    <Field accessibilityLabel={`/${selected.name} 参数`} placeholder="参数（可留空）" value={args} onChangeText={setArgs}
+      autoCapitalize="none" autoCorrect={false} returnKeyType="done" />
+    <Text style={styles.caption}>执行预览</Text>
+    <Text testID="command-preview" accessibilityLabel={`完整命令：${preview}`} selectable style={styles.text}>{preview}</Text>
+    {!canExecute && <Notice>{selected.unavailable_reason || "当前会话暂不支持此命令的参数。"}</Notice>}
+    <View style={styles.row}>
+      <Action title="取消" onPress={back} />
+      <Action title="执行" primary disabled={!canExecute} onPress={() => {
+        if (!canExecute) return;
+        haptic("light");
+        onCommand(preview);
+      }} />
+    </View>
+  </> : <>
+    <FlatList
+      data={commands.filter((command) => [command.name, command.description, commandLabel(command), ...command.aliases]
+        .some((value) => value.toLowerCase().includes(query)))}
+      style={menu.list} keyboardShouldPersistTaps="handled" keyExtractor={({ name }) => name}
+      ListEmptyComponent={<Text style={styles.muted}>{query ? "暂无匹配的命令" : "Hermes 未返回内置命令。"}</Text>}
+      renderItem={({ item }) => {
+        const picker = item.name === "model" || (item.name === "reasoning" && reasoningSupported);
+        const available = item.supported || picker || item.name === "stop" || item.name === "skills";
+        const label = commandLabel(item);
+        const reason = item.unavailable_reason || "当前会话暂不支持此原生命令。";
+        return <Pressable accessibilityRole="button" accessibilityLabel={`/${item.name} ${label}`}
+          accessibilityHint={!available ? reason : undefined}
+          accessibilityState={{ disabled: !available }} disabled={!available}
+          onPress={() => {
+            if (!available) return;
+            haptic("light");
+            if ((item.args_hint || item.subcommands?.length) && !picker) { setArgs(""); setSelected(item); }
+            else onCommand(`/${item.name}`);
+          }}
+          style={({ pressed }) => [menu.row, { borderBottomColor: colors.edge }, (pressed || !available) && styles.faded]}>
+          <Icon name="command" size={21} color={available ? colors.accent : colors.muted} />
+          <View style={menu.grow}>
+            <View style={menu.commandText}>
+              <Text style={styles.heading}>/{item.name}</Text>
+              <Text style={styles.caption}>{label}</Text>
+            </View>
+            {!available && <Text style={styles.caption}>{reason}</Text>}
+          </View>
+          {available ? <Icon name="chevron" size={15} color={colors.accent} /> : <Text style={styles.caption}>不可用</Text>}
+        </Pressable>;
+      }}
+    />
+    <Field accessibilityLabel="搜索命令、别名或描述" placeholder="搜索命令、别名或描述" value={search} onChangeText={setSearch}
+      autoCapitalize="none" autoCorrect={false} returnKeyType="search" />
+  </>;
+  return <ComposerSheet title={selected ? `/${selected.name}` : "命令"} onClose={onClose}
+    back={selected && <Pressable accessibilityRole="button" accessibilityLabel="返回命令目录"
+      onPress={() => { haptic("light"); back(); }} style={({ pressed }) => [menu.back, pressed && styles.faded]}>
+      <Icon name="back" size={20} color={colors.accent} />
+    </Pressable>}>
+    {content}
+  </ComposerSheet>;
+}
+
 export function ComposerMenu({
-  kind, id, call, profile, connected, canStop, onClose, onCommand, onSkill,
+  kind, id, call, profile, connected, reasoningSupported, onClose, onCommand, onSkill,
 }: {
   kind: "commands" | "skills";
   id: string;
   call: ReturnType<typeof useWorkspace>["call"];
   profile?: string;
   connected: boolean;
-  canStop: boolean;
+  reasoningSupported: boolean;
   onClose: () => void;
-  onCommand: (command: ComposerCommand) => void;
+  onCommand: (command: string) => void;
   onSkill: (skill: Skill) => void;
 }) {
-  const { colors, styles } = useTheme();
-
+  if (kind === "commands") return <Commands key={`${id}:${connected}`} call={call} path={`/topics/${id}`} connected={connected}
+    reasoningSupported={reasoningSupported} onClose={onClose} onCommand={onCommand} />;
   return (
-    <ComposerSheet title={kind === "skills" ? "技能" : "命令"} subtitle={kind === "skills" && profile ? profileLabel(profile) : undefined}
-      onClose={onClose}>
-      {kind === "commands" && !connected && <Text style={styles.muted}>连接 Hermes 后可执行其他命令。</Text>}
-      {kind === "skills" ? <Skills call={call} path={`/topics/${id}`} onSelect={onSkill} /> : (
-        <FlatList
-          data={commands.filter(({ name }) => name === "new" || (connected && (canStop || name !== "stop")))}
-          style={menu.list}
-          keyExtractor={({ name }) => name}
-          renderItem={({ item: { name, label, icon } }) => (
-            <Pressable accessibilityRole="button" accessibilityLabel={`/${name} ${label}`}
-              onPress={() => { haptic(name === "stop" ? "warning" : "light"); onCommand(name); }}
-              style={({ pressed }) => [menu.row, { borderBottomColor: colors.edge }, pressed && styles.faded]}>
-              <Icon name={icon} size={21} color={colors.accent} />
-              <View style={[menu.grow, menu.commandText]}>
-                <Text style={styles.heading}>/{name}</Text>
-                <Text style={styles.caption}>{label}</Text>
-              </View>
-              <Icon name="chevron" size={15} color={colors.accent} />
-            </Pressable>
-          )}
-        />
-      )}
+    <ComposerSheet title="技能" subtitle={profile ? profileLabel(profile) : undefined} onClose={onClose}>
+      <Skills call={call} path={`/topics/${id}`} onSelect={onSkill} />
     </ComposerSheet>
   );
 }
@@ -308,7 +401,9 @@ const menu = StyleSheet.create({
   embedded: { flex: 1, paddingTop: 0 },
   handle: { alignSelf: "center", width: 44, height: 4, borderRadius: 2 },
   header: { marginHorizontal: -24, marginBottom: -6 },
+  back: { width: 48, minHeight: 48, alignItems: "center", justifyContent: "center" },
   list: { flexGrow: 0, flexShrink: 1 },
+  argumentOptions: { maxHeight: 240, flexShrink: 1 },
   grow: { flex: 1, minWidth: 0 },
   row: { minHeight: 56, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: 12, borderBottomWidth: StyleSheet.hairlineWidth },
   option: { paddingHorizontal: 12, borderWidth: 1, borderColor: "transparent" },

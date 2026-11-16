@@ -43,6 +43,7 @@ test("管理操作要求设备已配对且配置档案在允许范围内", async
   assert.equal((await call(manage("default", "cron.list"), {}, "x".repeat(43))).statusCode, 401);
   assert.equal((await call(manage("outside", "cron.list"), {}, deviceToken)).statusCode, 404);
   assert.equal((await call(manage("default", "cron.list"), {}, deviceToken)).statusCode, 503);
+  assert.equal((await call(manage("default", "gateway.restart"), {}, deviceToken)).statusCode, 404);
 });
 
 test("管理请求返回所选配置档案的实时结果", async (t) => {

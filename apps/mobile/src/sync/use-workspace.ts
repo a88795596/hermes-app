@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
-import type { AttachmentUpload, Control, InboxItem, Message, MobileNotice, ModelRequest, ModelSelectionRequest, Profile, ProfilePreferencesUpdate, ReasoningEffort, ReasoningRequest, SessionStatus, Topic, TopicDetail } from "@hermes-mobile/protocol";
+import type { AttachmentUpload, Control, InboxItem, Message, MobileNotice, ModelRequest, ModelSelectionRequest, NativeCommandRequest, Profile, ProfilePreferencesUpdate, ReasoningEffort, ReasoningRequest, SessionStatus, Topic, TopicDetail } from "@hermes-mobile/protocol";
 import type { Session } from "../auth/session";
 import { openCache, type Cache } from "../db/cache";
 import { ApiError, request } from "./api";
@@ -12,6 +12,7 @@ interface Directory {
   connector_online?: boolean;
   reasoning_supported?: boolean;
   attachments_supported?: boolean;
+  native_commands_supported?: boolean;
 }
 
 export interface Pending {
@@ -158,7 +159,7 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
           call<Profile[]>("/profiles"),
           call<Topic[]>("/topics?include_archived=true"),
           call<InboxItem[]>("/inbox"),
-          call<Pick<Directory, "connector_online" | "reasoning_supported" | "attachments_supported">>("/status"),
+          call<Pick<Directory, "connector_online" | "reasoning_supported" | "attachments_supported" | "native_commands_supported">>("/status"),
         ]);
         if (!active.current || revoked.current) return;
         const next = { profiles, topics, inbox, ...status };
@@ -528,7 +529,7 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
     if (topic.status !== "ready") throw new Error(topic.error ?? "Hermes 会话尚未就绪，请稍后重试。");
   }
 
-  async function waitForRequest<T extends Exclude<ModelRequest | ReasoningRequest, { status: "pending" }>>(
+  async function waitForRequest<T extends Exclude<ModelRequest | ReasoningRequest | NativeCommandRequest, { status: "pending" }>>(
     path: string, requestId: string, input: object | undefined, signal: AbortSignal,
   ) {
     await call(path, { method: "POST", body: { request_id: requestId, ...input }, signal });
@@ -577,6 +578,16 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
     answer,
     requestModel: (id: string, requestId: string, selection: ModelSelectionRequest | undefined, signal: AbortSignal) =>
       waitForRequest<Exclude<ModelRequest, { status: "pending" }>>(`/topics/${id}/model-requests`, requestId, selection, signal),
+    requestNativeCommand: async (id: string, requestId: string, command: string, signal: AbortSignal, approval?: "once" | "always") => {
+      const result = await waitForRequest<Exclude<NativeCommandRequest, { status: "pending" }>>(
+        `/topics/${id}/command-requests`, requestId, { command, ...(approval && { approval }) }, signal,
+      );
+      if (result.status === "ok" && result.native_result.confirmation === undefined) {
+        await Promise.all([directoryLoad.current, detailLoads.current.get(id)]);
+        await Promise.all([loadDirectory(), loadTopic(id)]);
+      }
+      return result;
+    },
     requestReasoning,
   };
 }

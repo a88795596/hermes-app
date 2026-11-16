@@ -4,7 +4,7 @@ const test = require("node:test");
 const ts = require("typescript");
 
 function mount(file, name, props, speech, reduceMotion = true) {
-  const values = [], effects = [], feedback = [];
+  const values = [], effects = [], feedback = [], alerts = [];
   const dimensions = { width: 390, height: 844 };
   let cursor = 0;
   let requestSequence = 0;
@@ -40,8 +40,9 @@ function mount(file, name, props, speech, reduceMotion = true) {
       case "@hermes-mobile/protocol": return { MAX_ATTACHMENTS: 5, reasoningEfforts: ["low", "high"] };
       case "../ui/overlay": return { OverlayModal: "Modal" };
       case "../ui/haptics": return { haptic: (kind) => feedback.push(kind) };
+      case "../ui/alerts": return { useAlert: () => ({ alert: (title, message, buttons, options) => alerts.push({ title, message, buttons, options }) }) };
       case "../ui/motion": return { motion: {}, useReduceMotion: () => reduceMotion };
-      case "../ui/text": return { profileLabel: (label) => label };
+      case "../ui/text": return { profileLabel: (profile) => typeof profile === "string" ? profile : profile.alias || profile.label };
       case "../ui/page-header": return { PageHeader: "PageHeader" };
       case "../ui/theme": return {
         useTheme: () => ({ colors: {}, styles: {} }), Action: "Action", Card: "Card", CloseButton: "CloseButton",
@@ -56,6 +57,7 @@ function mount(file, name, props, speech, reduceMotion = true) {
       case "./answer-markdown": return { AnswerMarkdown: "AnswerMarkdown" };
       case "./assistant-stream-border": return { AssistantStreamBorder: "AssistantStreamBorder" };
       case "./message-attachments": return { MessageAttachments: "MessageAttachments" };
+      case "./native-command": return { NativeCommandSheet: "NativeCommandSheet" };
       case "./attachments": return { pickAttachments: async () => [] };
       case "./use-speech-input": return { useSpeechInput: (_id, _enabled, draft) => speech ?? {
         available: false, state: "idle", busy: false, start: async () => {}, stop: async () => draft,
@@ -64,7 +66,7 @@ function mount(file, name, props, speech, reduceMotion = true) {
     }
   });
   const render = (nextProps) => { Object.assign(props, nextProps); cursor = 0; return exported[name](props); };
-  return { render, feedback, effects, dimensions, renderChild(predicate) {
+  return { render, feedback, effects, dimensions, alerts, renderChild(predicate) {
     const child = find(render(), predicate);
     return child?.type(child.props);
   } };
@@ -106,6 +108,237 @@ function conversation(enqueue, draft = "测试消息", { messages = [], workspac
     ...props,
   }, speech, reduceMotion);
 }
+
+test("原生命令单独执行，保留菜单外草稿且不进入模型消息队列", async () => {
+  const screen = conversation(async () => assert.fail("命令不能进入消息队列"), "保留草稿", {
+    onDraftChange: () => assert.fail("菜单命令不改写草稿"),
+  });
+  find(screen.render(), (node) => node.props.icon === "command").props.onPress();
+  await flush();
+  const menu = find(screen.render(), (node) => node.type === "ComposerMenu");
+  menu.props.onCommand("/restart");
+  menu.props.onCommand("/restart");
+  const sheet = find(screen.render(), (node) => node.type === "NativeCommandSheet");
+  assert.equal(sheet.props.command, "/restart");
+  assert.equal(sheet.props.requestId, "request-1", "重复点击不能生成第二个执行请求");
+});
+
+test("菜单与直接输入 new 都使用原生命令，别名交中间层解析", async () => {
+  const screen = conversation(async () => assert.fail("命令不能进入消息队列"), "保留草稿", {
+    onDraftChange: () => assert.fail("菜单新建不改写旧草稿"),
+  });
+  find(screen.render(), (node) => node.props.icon === "command").props.onPress();
+  await flush();
+  await find(screen.render(), (node) => node.type === "ComposerMenu").props.onCommand("/new");
+  assert.equal(find(screen.render(), (node) => node.type === "NativeCommandSheet").props.command, "/new");
+  for (const command of ["/new", "/reset", "/new 命名会话"]) {
+    const typed = conversation(async () => assert.fail("命令不能进入消息队列"), command);
+    findSend(typed.render()).props.onPress();
+    await flush();
+    assert.equal(find(typed.render(), (node) => node.type === "NativeCommandSheet").props.command, command);
+  }
+});
+
+test("菜单与直接输入 stop 复用原生 interrupt，并显示停止结果", async () => {
+  for (const typed of [false, true]) {
+    const calls = [];
+    let synced = 0;
+    const screen = conversation(async () => assert.fail("停止不能作为消息发送"), typed ? "/stop" : "保留草稿", {
+      messages: [{ message_id: "message", submission_id: "active-turn", role: "user", status: "streaming", text: "处理中" }],
+      workspace: { call: async (...args) => calls.push(args), syncWorkspace: async () => synced++ },
+    });
+    if (typed) findSend(screen.render()).props.onPress();
+    else {
+      find(screen.render(), (node) => node.props.icon === "command").props.onPress();
+      await flush();
+      await find(screen.render(), (node) => node.type === "ComposerMenu").props.onCommand("/stop");
+    }
+    await flush();
+    assert.deepEqual(calls, [["/topics/topic/interrupt", { method: "POST", body: { request_id: "request-1", submission_id: "active-turn" } }]]);
+    assert.equal(synced, 1);
+    assert.ok(find(screen.render(), (node) => node.props.children === "已请求停止回复。"));
+    assert.equal(find(screen.render(), (node) => node.type === "NativeCommandSheet"), undefined);
+  }
+  const idle = conversation(async () => assert.fail("停止不能作为消息发送"), "/stop");
+  findSend(idle.render()).props.onPress();
+  await flush();
+  assert.ok(find(idle.render(), (node) => node.props.children === "当前没有正在生成的回复。"));
+});
+
+test("无参数技能、模型与思考命令保留选择器，带参数原样交给中间层", async () => {
+  for (const [command, type] of [["/skills", "ComposerMenu"], ["/model", "ModelPicker"], ["/reasoning", "ReasoningMenu"]]) {
+    const screen = conversation(async () => assert.fail("命令不能进入消息队列"), command);
+    findSend(screen.render()).props.onPress();
+    await flush();
+    const picker = find(screen.render(), (node) => node.type === type);
+    assert.ok(picker);
+    if (command === "/skills") assert.equal(picker.props.kind, "skills");
+    assert.equal(find(screen.render(), (node) => node.type === "NativeCommandSheet"), undefined);
+  }
+  for (const command of ["/skills search text", "/model model-name --provider provider --global", "/reasoning high --global", "/reasoning show"] ) {
+    const screen = conversation(async () => assert.fail("命令不能进入消息队列"), command);
+    findSend(screen.render()).props.onPress();
+    await flush();
+    assert.equal(find(screen.render(), (node) => node.type === "NativeCommandSheet").props.command, command);
+  }
+});
+
+test("直接输入命令保留完整参数，未知命令也不能当普通提示词发送", async () => {
+  for (const command of ["/ReStArT", '/title   中文 "原样"  ', "/unknown-command 参数", "/123 参数"]) {
+    const drafts = [];
+    const screen = conversation(async () => assert.fail("命令不能作为普通消息发送"), command, {
+      onDraftChange: (value) => drafts.push(value),
+    });
+    findSend(screen.render()).props.onPress();
+    await flush();
+    const sheet = find(screen.render(), (node) => node.type === "NativeCommandSheet");
+    assert.equal(sheet.props.command, command);
+    assert.deepEqual(drafts, [""]);
+  }
+  assert.equal(findSend(conversation(async () => {}, "/restart", { workspace: { network: "offline" } }).render()).props.disabled, true);
+});
+
+test("命令不能夹带附件，文件路径仍作为普通消息发送", async () => {
+  const queued = [];
+  const screen = conversation(async (item) => queued.push(item), "/restart", {
+    attachments: [{ name: "notes.txt", mime: "text/plain", size: 1, content_base64: "YQ==" }],
+    workspace: { attachments_supported: true },
+  });
+  findSend(screen.render()).props.onPress();
+  await flush();
+  assert.deepEqual(queued, []);
+  assert.ok(find(screen.render(), (node) => node.type === "Notice" && /命令不能附带文件/.test(node.props.children)));
+  const path = conversation(async (item) => queued.push(item), "/Users/me/project");
+  findSend(path.render()).props.onPress();
+  await flush();
+  assert.equal(queued[0].text, "/Users/me/project");
+});
+
+test("命令结果显示原生输出，网络失败后只查询同一个执行请求", async () => {
+  const calls = [];
+  let close = 0;
+  const screen = mount("native-command", "NativeCommandSheet", {
+    command: "/restart", requestId: "same-request", onClose: () => close++,
+    onRequest: async (...args) => {
+      calls.push(args);
+      if (calls.length === 1) throw new Error("连接已断开");
+      return { status: "ok", native_result: { output: "正在等待 2 个任务结束，然后重启。" } };
+    },
+  });
+  assert.equal(screen.render().props.busy, true);
+  screen.effects.forEach((effect) => effect());
+  await flush();
+  const retry = find(screen.render(), (node) => node.props.title === "查看结果");
+  retry.props.onPress();
+  retry.props.onPress();
+  await flush();
+  assert.deepEqual(calls.map((args) => args.slice(0, 2)), [["same-request", "/restart"], ["same-request", "/restart"]]);
+  assert.equal(find(screen.render(), (node) => node.type === "AnswerMarkdown").props.text, "正在等待 2 个任务结束，然后重启。");
+  assert.equal(screen.render().props.busy, false);
+  assert.deepEqual(screen.feedback, ["warning"], "收到原生响应不等于重启已完成");
+  screen.render().props.onClose();
+  assert.equal(close, 1);
+});
+
+test("原生命令明确拒绝或结果未知时不自动创建新请求", async () => {
+  for (const status of ["error", "unknown"]) {
+    const calls = [];
+    const screen = mount("native-command", "NativeCommandSheet", {
+      command: "/undo", requestId: "request", onClose() {},
+      onRequest: async (...args) => { calls.push(args); return { status, error: "当前会话不支持此命令。" }; },
+    });
+    screen.render();
+    screen.effects.forEach((effect) => effect());
+    await flush();
+    assert.equal(calls.length, 1);
+    assert.ok(find(screen.render(), (node) => node.type === "Notice" && node.props.children === "当前会话不支持此命令。"));
+    const query = find(screen.render(), (node) => node.props.title === "查看结果");
+    if (status === "error") assert.equal(query, undefined);
+    else {
+      assert.ok(query, "结果未知时可以手动查询同一个请求");
+      query.props.onPress();
+      query.props.onPress();
+      await flush();
+      assert.deepEqual(calls.map((args) => args.slice(0, 2)), [["request", "/undo"], ["request", "/undo"]]);
+    }
+  }
+});
+
+test("只按 Hermes 原生确认显示允许选项，确认与重查保留各自的请求编号", async () => {
+  for (const [approval, title] of [["once", "仅本次"], ["always", "始终允许"]]) {
+    const calls = [];
+    const screen = mount("native-command", "NativeCommandSheet", {
+      command: "/undo 2", requestId: "initial-request", onClose() {},
+      onRequest: async (...args) => {
+        calls.push(args);
+        if (calls.length === 1) return { status: "ok", native_result: { confirmation: "undo", output: "Hermes 原生确认提示" } };
+        if (calls.length === 2) throw new Error("连接中断");
+        return { status: "ok", native_result: { output: "已撤回两轮。" } };
+      },
+    });
+    screen.render();
+    screen.effects.forEach((effect) => effect());
+    await flush();
+    assert.equal(calls.length, 1, "显示原生确认不能自行批准执行");
+    assert.equal(find(screen.render(), (node) => node.type === "AnswerMarkdown").props.text, "Hermes 原生确认提示");
+    assert.ok(find(screen.render(), (node) => node.props.title === "取消"));
+    const approve = find(screen.render(), (node) => node.props.title === title);
+    assert.ok(approve);
+    approve.props.onPress();
+    approve.props.onPress();
+    await flush();
+    assert.equal(calls.length, 2);
+    assert.notEqual(calls[1][0], calls[0][0], "批准是新请求，不能复用只返回确认提示的旧编号");
+    assert.equal(find(screen.render(), (node) => node.props.title === title), undefined);
+    approve.props.onPress();
+    await flush();
+    assert.equal(calls.length, 2, "过期确认按钮不能创建另一个执行请求");
+    const retry = find(screen.render(), (node) => node.props.title === "查看结果");
+    retry.props.onPress();
+    retry.props.onPress();
+    await flush();
+    assert.deepEqual(calls.map(([id, command, _signal, choice]) => [id, command, choice]), [
+      ["initial-request", "/undo 2", undefined], ["request-1", "/undo 2", approval], ["request-1", "/undo 2", approval],
+    ]);
+    assert.equal(find(screen.render(), (node) => node.type === "AnswerMarkdown").props.text, "已撤回两轮。");
+  }
+});
+
+test("取消原生确认只关闭结果页，普通结果不自行增加确认流程", async () => {
+  for (const confirmation of ["new", undefined]) {
+    let calls = 0, closed = 0;
+    const screen = mount("native-command", "NativeCommandSheet", {
+      command: "/new", requestId: "request", onClose: () => closed++,
+      onRequest: async () => { calls++; return { status: "ok", native_result: { output: "原生输出", ...(confirmation && { confirmation }) } }; },
+    });
+    screen.render();
+    screen.effects.forEach((effect) => effect());
+    await flush();
+    const cancel = find(screen.render(), (node) => node.props.title === "取消");
+    if (confirmation) {
+      assert.ok(cancel);
+      cancel.props.onPress();
+      assert.equal(closed, 1);
+    } else {
+      assert.equal(cancel, undefined);
+      assert.equal(find(screen.render(), (node) => node.props.title === "仅本次"), undefined);
+      assert.equal(find(screen.render(), (node) => node.props.title === "始终允许"), undefined);
+    }
+    assert.equal(calls, 1);
+  }
+});
+
+test("会话将原生命令确认选择传入工作区请求", async () => {
+  const calls = [];
+  const screen = conversation(async () => assert.fail("命令不能进入消息队列"), "/new", {
+    workspace: { requestNativeCommand: async (...args) => { calls.push(args); return { status: "ok", native_result: { output: "已新建" } }; } },
+  });
+  findSend(screen.render()).props.onPress();
+  await flush();
+  const signal = new AbortController().signal;
+  await find(screen.render(), (node) => node.type === "NativeCommandSheet").props.onRequest("approved-id", "/new", signal, "once");
+  assert.deepEqual(calls, [["topic", "approved-id", "/new", signal, "once"]]);
+});
 
 test("语音按钮独立位于输入框外侧右边，点击开始与停止都不发送消息", async () => {
   let started = 0, stopped = 0;

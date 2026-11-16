@@ -7,8 +7,8 @@ import { submissionAttachments } from "../attachments.js";
 import { deviceAuth, matchesToken, readBearer } from "../auth.js";
 import { registerBridge } from "../bridge.js";
 import { applyInboxDelivery } from "../ingress.js";
-import { createTopic, findProfile, interrupt, requestModel, requestReasoning, respond, setTopicArchived, submit } from "../mutations.js";
-import { detail, modelRequest, profileId, profiles, reasoningRequest, topicRow, topics } from "../projections.js";
+import { createTopic, findProfile, interrupt, requestModel, requestNativeCommand, requestReasoning, respond, setTopicArchived, submit } from "../mutations.js";
+import { detail, modelRequest, nativeCommandRequest, profileId, profiles, reasoningRequest, topicRow, topics } from "../projections.js";
 import { registerProfilePreferences } from "../profile-preferences.js";
 import { registerPushRoutes } from "../push.js";
 import { receivedAttachmentReferences, registerReceivedAttachments } from "../received-attachments.js";
@@ -110,6 +110,7 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
   });
   api.get(`${prefix}/status`, requireDevice, (request) => success(request, {
     connector_online: bridge.online(), reasoning_supported: bridge.reasoningSupported(), attachments_supported: bridge.attachmentsSupported(),
+    native_commands_supported: bridge.nativeCommandsSupported(),
   }));
   api.get(`${prefix}/topics`, requireDevice, async (request) => {
     const { include_archived } = record(request.query);
@@ -127,7 +128,7 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
     changed();
     return success(request, topic);
   });
-  for (const kind of ["skills", "status", "version"] satisfies TopicQuery["kind"][]) {
+  for (const kind of ["skills", "status", "version", "commands"] satisfies TopicQuery["kind"][]) {
     api.get(`${prefix}/topics/:id/${kind}`, requireDevice, async (request) => {
       const topic = await topicRow(store, pathId(request), refs);
       if (topic.status !== "ready" || !topic.session_id) {
@@ -137,6 +138,7 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
         kind, topic_id: topic.id, profile_ref: topic.profile_ref, session_id: topic.session_id,
       });
       switch (result.kind) {
+        case "commands": return success(request, result.commands);
         case "skills": return success(request, result.skills);
         case "status": return success(request, result.status);
         case "version": return success(request, result.version);
@@ -227,6 +229,25 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
     const result = await store.transaction((db) => requestModel(db, refs, topicId, id, selection));
     bridge.pump();
     return accepted(request, reply, result);
+  });
+
+  api.post(`${prefix}/topics/:id/command-requests`, requireDevice, async (request, reply) => {
+    const topicId = pathId(request);
+    const body = record(request.body, ["request_id", "command", "approval"]);
+    const approval = body.approval;
+    if (approval !== undefined && approval !== "once" && approval !== "always") invalid("原生命令确认级别无效。");
+    const id = uuid(body.request_id, "请求 ID");
+    const command = string(body.command, "原生命令", 8 * 1024);
+    if (!/^\/\S/u.test(command) || /[\r\n\u2028\u2029]/u.test(command)) invalid("请输入以 / 开头的单行命令。");
+    const result = await store.transaction((db) => requestNativeCommand(db, refs, topicId, id, command,
+      !bridge.online() ? "offline" : bridge.nativeCommandsSupported() ? "ready" : "legacy", approval));
+    bridge.pump();
+    return accepted(request, reply, result);
+  });
+
+  api.get(`${prefix}/topics/:id/command-requests/:requestId`, requireDevice, async (request) => {
+    const requestId = uuid(record(request.params).requestId, "请求 ID");
+    return success(request, await nativeCommandRequest(store, refs, pathId(request), requestId));
   });
 
   api.get(`${prefix}/topics/:id/model-requests/:requestId`, requireDevice, async (request) => {

@@ -3,6 +3,7 @@
 import asyncio
 from contextlib import suppress
 import json
+import hmac
 import logging
 import os
 from pathlib import Path
@@ -113,6 +114,41 @@ def register_platform(ctx):
         def __init__(self, config):
             super().__init__(config, Platform(PLATFORM))
             self._delivery_task: asyncio.Task | None = None
+            self._command_profile = ctx.profile_name
+            self._command_home = Path(get_hermes_home()).resolve()
+            self._command_replies = {}
+            self._command_tasks = {}
+
+        @property
+        def authorization_is_upstream(self):
+            return True
+
+        def verify_http_event_request(self, authorization):
+            try:
+                api = self.gateway_runner.adapters.get(Platform("api_server"))
+                # 使用 API Server 本身的解析，保留 extra.key 与多档案 secret scope。
+                key = api._expected_api_key()
+                valid = (isinstance(key, str) and len(key) >= 16 and isinstance(authorization, str)
+                         and authorization.startswith("Bearer ")
+                         and hmac.compare_digest(key.encode("utf-8"), authorization[7:].encode("utf-8")))
+                return bool(valid), "" if valid else "invalid_mobile_command_authorization"
+            except Exception:
+                return False, "invalid_mobile_command_authorization"
+
+        async def dispatch_http_event(self, payload):
+            from .commands import dispatch
+
+            # The API Server owns the shared listener, but secondary profiles
+            # own distinct adapters. Only forward inside the API's already
+            # authenticated native home scope; the body cannot select a scope.
+            profile = payload.get("profile_ref") if isinstance(payload, dict) else None
+            if isinstance(profile, str) and profile and profile != self._command_profile:
+                profiles = getattr(getattr(self, "gateway_runner", None), "_profile_adapters", {})
+                target = profiles.get(profile, {}).get(self.platform)
+                if (target is not None and getattr(target, "_command_profile", None) == profile
+                        and getattr(target, "_command_home", None) == Path(get_hermes_home()).resolve()):
+                    return await target.dispatch_http_event(payload)
+            return await dispatch(self, payload, route())
 
         async def _deliver(self):
             while configured := route():
@@ -147,6 +183,10 @@ def register_platform(ctx):
             return {"name": name, "type": "channel", "chat_id": chat_id}
 
         async def send(self, chat_id, content, reply_to=None, metadata=None):
+            from .commands import capture_reply
+
+            if await capture_reply(self, chat_id, reply_to, content):
+                return SendResult(success=True, message_id=reply_to)
             media_files, content = self.extract_media(content) if isinstance(content, str) and "MEDIA:" in content else ([], content)
             result = await submit(chat_id, content, thread_id=(metadata or {}).get("thread_id"),
                                   media_files=media_files, gateway=True)

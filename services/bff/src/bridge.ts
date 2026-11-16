@@ -14,6 +14,7 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
   let active: {
     socket: WebSocket;
     reasoning: boolean;
+    nativeCommands: boolean;
     attachments: boolean;
     pump: () => void;
     query: (target: Omit<TopicQuery, "type" | "request_id">) => Promise<TopicQueryResult>;
@@ -49,6 +50,7 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
     const sessions = new Map<string, string>();
     const watches = new Set<string>();
     const reasoning = request.headers["x-hermes-mobile-reasoning"] === "1";
+    const nativeCommands = request.headers["x-hermes-mobile-native-commands"] === "1";
     const attachments = request.headers["x-hermes-mobile-attachments"] === "1";
     const queries = new Map<string, {
       kind: TopicQuery["kind"];
@@ -97,6 +99,7 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
               if (sent.size >= 64 || !isCurrent()) break;
               if (sent.has(payload.command_id)) continue;
               if (!reasoning && (payload.kind === "select_reasoning" || (payload.kind === "submit" && reasoning_required))) continue;
+              if (!nativeCommands && payload.kind === "native_command") continue;
               if (payload.session_id && sessions.get(payload.topic_id) !== payload.session_id) continue;
               if (!attachments && payload.kind === "submit" && payload.body.attachments) continue;
               await store.query("UPDATE commands SET dispatched = true WHERE id = $1 AND NOT dispatched", [payload.command_id]);
@@ -109,6 +112,9 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
       });
     };
     const query = (target: Omit<TopicQuery, "type" | "request_id">) => {
+      if (target.kind === "commands" && !nativeCommands) {
+        throw new ApiError(503, "NATIVE_COMMANDS_UNAVAILABLE", "请更新 Hermes 连接器以使用原生命令。");
+      }
       if (request.headers["x-hermes-mobile-topic-query"] !== "1") {
         throw new ApiError(503, "TOPIC_QUERY_UNAVAILABLE", "请更新 Hermes 连接器以使用此功能。");
       }
@@ -156,7 +162,7 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
         }
       });
     };
-    active = { socket, reasoning, attachments, pump, query, manage: request.headers["x-hermes-mobile-management"] === "1" ? manage : undefined };
+    active = { socket, reasoning, nativeCommands, attachments, pump, query, manage: request.headers["x-hermes-mobile-management"] === "1" ? manage : undefined };
     socket.on("pong", () => { alive = true; });
     const heartbeat = setInterval(() => {
       if (!alive || [...sent.values()].some((sentAt) => Date.now() - sentAt > 90_000)) return socket.terminate();
@@ -239,6 +245,7 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
   return {
     online: () => active !== undefined && active.socket.readyState === active.socket.OPEN,
     reasoningSupported: () => active?.reasoning === true && active.socket.readyState === active.socket.OPEN,
+    nativeCommandsSupported: () => active?.nativeCommands === true && active.socket.readyState === active.socket.OPEN,
     attachmentsSupported: () => active?.attachments === true && active.socket.readyState === active.socket.OPEN,
     pump: () => active?.pump(),
     async query(target: Omit<TopicQuery, "type" | "request_id">) {
@@ -249,12 +256,13 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
       const result = await active.query(target);
       if ("data" in result) return result.data;
       if (result.error === "too_large") {
-        throw new ApiError(502, "TOPIC_QUERY_TOO_LARGE", "Hermes 技能列表超出连接器的响应大小限制。");
+        throw new ApiError(502, "TOPIC_QUERY_TOO_LARGE", "Hermes 查询结果超出连接器的响应大小限制。");
       }
       if (result.error === "unavailable") {
         throw new ApiError(503, "TOPIC_QUERY_UNAVAILABLE", "此 Hermes 服务器暂不支持该功能。");
       }
       throw new ApiError(502, "TOPIC_QUERY_FAILED", {
+        commands: "无法获取此 Hermes 配置档案的命令目录，请重试。",
         skills: "无法获取此 Hermes 配置档案的技能列表，请重试。",
         status: "无法读取此 Hermes 会话的状态，请重试。",
         version: "无法获取 Hermes 版本，请重试。",

@@ -65,6 +65,23 @@ async function requireIdle(db: PoolClient, topicId: string, message: string) {
   if (rowCount) throw new ApiError(409, "TOPIC_BUSY", message);
 }
 
+async function requireNoPendingContextCommand(db: PoolClient, topicId: string) {
+  const pending = await db.query(`SELECT 1 FROM commands WHERE topic_id = $1
+    AND payload->>'kind' = 'native_command'
+    AND (payload->'body'->>'command') ~* '^/(compress|compact|undo|new|reset)([[:space:]]|$)'
+    AND (result IS NULL OR result->>'status' = 'unknown') LIMIT 1`, [topicId]);
+  if (pending.rowCount) throw new ApiError(409, "NATIVE_COMMAND_PENDING", "Hermes 仍在处理上下文命令，请查看原请求的执行结果，确认后再继续。");
+}
+
+async function requireSettledCommands(db: PoolClient, topicId: string, reset: boolean) {
+  // 原生 /new 会先中断已受理的回复；只有未确认的写入必须先完成。
+  if (!reset) await requireIdle(db, topicId, "请等当前回复结束后再修改会话上下文。");
+  const pending = await db.query(`SELECT 1 FROM commands WHERE topic_id = $1 AND
+    (result IS NULL OR (result->>'status' = 'unknown' AND payload->>'kind' IN ('submit', 'select_model', 'select_reasoning', 'respond')))
+    LIMIT 1`, [topicId]);
+  if (pending.rowCount) throw new ApiError(409, "NATIVE_COMMAND_PENDING", "会话仍有未确认的操作，请查看原请求的执行结果，确认后再修改上下文。");
+}
+
 export async function submit(db: PoolClient, refs: Set<string>, topicId: string, submissionId: string, text: string,
   attachments: { reference: AttachmentReference; content: Buffer }[], attachmentsSupported: boolean) {
   const row = await topicRow(db, topicId, refs);
@@ -73,6 +90,7 @@ export async function submit(db: PoolClient, refs: Set<string>, topicId: string,
   const saved = await prior<Message>(db, submissionId, "submit", topicId, body);
   if (saved) return saved;
   const sessionId = requireReady(row);
+  await requireNoPendingContextCommand(db, topicId);
   if (attachments.length && !attachmentsSupported) {
     throw new ApiError(409, "ATTACHMENTS_UNAVAILABLE", "更新 Hermes 连接器后可发送附件。");
   }
@@ -119,6 +137,7 @@ export async function requestModel(
   const receipt = { status: "pending" as const };
   const saved = await prior<typeof receipt>(db, requestId, kind, topicId, selection ?? {});
   if (saved) return saved;
+  await requireNoPendingContextCommand(db, topicId);
   const envelope = { type: "command" as const, command_id: requestId, topic_id: row.id, profile_ref: row.profile_ref,
     session_id: requireReady(row) };
   if (selection) await requireIdle(db, topicId, "请等当前回复结束后再切换模型。");
@@ -134,6 +153,7 @@ export async function requestReasoning(db: PoolClient, refs: Set<string>, topicI
   const receipt = { status: "pending" as const, was_unconfirmed: row.reasoning_status === "unknown" };
   const saved = await prior<typeof receipt>(db, requestId, "select_reasoning", topicId, body);
   if (saved) return { status: saved.status };
+  await requireNoPendingContextCommand(db, topicId);
   const session_id = requireReady(row);
   if (connection === "offline") throw new ApiError(503, "CONNECTOR_OFFLINE", "请连接 Hermes 后重试。");
   if (connection === "legacy") throw new ApiError(503, "REASONING_UNAVAILABLE", "请更新 Hermes 连接器以切换思考强度。");
@@ -145,6 +165,25 @@ export async function requestReasoning(db: PoolClient, refs: Set<string>, topicI
   return { status: receipt.status };
 }
 
+export async function requestNativeCommand(db: PoolClient, refs: Set<string>, topicId: string, requestId: string,
+  command: string, connection: "ready" | "offline" | "legacy", approval?: "once" | "always") {
+  const row = await topicRow(db, topicId, refs);
+  const body = { command, ...(approval === undefined ? {} : { approval }) };
+  const receipt = { status: "pending" as const };
+  const saved = await prior<typeof receipt>(db, requestId, "native_command", topicId, body);
+  if (saved) return saved;
+  const session_id = requireReady(row);
+  if (connection === "offline") throw new ApiError(503, "CONNECTOR_OFFLINE", "请连接 Hermes 后重试。");
+  if (connection === "legacy") throw new ApiError(503, "NATIVE_COMMANDS_UNAVAILABLE", "请更新 Hermes 连接器以使用原生命令。");
+  await requireNoPendingContextCommand(db, topicId);
+  if (/^\/(?:compress|compact|undo|new|reset)(?:[ \t]|$)/iu.test(command)) {
+    await requireSettledCommands(db, topicId, /^\/(?:new|reset)(?:[ \t]|$)/iu.test(command));
+  }
+  await enqueue(db, { type: "command", command_id: requestId, topic_id: row.id, profile_ref: row.profile_ref,
+    session_id, kind: "native_command", body }, receipt);
+  return receipt;
+}
+
 export async function respond(db: PoolClient, refs: Set<string>, controlId: string, responseId: string, answer: string) {
   const { rows } = await db.query<{ topic_id: string; data: Control }>("SELECT topic_id, data FROM controls WHERE id = $1", [controlId]);
   const control = rows[0];
@@ -153,6 +192,7 @@ export async function respond(db: PoolClient, refs: Set<string>, controlId: stri
   const body = { control_id: controlId, response_id: responseId, answer };
   const saved = await prior<{ status: "responding" }>(db, responseId, "respond", controlId, body);
   if (saved) return { topicId: row.id, result: { status: saved.status } };
+  await requireNoPendingContextCommand(db, row.id);
   const sessionId = requireReady(row);
   if (control.data.status !== "pending") throw new ApiError(409, "CONTROL_ALREADY_HANDLED", "此请求已不再等待答复。");
   if (control.data.kind === "approval" && !control.data.choices.includes(answer)) {
