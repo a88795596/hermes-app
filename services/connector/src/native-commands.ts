@@ -141,16 +141,40 @@ async function readReply(response: Response): Promise<JsonObject> {
   }
 }
 
-export function createNativeCommands(origin: string, token: string) {
+const profileName = /^[a-z0-9][a-z0-9_-]{0,63}$/iu;
+const validApiKey = (value: unknown): value is string =>
+  typeof value === 'string' && !!value.trim() && !/[\r\n]/u.test(value);
+
+export function parseNativeApiKeys(defaultKey: string, raw: string | undefined): string | Readonly<Record<string, string>> {
+  if (!validApiKey(defaultKey)) throw new Error('请设置有效的 HERMES_API_KEY');
+  if (raw === undefined || raw === '') return defaultKey;
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); } catch { throw new Error('HERMES_API_KEYS 必须是配置档案到 API 密钥的 JSON 对象'); }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('HERMES_API_KEYS 必须是配置档案到 API 密钥的 JSON 对象');
+  }
+  const entries = Object.entries(parsed);
+  if (!entries.length || entries.some(([profile, key]) => !profileName.test(profile)
+    || ['all', 'current', 'default'].includes(profile) || !validApiKey(key))) {
+    throw new Error('HERMES_API_KEYS 包含无效的档案名称或密钥');
+  }
+  return Object.fromEntries([['default', defaultKey], ...entries]);
+}
+
+export function createNativeCommands(origin: string, tokens: string | Readonly<Record<string, string>>) {
   const url = URL.parse(origin);
   if (!url || !['http:', 'https:'].includes(url.protocol) || !['127.0.0.1', '[::1]'].includes(url.hostname)
-    || url.username || url.password || url.pathname !== '/' || url.search || url.hash || !token.trim() || /[\r\n]/u.test(token)) {
+    || url.username || url.password || url.pathname !== '/' || url.search || url.hash
+    || (typeof tokens === 'string' ? !validApiKey(tokens) : !tokens || Array.isArray(tokens)
+      || Object.entries(tokens).some(([profile, key]) => !profileName.test(profile) || !validApiKey(key)))) {
     throw new Error('原生命令需要 Hermes HTTP API 的回环地址和密钥');
   }
   async function request(profile: string, body: JsonObject, signal?: AbortSignal) {
-    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/iu.test(profile) || ['all', 'current'].includes(profile)) {
+    if (!profileName.test(profile) || ['all', 'current'].includes(profile)) {
       throw new NativeCommandFailure('Hermes 配置档案无效。');
     }
+    const token = typeof tokens === 'string' ? tokens : Object.hasOwn(tokens, profile) ? tokens[profile] : undefined;
+    if (!validApiKey(token)) throw new NativeCommandFailure('此 Hermes 配置档案的 API 密钥未配置。');
     const timeout = AbortSignal.timeout(body.kind === 'catalog' ? queryTimeout : 15_000);
     const response = await fetch(new URL(`/p/${encodeURIComponent(profile)}/api/platforms/hermes_mobile/events`, url!), {
       method: 'POST', redirect: 'error', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },

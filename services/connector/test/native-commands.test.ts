@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import test, { type TestContext } from 'node:test';
 import type { Command, NativeCommand } from '@hermes-mobile/protocol';
-import { createNativeCommands, nativeCommandList, resolveNativeCommand, tuiCommandList } from '../src/native-commands.js';
+import { createNativeCommands, nativeCommandList, parseNativeApiKeys, resolveNativeCommand, tuiCommandList } from '../src/native-commands.js';
 import { createHttpConnector } from '../src/http-mode.js';
 import { Gateway, GatewayRefusal, type JsonObject } from '../src/gateway.js';
 import { CanonicalConnector } from '../src/connector.js';
@@ -19,6 +19,32 @@ import { Spool } from '../src/spool.js';
 const entry = (name: string, supported = false): NativeCommand => ({
   name, description: `原生 ${name}`, category: 'Session', aliases: [], supported,
   ...(!supported && { unavailable_reason: '当前通道未开放。' }),
+});
+
+test('原生命令按配置档案使用独立 API 密钥，缺失或无效配置拒绝请求', async (t) => {
+  const seen: string[] = [];
+  const server = createServer(async (request, response) => {
+    seen.push(`${request.url} ${request.headers.authorization}`);
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify({ commands: [entry('status', true)] }));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => server.close());
+  const address = server.address() as AddressInfo;
+  const origin = `http://127.0.0.1:${address.port}`;
+  const keys = parseNativeApiKeys('default-secret', JSON.stringify({ finance: 'finance-secret' }));
+  const native = createNativeCommands(origin, keys);
+  await native.catalog('default');
+  await native.catalog('finance');
+  await assert.rejects(native.catalog('mia'), /密钥/);
+  assert.deepEqual(seen, [
+    '/p/default/api/platforms/hermes_mobile/events Bearer default-secret',
+    '/p/finance/api/platforms/hermes_mobile/events Bearer finance-secret',
+  ]);
+  assert.throws(() => parseNativeApiKeys('default-secret', '{'), /HERMES_API_KEYS/);
+  assert.throws(() => parseNativeApiKeys('default-secret', '{"default":"other"}'), /HERMES_API_KEYS/);
+  assert.throws(() => parseNativeApiKeys('default-secret', '{"finance":"bad\\nkey"}'), /HERMES_API_KEYS/);
 });
 
 test('动态目录保留新增原生命令和别名，畸形元数据不能成为可执行菜单', () => {

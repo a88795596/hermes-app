@@ -82,6 +82,8 @@ BFF 和连接器在同一个容器运行，PostgreSQL 由 Compose 单独启动�
 
 从旧部署升级时，保留 PostgreSQL、连接器的 SQLite 和 Hermes 的数据卷，并换用原版 Hermes。已有 `mobile_…` 会话通过原版 HTTP Runs 继续发送，需保留对应的 `HERMES_API_URL` 与 `HERMES_API_KEY`。这些会话从原版会话接口读取标题，并通过同一个 Hermes 实例的 Webapp 暂存普通文件。过程显示取决于原版 Runs 提供的事件，新会话通过 WebSocket 接收思考和阶段说明。 [Hermes API Server](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server)
 
+多配置档案使用原生命令时，在每个 Hermes 档案的本地 `.env` 中分别设置 `API_SERVER_KEY`。连接器仍以 `HERMES_API_KEY` 访问默认档案，并可通过 `HERMES_API_KEYS` 读取其他档案的密钥，格式为 JSON 对象，例如 `{"finance":"独立密钥"}`；不要把这些密钥提交到 Git。未配置对应档案密钥时，原生命令请求会被拒绝。
+
 启用移动端收件箱投递时，在应用服务的 `.env` 中设置独立的 `INBOX_DELIVERY_TOKEN`。在运行 Hermes 的主机或容器里安装插件，并配置从该环境可访问的 `/internal/inbox/v1/deliveries` 地址。默认 Compose 的 BFF 监听回环地址，分容器部署可使用 HTTPS 反向代理并转发该路径。 [Hermes 投递插件](plugins/hermes-mobile-delivery/README.md)
 
 使用 Bark 时，在 Hermes 配置档案中设置 `BARK_KEY`。 [Bark 推送配置](plugins/hermes-mobile-delivery/README.md#bark-推送)

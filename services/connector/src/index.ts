@@ -8,7 +8,7 @@ import { CanonicalConnector } from './connector.js';
 import type { JsonObject } from './gateway.js';
 import { createHttpConnector } from './http-mode.js';
 import { createDashboardManagement } from './management.js';
-import { createNativeCommands } from './native-commands.js';
+import { createNativeCommands, parseNativeApiKeys } from './native-commands.js';
 import { Spool } from './spool.js';
 import { QueryUnavailable } from './topic-query.js';
 import { bridgeFrame, commandDigest, result } from './wire.js';
@@ -32,6 +32,7 @@ async function main(): Promise<void> {
   const httpUrl = process.env.HERMES_API_URL;
   const httpKey = process.env.HERMES_API_KEY;
   if (httpUrl && !httpKey?.trim()) throw new Error('设置 HERMES_API_URL 时需要同时设置 HERMES_API_KEY');
+  const nativeApiKeys = httpKey ? parseNativeApiKeys(httpKey, process.env.HERMES_API_KEYS) : undefined;
   const dashboardUrl = process.env.HERMES_DASHBOARD_URL;
   const dashboardToken = process.env.HERMES_DASHBOARD_SESSION_TOKEN;
   const manage = dashboardUrl ? createDashboardManagement(dashboardUrl, dashboardToken ?? '') : undefined;
@@ -59,7 +60,7 @@ async function main(): Promise<void> {
 
   const downloadAttachment = attachmentDownloader(url, token, shutdown.signal);
   const receiveAttachments = attachmentReceiver(url, token, webapp, shutdown.signal);
-  const nativeCommands = httpUrl && httpKey ? createNativeCommands(httpUrl, httpKey) : undefined;
+  const nativeCommands = httpUrl && nativeApiKeys ? createNativeCommands(httpUrl, nativeApiKeys) : undefined;
   const canonical = new CanonicalConnector(webapp ?? process.env.HERMES_BIN ?? 'hermes',
     spool, () => socket?.terminate(), downloadAttachment, receiveAttachments, nativeCommands);
   const legacy = httpUrl && httpKey ? createHttpConnector({
