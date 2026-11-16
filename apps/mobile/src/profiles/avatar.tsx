@@ -22,7 +22,7 @@ export function ProfileAvatar({ profile, session, size = 40 }: { profile?: Profi
   const frame = { width: size, height: size, borderRadius: size / 2 };
   return <View accessible={false} style={[frame, { backgroundColor: colors.tint, alignItems: "center", justifyContent: "center", overflow: "hidden" }]}>
     {source && failedProfile !== profile ? (
-      <Image source={source} style={frame} contentFit="cover" cachePolicy="memory" recyclingKey={source.uri}
+      <Image source={source} style={frame} contentFit="cover" cachePolicy="memory-disk" recyclingKey={source.uri}
         onError={() => setFailedProfile(profile)} accessible={false} />
     ) : <Text style={{ color: colors.accent, fontSize: size * 0.42, fontWeight: "600" }}>
       {Array.from(profile ? profileLabel(profile) : "H")[0]}

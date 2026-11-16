@@ -464,3 +464,18 @@ test("配置档案设置页面将远端列表和保存操作接入同一个工�
   assert.equal(settings.props.onSave, saveProfilePreferences);
   assert.equal(findNode(screen, (node) => node.type === ManagementScreen), undefined);
 });
+
+test("配置档案列表下拉刷新后向头像组件传入服务端的新版本地址", async () => {
+  const profile = { profile_id: "first", label: "默认", avatar_url: "/mobile/v1/profiles/first/avatar?v=one" };
+  const screen = mountWorkspace({ params: { page: "profiles" }, context: { workspace: { profiles: [profile] } } });
+  let refreshes = 0;
+  screen.state.workspace.refresh = async () => {
+    refreshes++;
+    screen.state.workspace.profiles = [{ ...profile, avatar_url: "/mobile/v1/profiles/first/avatar?v=two" }];
+  };
+  const settings = () => findNode(screen.render(), (node) => node.type === "ProfileSettings");
+  assert.equal(settings().props.profiles[0].avatar_url, profile.avatar_url);
+  await findNode(screen.render(), (node) => node.type === "ScrollView").props.refreshControl.props.onRefresh();
+  assert.equal(refreshes, 1);
+  assert.equal(settings().props.profiles[0].avatar_url, "/mobile/v1/profiles/first/avatar?v=two");
+});
