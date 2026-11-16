@@ -11,3 +11,26 @@ export async function loadAttachment(session: Session, item: Attachment, signal:
   const uri = URL.createObjectURL(blob);
   return { uri, text: () => blob.text(), dispose: () => URL.revokeObjectURL(uri) };
 }
+
+export async function saveAttachment(session: Session, item: Attachment): Promise<"downloaded"> {
+  const content = await loadAttachment(session, item, new AbortController().signal);
+  let started = false;
+  try {
+    const link = document.createElement("a");
+    link.href = content.uri;
+    link.download = item.name;
+    link.style.display = "none";
+    document.body.appendChild(link);
+    try {
+      link.click();
+      started = true;
+    } finally {
+      link.remove();
+    }
+    return "downloaded";
+  } finally {
+    // Safari can start reading a blob after click() returns.
+    if (started) setTimeout(() => content.dispose(), 60_000);
+    else content.dispose();
+  }
+}

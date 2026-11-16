@@ -1,7 +1,7 @@
 {
   "ios": {
     "engine": "hot-updater/interface@1",
-    "hash": "a7ff55bf5843f7437522ff23e098bc9249054d97b43f9f3ffceb707051b1cf3e",
+    "hash": "d60a81444db533b019b17f28edbaf94c3934197ffd4f0e643874a41204ac8061",
     "sources": [
       {
         "type": "contents",
@@ -257,6 +257,15 @@
       },
       {
         "type": "contents",
+        "id": "dependency:expo-media-library",
+        "contents": "expo-media-library@58.0.14",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "80342c731a4b07a885bef9b60678cb59af11f7224f02359cb0d0a50c61a6f1d4"
+      },
+      {
+        "type": "contents",
         "id": "dependency:expo-modules-core",
         "contents": "expo-modules-core@58.1.0",
         "reasons": [
@@ -484,7 +493,7 @@
         "reasons": [
           "extra-source"
         ],
-        "hash": "96ed9d73fd3d31b1de3f4a22f286d33629803c08632e0db67418d6e0ee4d232f"
+        "hash": "7af842a8c55ed169bd63c04c008467efd555171378ef956dd7cf4283990f75ad"
       },
       {
         "type": "file",
@@ -546,7 +555,7 @@
   },
   "android": {
     "engine": "hot-updater/interface@1",
-    "hash": "3f2bf0b327b14fd0a49d1b80656f5462ed87935c22f32861e3a6eba8afd46e69",
+    "hash": "8bbc6af1c185b1e7250b7c8d816d2f7e5e6fb5874aebd26be4f9fb12ba2bbf83",
     "sources": [
       {
         "type": "contents",
@@ -802,6 +811,15 @@
       },
       {
         "type": "contents",
+        "id": "dependency:expo-media-library",
+        "contents": "expo-media-library@58.0.14",
+        "reasons": [
+          "native-dependency"
+        ],
+        "hash": "80342c731a4b07a885bef9b60678cb59af11f7224f02359cb0d0a50c61a6f1d4"
+      },
+      {
+        "type": "contents",
         "id": "dependency:expo-modules-core",
         "contents": "expo-modules-core@58.1.0",
         "reasons": [
@@ -1011,7 +1029,7 @@
         "reasons": [
           "extra-source"
         ],
-        "hash": "96ed9d73fd3d31b1de3f4a22f286d33629803c08632e0db67418d6e0ee4d232f"
+        "hash": "7af842a8c55ed169bd63c04c008467efd555171378ef956dd7cf4283990f75ad"
       },
       {
         "type": "file",

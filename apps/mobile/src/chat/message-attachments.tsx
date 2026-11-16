@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { Attachment } from "@hermes-mobile/protocol";
@@ -11,8 +11,18 @@ import { Action, CloseButton, Icon, Notice, useTheme } from "../ui/theme";
 import { AnswerMarkdown } from "./answer-markdown";
 import { attachmentKind, type AttachmentContent } from "./attachment-content";
 import { HtmlPreview } from "./html-preview";
-import { loadAttachment } from "./load-attachment";
+import { loadAttachment, saveAttachment } from "./load-attachment";
 import { MediaPlayer } from "./media-player";
+
+const saveErrorMessages = new Set([
+  "附件信息无效，请刷新消息后重试。",
+  "设备凭证已失效，请重新配对。",
+  "无法下载附件，请刷新消息后重试。",
+  "附件内容与记录不符。",
+  "附件未下载完整，请重试。",
+  "附件缓存不完整，请重试。",
+  "目标文件夹中有过多同名文件，请选择其他位置。",
+]);
 
 function ReceivedFile({ item: { attachment_id, name, mime, size }, session, tint, onOpenLink }: {
   item: Attachment; session: Session; tint: string; onOpenLink: (url: string) => void;
@@ -26,6 +36,10 @@ function ReceivedFile({ item: { attachment_id, name, mime, size }, session, tint
   const [content, setContent] = useState<AttachmentContent>();
   const [document, setDocument] = useState<string>();
   const [error, setError] = useState<string>();
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const [saveError, setSaveError] = useState<string>();
+  const [saveMessage, setSaveMessage] = useState<string>();
   const [open, setOpen] = useState(false);
   const [dimensions, setDimensions] = useState({ width: 4, height: 3 });
 
@@ -64,35 +78,66 @@ function ReceivedFile({ item: { attachment_id, name, mime, size }, session, tint
     setRequested(true);
     if (kind === "image" || kind === "markdown" || kind === "html") setOpen(true);
   };
+  async function save() {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    setSaveError(undefined);
+    setSaveMessage(undefined);
+    try {
+      const result = await saveAttachment(session, { attachment_id, name, mime, size });
+      if (result !== "cancelled") {
+        haptic("success");
+        setSaveMessage(result === "album" ? "已保存到相册" : result === "downloaded" ? "已开始下载" : "已保存到文件");
+      }
+    } catch (failure) {
+      haptic("error");
+      setSaveError(failure instanceof Error && saveErrorMessages.has(failure.message)
+        ? failure.message : "无法保存文件，请检查存储空间或系统权限后重试。");
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  }
+  const saveButton = () => <Action compact icon="download" title={saving ? "保存中…" : "保存"}
+    accessibilityLabel={`保存${name}`} disabled={saving} onPress={() => void save()} />;
+  const saveFeedback = <>
+    {saveError && <Notice>{saveError}</Notice>}
+    {saveMessage && <Text accessibilityLiveRegion="polite" style={[styles.caption, { color: colors.success }]}>{saveMessage}</Text>}
+  </>;
   const loading = busy && <View style={layout.loading}><ActivityIndicator color={colors.accent} /><Text style={styles.caption}>正在加载…</Text></View>;
   const failure = error && <View style={layout.error}><Notice>{error}</Notice>{kind !== "file" && <Action title="重试" onPress={retry} />}</View>;
   const aspectRatio = Math.max(0.5, Math.min(2, dimensions.width / dimensions.height));
 
   return <View style={layout.file}>
     {kind === "image" && content ? (
-      <Pressable accessibilityRole="button" accessibilityLabel={`查看图片：${name}`} onPress={show}
+      <><Pressable accessibilityRole="button" accessibilityLabel={`查看图片：${name}`} onPress={show}
         style={({ pressed }) => pressed && styles.faded}>
         <Image source={{ uri: content.uri }} accessibilityLabel={name} resizeMode="contain"
           onError={() => setError("无法显示图片，请重试。")}
           style={[layout.image, { aspectRatio, minWidth: Math.min(180, width / 2), backgroundColor: colors.field }]} />
-      </Pressable>
+      </Pressable><View style={layout.mediaActions}>{saveButton()}</View></>
     ) : (kind === "audio" || kind === "video") && content ? (
-      <MediaPlayer uri={content.uri} kind={kind} name={name} />
+      <><MediaPlayer uri={content.uri} kind={kind} name={name} /><View style={layout.mediaActions}>{saveButton()}</View></>
     ) : (
-      <Pressable accessibilityRole="button" accessibilityLabel={`${label}：${name}`} onPress={show}
-        style={({ pressed }) => [layout.row, { borderBottomColor: colors.edge }, pressed && styles.faded]}>
-        <View style={[layout.fileIcon, { backgroundColor: colors.tint }]}>
-          <Icon name={kind === "image" ? "photo" : "attachment"} size={18} color={colors.accent} />
-        </View>
-        <View style={layout.name}>
-          <Text numberOfLines={2} style={[styles.heading, layout.fileName, { color: tint }]}>{name}</Text>
-          <Text style={[styles.caption, { color: tint === colors.foreground ? colors.muted : tint }]}>{size < 1024 * 1024 ? `${Math.ceil(size / 1024)} KB` : `${(size / 1024 / 1024).toFixed(1)} MB`}</Text>
-        </View>
-        <Icon name="chevron" size={15} color={tint === colors.foreground ? colors.accent : tint} />
-      </Pressable>
+      <View style={[layout.receivedRow, { borderBottomColor: colors.edge }]}>
+        <Pressable accessibilityRole="button" accessibilityLabel={`${label}：${name}`} onPress={show}
+          style={({ pressed }) => [layout.row, layout.openRow, pressed && styles.faded]}>
+          <View style={[layout.fileIcon, { backgroundColor: colors.tint }]}>
+            <Icon name={kind === "image" ? "photo" : "attachment"} size={18} color={colors.accent} />
+          </View>
+          <View style={layout.name}>
+            <Text numberOfLines={2} style={[styles.heading, layout.fileName, { color: tint }]}>{name}</Text>
+            <Text style={[styles.caption, { color: tint === colors.foreground ? colors.muted : tint }]}>{size < 1024 * 1024 ? `${Math.ceil(size / 1024)} KB` : `${(size / 1024 / 1024).toFixed(1)} MB`}</Text>
+          </View>
+          <Icon name="chevron" size={15} color={tint === colors.foreground ? colors.accent : tint} />
+        </Pressable>
+        {saveButton()}
+      </View>
     )}
     {!open && loading}
     {!open && failure}
+    {!open && saveFeedback}
     <OverlayModal visible={open} animationType={reduced ? "none" : "slide"} onRequestClose={() => setOpen(false)}
       supportedOrientations={["portrait", "landscape-left", "landscape-right"]}>
       <SafeAreaView style={layout.previewWindow} edges={["top"]}>
@@ -107,9 +152,12 @@ function ReceivedFile({ item: { attachment_id, name, mime, size }, session, tint
               leading={kind === "html" && <View style={[layout.fileIcon, { backgroundColor: colors.tint }]}>
                 <Icon name="logs" size={18} color={colors.accent} />
               </View>}
-              trailing={<CloseButton accessibilityLabel="关闭文件预览" onPress={() => setOpen(false)} />} />
+              trailing={<View style={layout.headerActions}>
+                {kind === "image" && saveButton()}
+                <CloseButton accessibilityLabel="关闭文件预览" onPress={() => setOpen(false)} />
+              </View>} />
           </View>
-          {loading}{failure}
+          {loading}{failure}{saveFeedback}
           {open && content && kind === "image" && <View style={layout.imagePreview}>
             <Image source={{ uri: content.uri }} accessibilityLabel={name} resizeMode="contain" style={layout.fullImage} />
           </View>}
@@ -145,6 +193,10 @@ const layout = StyleSheet.create({
   files: { gap: 2, minWidth: 0 },
   file: { gap: 6, minWidth: 0, width: "100%", paddingBottom: 4 },
   row: { flexDirection: "row", alignItems: "center", gap: 10, minHeight: 56, paddingVertical: 6, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "transparent" },
+  receivedRow: { flexDirection: "row", alignItems: "center", gap: 4, minWidth: 0, borderBottomWidth: StyleSheet.hairlineWidth },
+  openRow: { flex: 1, minWidth: 0, borderBottomWidth: 0 },
+  mediaActions: { alignSelf: "flex-end" },
+  headerActions: { flexDirection: "row", alignItems: "center", gap: 4 },
   fileIcon: { width: 36, height: 36, borderRadius: 9, alignItems: "center", justifyContent: "center" },
   fileName: { fontSize: 16, lineHeight: 22 },
   name: { flex: 1, minWidth: 0 },

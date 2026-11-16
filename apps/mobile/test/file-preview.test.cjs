@@ -3,15 +3,21 @@ const { readFileSync } = require("node:fs");
 const test = require("node:test");
 const ts = require("typescript");
 
-function mountPreview({ kind = "markdown", dark = false, reduced = false } = {}) {
+function mountPreview({ kind = "markdown", dark = false, reduced = false, save = async () => "files" } = {}) {
   const jsx = (type, props) => ({ type, props });
   const state = [];
+  const saves = [];
   let cursor = 0;
   const colors = { background: "page", surface: "sheet", edge: "edge" };
   const modules = {
     "react/jsx-runtime": { jsx, jsxs: jsx },
     react: {
       useEffect() {},
+      useRef(initial) {
+        const slot = cursor++;
+        if (!(slot in state)) state[slot] = { current: initial };
+        return state[slot];
+      },
       useState(initial) {
         const slot = cursor++;
         if (!(slot in state)) state[slot] = initial;
@@ -34,7 +40,8 @@ function mountPreview({ kind = "markdown", dark = false, reduced = false } = {})
     "./attachment-content": { attachmentKind: () => kind },
     "./answer-markdown": { AnswerMarkdown: "AnswerMarkdown" },
     "./html-preview": { HtmlPreview: "HtmlPreview" },
-    "./load-attachment": { loadAttachment() { throw new Error("Unexpected download"); } },
+    "./load-attachment": { loadAttachment() { throw new Error("Unexpected download"); },
+      saveAttachment: (...args) => { saves.push(args); return save(...args); } },
     "./media-player": { MediaPlayer: "MediaPlayer" },
   };
   const source = ts.transpileModule(readFileSync(require.resolve("../src/chat/message-attachments.tsx"), "utf8"), {
@@ -47,7 +54,9 @@ function mountPreview({ kind = "markdown", dark = false, reduced = false } = {})
   });
   const file = exports.MessageAttachments({ items: [{ attachment_id: "file-id", name: "报告", mime: "text/plain", size: 10 }],
     session: {}, tint: "text", onOpenLink() {} }).props.children[0];
-  return () => { cursor = 0; return file.type(file.props); };
+  const render = () => { cursor = 0; return file.type(file.props); };
+  render.saves = saves;
+  return render;
 }
 
 function find(node, predicate) {
@@ -83,4 +92,41 @@ test("共享预览弹出层保留减少动态效果和系统返回", () => {
   assert.equal(modal.props.animationType, "none");
   modal.props.onRequestClose();
   assert.equal(find(render(), (node) => node.type === "Modal").props.visible, false);
+});
+
+test("收到的文件可直接保存，图片预览内也能保存", async () => {
+  const file = mountPreview({ kind: "file" });
+  const button = find(file(), (node) => node.type === "Action" && node.props.title === "保存");
+  assert.equal(button.props.accessibilityLabel, "保存报告");
+  button.props.onPress();
+  await new Promise(setImmediate);
+  assert.equal(file.saves.length, 1);
+  assert.ok(find(file(), (node) => node.props.children === "已保存到文件"));
+
+  const image = mountPreview({ kind: "image" });
+  find(image(), (node) => node.type === "Pressable").props.onPress();
+  const modal = find(image(), (node) => node.type === "Modal");
+  assert.ok(find(modal, (node) => node.type === "Action" && node.props.title === "保存"));
+});
+
+test("保存期间阻止重复点击，失败时显示错误并允许重试", async () => {
+  let reject;
+  const pending = new Promise((_resolve, fail) => { reject = fail; });
+  const file = mountPreview({ kind: "file", save: () => pending });
+  const button = find(file(), (node) => node.type === "Action" && node.props.title === "保存");
+  button.props.onPress();
+  button.props.onPress();
+  assert.equal(file.saves.length, 1);
+  assert.ok(find(file(), (node) => node.type === "Action" && node.props.disabled));
+  reject(new Error("附件未下载完整，请重试。"));
+  await new Promise(setImmediate);
+  assert.ok(find(file(), (node) => node.type === "Notice" && node.props.children === "附件未下载完整，请重试。"));
+  assert.equal(find(file(), (node) => node.type === "Action" && node.props.title === "保存").props.disabled, false);
+});
+
+test("原生文件错误以中文提示，不向界面显示系统异常", async () => {
+  const file = mountPreview({ kind: "file", save: async () => { throw new Error("ENOSPC: 报告.pdf write failed"); } });
+  find(file(), (node) => node.type === "Action" && node.props.title === "保存").props.onPress();
+  await new Promise(setImmediate);
+  assert.ok(find(file(), (node) => node.type === "Notice" && node.props.children === "无法保存文件，请检查存储空间或系统权限后重试。"));
 });
