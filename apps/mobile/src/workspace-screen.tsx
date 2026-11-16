@@ -31,7 +31,7 @@ const sections = {
   inbox: { title: "收件箱", icon: "inbox", activeIcon: "inboxActive" },
   settings: { title: "设置", icon: "settings", activeIcon: "settingsActive" },
 } as const;
-type Page = Section | "profiles" | "manage" | "connection" | "archive" | ManagementPage;
+type Page = Section | "profiles" | "manage" | "connection" | "archive" | "version" | ManagementPage;
 const tabs = Object.keys(sections) as Section[];
 
 function BackLink({ title, onPress }: { title: string; onPress: () => void }) {
@@ -95,8 +95,11 @@ function Workspace() {
   const topicListPage = page === "topics" || archived;
   const section = page === "topics" || page === "inbox" ? page : "settings";
   const settingsPage = page === "topics" || page === "inbox" || page === "settings" ? undefined : page;
-  const managementPage = settingsPage === "manage" || settingsPage === "profiles" || settingsPage === "connection" || settingsPage === "archive" ? undefined : settingsPage;
-  const pageTitle = settingsPage === "profiles" ? "配置档案" : archived ? "已归档会话" : settingsPage === "connection" ? "连接" : settingsPage ? "管理" : sections[section].title;
+  const managementPage = settingsPage === "manage" || settingsPage === "profiles" || settingsPage === "connection"
+    || settingsPage === "archive" || settingsPage === "version" ? undefined : settingsPage;
+  const pageTitle = settingsPage === "profiles" ? "配置档案" : archived ? "已归档会话"
+    : settingsPage === "connection" ? "连接" : settingsPage === "version" ? "版本信息"
+      : settingsPage ? "管理" : sections[section].title;
   const rows: TopicListRow[] = topicListPage ? workspace.topics
     .filter((item) => Boolean(item.archived) === archived && (archived || !profile || item.profile_id === profile.profile_id))
     .map((item) => ({
@@ -372,9 +375,14 @@ function Workspace() {
               <Row divided title="管理" icon="manage" onPress={() => showPage("manage")} />
               <Row divided title="连接" value={connection} icon="link" onPress={() => showPage("connection")} />
               <Row divided title="已归档会话" icon="archive" onPress={() => showPage("archive")} />
+              <Row divided title="版本信息" icon="info" onPress={() => showPage("version")} />
             </Group>
-            <View style={layout.version}>
-              <SectionLabel>版本信息</SectionLabel>
+          </>
+        )}
+        {page === "version" && (
+          <>
+            <View>
+              <SectionLabel>当前版本</SectionLabel>
               <View style={[styles.listItem, layout.ruledRow, { borderColor: colors.edge }]}>
                 <Text style={styles.text}>热更新版本</Text>
                 <Text selectable style={[styles.caption, layout.updateValue, currentUpdate.builtAt !== undefined && layout.updateId]}>{currentUpdate.id}</Text>
@@ -385,17 +393,22 @@ function Workspace() {
                   {currentUpdate.builtAt === undefined ? "—" : formatDateTime(currentUpdate.builtAt)}
                 </Text>
               </View>
-              {Platform.OS !== "web" && (
-                <Pressable accessibilityRole="button" accessibilityLabel={updateStatus ?? "检查更新"}
-                  accessibilityState={{ busy: !!updateStatus, disabled: updateDisabled }} disabled={updateDisabled}
-                  onPress={() => void checkUpdate()}
-                  style={({ pressed }) => [styles.listItem, layout.ruledRow, { borderColor: colors.edge }, pressed && styles.faded]}>
-                  <Icon name="refresh" size={21} color={colors.accent} />
-                  <Text style={[styles.text, layout.grow]}>{updateStatus ?? "检查更新"}</Text>
-                  <Icon name="chevron" size={13} color={colors.muted} />
-                </Pressable>
-              )}
             </View>
+            <View style={layout.updateNotes}>
+              <SectionLabel>更新内容</SectionLabel>
+              <Text selectable style={currentUpdate.message ? styles.text : styles.muted}>
+                {currentUpdate.message ?? "暂无更新说明"}
+              </Text>
+            </View>
+            {Platform.OS !== "web" && (
+              <Pressable accessibilityRole="button" accessibilityLabel={updateStatus ?? "检查更新"}
+                accessibilityState={{ busy: !!updateStatus, disabled: updateDisabled }} disabled={updateDisabled}
+                onPress={() => void checkUpdate()}
+                style={({ pressed }) => [styles.listItem, layout.ruledRow, { borderColor: colors.edge }, pressed && styles.faded]}>
+                <Icon name="refresh" size={21} color={colors.accent} />
+                <Text style={[styles.text, layout.grow]}>{updateStatus ?? "检查更新"}</Text>
+              </Pressable>
+            )}
           </>
         )}
         {page === "profiles" && <ProfileSettings profiles={workspace.profiles} session={session} onSave={workspace.saveProfilePreferences} />}
@@ -495,7 +508,7 @@ const layout = StyleSheet.create({
   connectionSummary: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, minHeight: 48, maxWidth: "100%" },
   dot: { width: 8, height: 8, borderRadius: 4 },
   profileList: { flexGrow: 0, flexShrink: 1 },
-  version: { marginTop: 8 },
+  updateNotes: { gap: 8 },
   ruledRow: { borderBottomWidth: StyleSheet.hairlineWidth, minHeight: 56 },
   address: { borderRadius: 12, paddingHorizontal: 16, marginTop: 8 },
   connectionStatus: { marginTop: 4 },

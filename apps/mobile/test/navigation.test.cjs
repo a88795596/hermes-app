@@ -26,7 +26,7 @@ function renderPage(params, inboxItem) {
 }
 
 test("有效二级页面和指定会话交给共享页面渲染", () => {
-  for (const params of [{ page: "manage" }, { page: "cron" }, { page: "conversation", topicId: "topic-1" }]) {
+  for (const params of [{ page: "manage" }, { page: "cron" }, { page: "version" }, { page: "conversation", topicId: "topic-1" }]) {
     assert.equal(renderPage(params).type, WorkspaceScreen);
   }
 });
