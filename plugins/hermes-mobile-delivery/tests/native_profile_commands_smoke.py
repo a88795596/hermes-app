@@ -52,7 +52,10 @@ sys.addaudithook(reject_network)
                     assert "careful" in result["output"], result
                     assert GatewayRunner._load_ephemeral_system_prompt() == "Work profile native personality"
                     assert (default / "config.yaml").read_text() == original
-                    for name, args in (("memory", "pending"), ("skills", "pending"), ("insights", "7")):
+                    insights = await profile_commands.execute_profile_command(adapter,
+                        MessageEvent(text="/insights 7", source=source), "insights")
+                    assert insights.get("ok") and "No sessions found in the last 7 days." in insights["output"], insights
+                    for name, args in (("memory", "pending"), ("skills", "pending")):
                         result = await profile_commands.execute_profile_command(adapter,
                             MessageEvent(text=f"/{name} {args}", source=source), name)
                         assert result.get("ok"), (name, result)

@@ -21,6 +21,7 @@ def _session_store(db, entry, config):
             self.config = config
             self._entries = {entry.session_key: entry}
             self._lock = threading.RLock()
+            self._rows_pending = set()
             self._transcript_retry_lock = threading.Lock()
             self._transcript_drain_lock = threading.RLock()
             self._transcript_reroutes = {}
@@ -105,6 +106,11 @@ class NativeSessionContext:
     def require_idle(self):
         if self.busy:
             raise ValueError("请先停止当前回复，再修改会话历史。")
+
+    async def _hm_stop_owner_turn(self, session_key):
+        # API sessions have no gateway route or owner turn. The idle guard runs
+        # before command persistence reserves its own pending API work.
+        pass
 
     def _queue_depth(self, session_key, adapter=None):
         return sum(row.get("session_id") in self.session_ids and row.get("status") == "queued"

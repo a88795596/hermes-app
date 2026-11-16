@@ -40,7 +40,9 @@ def main():
         from gateway.platforms.base import MessageEvent
         from gateway.run import GatewayRunner
         from gateway.session import SessionSource
+        from gateway.session_authorities import SessionAuthorities
         from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+        from hermes_state import SessionDB
         from hermes_mobile_delivery.compression import execute_compression
         from hermes_mobile_delivery.session_commands import create_session_context, execute_session_command
 
@@ -48,6 +50,7 @@ def main():
         runner = object.__new__(GatewayRunner)
         runner.adapters = {Platform.API_SERVER: api}
         runner.hooks = HookRegistry()
+        runner.session_authorities = SessionAuthorities(default_home, multiplexed=True)
         api.gateway_runner = runner
         adapter = SimpleNamespace(gateway_runner=runner)
 
@@ -69,7 +72,11 @@ def main():
                 home.mkdir(parents=True, exist_ok=True)
                 token = set_hermes_home_override(home)
                 try:
-                    db = await api._ensure_session_db_async()
+                    db = SessionDB(home / "state.db")
+                    runner.session_authorities.add(home,
+                        SimpleNamespace(db=db, profile_id=str(home), logical_owner=lambda _sid: None,
+                            fence_route=lambda _key: None, sessions={}), name=profile)
+                    assert await api._ensure_session_db_async() is db
                     databases.append(db)
                     assert Path(db.db_path).resolve() == home / "state.db"
                     sid = "mobile_shared"
@@ -163,11 +170,10 @@ def main():
             assert databases[0] is not databases[1]
             assert databases[0].get_session_title("mobile_shared") == "default 标题"
             assert databases[1].get_session_title("mobile_shared") == "work 标题"
-            # A stale pinned DB must fail before accessing the other profile.
+            # The live authority registry must ignore a stale adapter-pinned DB.
             api._session_db = databases[1]
             source = SessionSource(platform=Platform.API_SERVER, chat_id="mobile_shared", profile="default")
-            rejected = await execute_session_command(adapter, MessageEvent(text="/undo", source=source), "undo")
-            assert not rejected["ok"] and "不匹配" in rejected["error"]
+            assert await api._ensure_session_db_async() is databases[0]
             api._session_db = None
             pending = await command(source, "undo", approval=None)
             assert "confirmation" in pending["native_result"], "Work profile opt-out leaked into default"
@@ -188,7 +194,7 @@ def main():
 
         # Block all provider requests; these two format-only boundaries are
         # unrelated to the session handler/store behavior exercised above.
-        with patch("gateway.slash_commands.fetch_account_usage", return_value=None), \
+        with patch("gateway.slash_commands_status.fetch_account_usage", return_value=None), \
                 patch("agent.account_usage.nous_credits_lines", return_value=[]), \
                 patch.object(runner, "_reset_notice_session_info", return_value=""), \
                 patch.object(api, "_create_agent", side_effect=AssertionError("Preview must not construct an agent")):
