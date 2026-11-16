@@ -16,7 +16,8 @@ new Function("exports", compile("../src/ui/text.ts"))(textExports);
 const flush = () => new Promise(setImmediate);
 const ManagementScreen = Symbol("ManagementScreen");
 
-function mountWorkspace({ update, message, downloaded = false, reloadError, params = {}, router = {}, stack, context = {} } = {}) {
+function mountWorkspace({ update, message, downloaded = false, reloadError, params = {}, router = {}, stack, context = {},
+  runningUpdate = { id: "running-version", builtAt: 1794700800000, message: "修复当前版本的问题" } } = {}) {
   const alerts = [], choices = [], reloadChoices = [], statuses = [], feedback = [];
   const values = [], focusEffects = [];
   let checks = 0, cursor = 0;
@@ -68,7 +69,7 @@ function mountWorkspace({ update, message, downloaded = false, reloadError, para
       case "./chat/topic-list": return { TopicList: "TopicList" };
       case "./chat/assistant-stream-border": return { AssistantStreamBorder: "AssistantStreamBorder" };
       case "./updates": return {
-        currentUpdate: { id: "running-version" },
+        currentUpdate: runningUpdate,
         async checkUpdateManually(confirm, confirmReload) {
           checks++;
           if (message) return message;
@@ -86,7 +87,7 @@ function mountWorkspace({ update, message, downloaded = false, reloadError, para
       case "@hermes-mobile/protocol":
       case "./chat/conversation":
       case "./inbox/inbox":
-      case "./manage/shared":
+      case "./manage/shared": return { Group: "Group", Row: "Row" };
       case "./notifications": return {};
       case "./manage": return { ManagementScreen };
       default: throw new Error(`Unexpected dependency: ${name}`);
@@ -157,13 +158,34 @@ test("主轮结束但后台子任务仍运行时保留流光，原生确认空�
 });
 
 function mountSettings(update, message, options = {}) {
-  const { screen: settings, ...state } = mountWorkspace({ update, message, ...options });
+  const { screen: settings, ...state } = mountWorkspace({ update, message, ...options,
+    params: { page: "version", ...options.params } });
   const button = findNode(settings, (node) => node.type === "Pressable" && node.props.accessibilityLabel === "检查更新");
-  assert.ok(button, "设置中应有可点击的检查更新入口");
+  assert.ok(button, "版本详情中应有可点击的检查更新入口");
   assert.equal(button.props.accessibilityRole, "button");
-  assert.ok(findNode(settings, (node) => node.type === "Text" && node.props.children === "running-version"), "设置中应显示正在运行的热更新版本");
-  return { ...state, press: button.props.onPress };
+  assert.ok(findNode(settings, (node) => node.type === "Text" && node.props.children === "running-version"), "版本详情中应显示正在运行的热更新版本");
+  return { ...state, screen: settings, press: button.props.onPress };
 }
+
+test("设置页的版本信息入口打开二级页，详情显示当前版本说明和原有信息", () => {
+  const routes = [];
+  const settings = mountWorkspace({ router: { push: (route) => routes.push(route) } });
+  const entry = findNode(settings.screen, (node) => node.type === "Row" && node.props.title === "版本信息");
+  assert.ok(entry, "设置页应有版本信息 item");
+  assert.equal(findNode(settings.screen, (node) => node.type === "Text" && node.props.children === "running-version"), undefined);
+  assert.equal(findNode(settings.screen, (node) => node.props.accessibilityLabel === "检查更新"), undefined);
+  entry.props.onPress();
+  assert.deepEqual(routes, [{ pathname: "/[page]", params: { page: "version" } }]);
+
+  const detail = mountSettings();
+  assert.equal(findNode(detail.screen, (node) => node.type === "PageHeader").props.title, "版本信息");
+  assert.ok(findNode(detail.screen, (node) => node.type === "Text" && node.props.children === "修复当前版本的问题"));
+  assert.ok(findNode(detail.screen, (node) => node.type === "Text"
+    && node.props.children === textExports.formatDateTime(1794700800000)));
+
+  const withoutNotes = mountWorkspace({ params: { page: "version" }, runningUpdate: { id: "旧版热更新" } });
+  assert.ok(findNode(withoutNotes.screen, (node) => node.type === "Text" && node.props.children === "暂无更新说明"));
+});
 
 test("检查更新展示说明、时间和 ID，取消可重试，确认前防止重复检查", async () => {
   const update = { id: "next-version", message: "  新增手动检查热更新  ", publishedAt: 1794700800000 };

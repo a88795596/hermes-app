@@ -94,4 +94,4 @@ pnpm --dir apps/mobile dlx eas-cli@27.10.0 build --local --platform ios --profil
 
 ## 热更新
 
-日常在仓库根目录运行 `pnpm ota:push --message "更新说明"`，一次发布两个平台到 `preview`，不操作 Git。Release 版本启动后检查并后台下载更新，下次完全退出并重新打开 App 时生效；设置页手动检查并下载成功后，可选择立即重启应用更新或稍后生效。首次启用仍须构建安装一次原生 App；开发调试继续使用 Metro。配置服务、客户端凭据、原生指纹和发布命令见 [热更新操作说明](../../docs/hot-updates.md)。
+日常在仓库根目录运行 `pnpm ota:push --message "更新说明"`，一次发布两个平台到 `preview`，不操作 Git。Release 版本启动后检查并后台下载更新，下次完全退出并重新打开 App 时生效；在设置页的“版本信息”详情可查看当前更新说明，手动检查并下载成功后可选择立即重启应用更新或稍后生效。首次启用仍须构建安装一次原生 App；开发调试继续使用 Metro。配置服务、客户端凭据、原生指纹和发布命令见 [热更新操作说明](../../docs/hot-updates.md)。

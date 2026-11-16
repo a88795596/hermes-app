@@ -57,6 +57,7 @@ const symbols = {
   server: ["server.rack", "dns"],
   activity: ["waveform.path", "monitor_heart"],
   refresh: ["arrow.clockwise", "refresh"],
+  info: ["info.circle", "info"],
   logout: ["rectangle.portrait.and.arrow.right", "logout"],
   check: ["checkmark", "check"],
   stop: ["stop.fill", "stop"],

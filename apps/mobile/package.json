@@ -56,7 +56,7 @@
   },
   "scripts": {
     "ota:fingerprint": "hot-updater fingerprint create",
-    "ota:deploy": "hot-updater deploy --channel preview",
+    "ota:deploy": "node ../../scripts/ota-deploy.mjs",
     "ota:console": "hot-updater console",
     "start": "expo start",
     "android": "pnpm setup:speech --platform android && expo run:android",

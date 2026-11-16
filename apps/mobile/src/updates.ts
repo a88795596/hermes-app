@@ -2,6 +2,7 @@ import type { HotUpdaterInstance } from "@hot-updater/react-native";
 
 const baseURL = process.env.EXPO_PUBLIC_HOT_UPDATER_BASE_URL;
 const apiKey = process.env.EXPO_PUBLIC_HOT_UPDATER_API_KEY;
+const releaseMessage = process.env.EXPO_PUBLIC_HERMES_UPDATE_MESSAGE?.trim();
 
 function reportUpdateError(error: unknown) {
   console.warn("热更新失败，继续使用当前版本。", error);
@@ -14,7 +15,7 @@ function updateTimestamp(id: string) {
 }
 
 export let hotUpdater: HotUpdaterInstance | undefined;
-export let currentUpdate: { id: string; builtAt?: number } = {
+export let currentUpdate: { id: string; builtAt?: number; message?: string } = {
   id: __DEV__ ? "开发版本" : baseURL && apiKey ? "不可用" : "未启用",
   builtAt: undefined,
 };
@@ -29,9 +30,11 @@ if (!__DEV__ && baseURL && apiKey) {
     });
     // 下载会改变 SDK 的包信息，因此在启动时固定当前正在运行的版本。
     const bundleId = hotUpdater.getManifest().bundleId;
+    const builtIn = bundleId === hotUpdater.getMinBundleId();
     currentUpdate = {
-      id: bundleId === hotUpdater.getMinBundleId() ? "内置版本" : hotUpdater.getBundleId(),
+      id: builtIn ? "内置版本" : hotUpdater.getBundleId(),
       builtAt: updateTimestamp(bundleId),
+      ...(!builtIn && releaseMessage ? { message: releaseMessage } : {}),
     };
   } catch (error) {
     reportUpdateError(error);
