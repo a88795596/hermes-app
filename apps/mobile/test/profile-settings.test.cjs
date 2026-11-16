@@ -142,6 +142,22 @@ test("头像加载失败回退首字，刷新档案后重试同一张头像", ()
   assert.ok(byType(ProfileAvatar({ profile: { ...profile }, session }), "Image"));
 });
 
+test("头像同时使用内存和磁盘缓存，版本地址变化后读取新头像", () => {
+  const { ProfileAvatar } = load("avatar.tsx", {
+    "react/jsx-runtime": { jsx, jsxs: jsx }, "expo-image": { Image: "Image" },
+    "react": { useMemo: (make) => make(), useState: () => [undefined, () => {}] },
+    "react-native": { Text: "Text", View: "View" },
+    "../ui/text": { profileLabel: () => "工作助手" }, "../ui/theme": { useTheme: () => ({ colors: {} }) },
+  });
+  const session = { origin: "https://mobile.example", token: "device-secret" };
+  const profile = { profile_id: "work", label: "work", avatar_url: "/mobile/v1/profiles/work/avatar?v=one" };
+  const first = byType(ProfileAvatar({ profile, session }), "Image");
+  assert.equal(first.props.cachePolicy, "memory-disk");
+  const updated = byType(ProfileAvatar({ profile: { ...profile, avatar_url: "/mobile/v1/profiles/work/avatar?v=two" }, session }), "Image");
+  assert.equal(updated.props.source.uri, "https://mobile.example/mobile/v1/profiles/work/avatar?v=two");
+  assert.notEqual(updated.props.recyclingKey, first.props.recyclingKey);
+});
+
 test("头像选择校验实际大小和格式并清理临时文件", async () => {
   let assets;
   let deleted = 0;
