@@ -101,13 +101,15 @@ sys.addaudithook(deny_network)
                     assert "service_tier" not in request(session_id="other")
                     assert "service_tier" not in request(platform="cli")
                     assert "service_tier" not in request(model="unsupported-model")
+                    assert "service_tier" not in request(base_url="https://proxy.invalid/v1")
+                    assert "service_tier" not in request(provider="other")
                     assert request(api_mode="codex_responses")["service_tier"] == "priority"
-                    anthropic = request(model="claude-opus-4-6", provider="anthropic",
+                    anthropic = request(model="claude-opus-4-8", provider="anthropic",
                         api_mode="anthropic_messages", base_url="https://api.anthropic.com")
                     assert anthropic["extra_body"]["speed"] == "fast"
                     assert "fast-mode-" in anthropic["extra_headers"]["anthropic-beta"]
                     assert "oauth-" in anthropic["extra_headers"]["anthropic-beta"]
-                    assert "extra_body" not in request(model="claude-opus-4-6", api_mode="anthropic_messages",
+                    assert "extra_body" not in request(model="claude-opus-4-8", api_mode="anthropic_messages",
                         base_url="https://example.invalid")
                     agent.service_tier = None
                     assert "service_tier" not in request()

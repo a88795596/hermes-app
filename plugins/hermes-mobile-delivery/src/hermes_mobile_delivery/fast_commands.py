@@ -64,7 +64,8 @@ def register_fast_requests(ctx, adapters):
     if not callable(getattr(ctx, "register_middleware", None)):
         return False
 
-    def before_request(*, request, session_id=None, platform=None, model=None, api_mode=None, base_url=None, **_kwargs):
+    def before_request(*, request, session_id=None, platform=None, model=None, provider=None,
+                       api_mode=None, base_url=None, **_kwargs):
         from gateway.config import Platform
         from hermes_constants import get_hermes_home
         from hermes_cli.models import resolve_fast_mode_overrides
@@ -82,7 +83,7 @@ def register_fast_requests(ctx, adapters):
                 database = getattr(getattr(agent, "_session_db", None), "db_path", None)
                 if not database or Path(database).resolve().parent != adapter._command_home:
                     continue
-                overrides = resolve_fast_mode_overrides(model)
+                overrides = resolve_fast_mode_overrides(model, provider=provider, base_url=base_url)
                 if not overrides:
                     return
                 if api_mode == "anthropic_messages":
