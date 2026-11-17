@@ -198,6 +198,44 @@ test("开关落盘失败保持原模式且不创建会话", async (t) => {
   assert.equal(server.creates.length, 0);
 });
 
+test("分页预读相邻 Profile 的已有消息，不为未访问档案创建会话", async (t) => {
+  const cache = memoryCache(), server = streamServer();
+  const research = { topic_id: "research-stream", profile_id: "research", status: "ready", title: "研究" };
+  server.topics.set(research.topic_id, research);
+  await cache.set("infinite-topic:research", research.topic_id);
+  const detail = { topic: research, messages: [{ message_id: "research-reply", role: "assistant", status: "final", text: "研究记录" }], controls: [] };
+  await cache.set("topic:research-stream", detail);
+  const app = await workspace(cache, server.request, [], server.options);
+  t.after(app.close);
+  await app.current.setInfiniteFlow(true);
+  await app.settle();
+  assert.equal(app.current.streamTopics?.research?.id, research.topic_id);
+  assert.deepEqual(app.current.topicDetails[research.topic_id], detail);
+  assert.equal(server.creates.length, 1, "预读已有相邻页不创建或重新准备其 session");
+  const daily = app.current.streamTopic.id;
+  await app.selectStreamProfile("research");
+  assert.equal(app.current.streamTopic.id, research.topic_id);
+  assert.equal(app.current.topicDetails[daily].topic.profile_id, "daily");
+  assert.equal(app.current.detail.topic.profile_id, "research");
+});
+
+test("相邻页不展示归档或其他 Profile 的会话", async (t) => {
+  for (const invalid of [{ archived: true }, { profile_id: "daily" }]) {
+    const cache = memoryCache(), server = streamServer();
+    const topic = { topic_id: "invalid", profile_id: "research", status: "ready", ...invalid };
+    server.topics.set(topic.topic_id, topic);
+    await cache.set("infinite-topic:research", topic.topic_id);
+    await cache.set("topic:invalid", { topic, messages: [], controls: [] });
+    const app = await workspace(cache, server.request, [], server.options);
+    t.after(app.close);
+    await app.current.setInfiniteFlow(true);
+    await app.settle();
+    assert.ok(app.current.streamTopics, "提供可分页的数据");
+    assert.equal(app.current.streamTopics.research, undefined);
+    assert.equal(server.creates.length, 1);
+  }
+});
+
 test("持续会话 ID 读写短暂失败后刷新可恢复，保存成功前不创建远端会话", async (t) => {
   for (const operation of ["get", "set"]) {
     const cache = memoryCache(), server = streamServer();

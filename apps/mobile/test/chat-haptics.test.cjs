@@ -8,7 +8,7 @@ function mount(file, name, props, speech, reduceMotion = true) {
   const dimensions = { width: 390, height: 844 };
   let cursor = 0;
   let requestSequence = 0;
-  const jsx = (type, props) => ({ type, props });
+  const jsx = (type, props, key) => type?.name === "ConversationTranscript" ? type(props) : ({ type, props, key });
   const exported = {};
   const source = ts.transpileModule(readFileSync(require.resolve(`../src/chat/${file}.tsx`), "utf8"), {
     compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS },
@@ -23,7 +23,8 @@ function mount(file, name, props, speech, reduceMotion = true) {
           return [values[index], (next) => { values[index] = typeof next === "function" ? next(values[index]) : next; }];
         },
         useRef(current) { const index = cursor++; return values[index] ??= { current }; },
-        useEffect(effect) { const index = cursor++; if (!(index in values)) { values[index] = true; effects.push(effect); } },
+        useEffect(effect, deps) { const index = cursor++; if (!values[index] || !deps || deps.some((v, i) => v !== values[index][i])) effects.push(effect); values[index] = deps ?? []; },
+        useImperativeHandle(ref, create) { if (typeof ref === "function") ref(create()); else if (ref) ref.current = create(); },
         useCallback: (callback) => callback,
         useEffectEvent: (callback) => callback,
       };
@@ -54,7 +55,6 @@ function mount(file, name, props, speech, reduceMotion = true) {
       };
       case "./model-picker": return { ModelPicker: "ModelPicker" };
       case "./settings-drawer": return { SettingsDrawer: "SettingsDrawer" };
-      case "../profiles/swipe": return { ProfileSwipe: "ProfileSwipe" };
       case "./answer-markdown": return { AnswerMarkdown: "AnswerMarkdown" };
       case "./assistant-stream-border": return { AssistantStreamBorder: "AssistantStreamBorder" };
       case "./message-attachments": return { MessageAttachments: "MessageAttachments" };
@@ -110,18 +110,43 @@ function conversation(enqueue, draft = "测试消息", { messages = [], workspac
   }, speech, reduceMotion);
 }
 
-test("无限会话横划在录音和弹层期间禁用，输入栏不在手势区域", () => {
+test("无限会话录音和弹层阻止切页，输入栏独立于分页消息区", () => {
   for (const busy of [true, false]) {
-    const app = conversation(async () => {}, "", { onSwitchProfile() {},
+    const blocked = [];
+    const app = conversation(async () => {}, "", { onSwitchBlockedChange: (value) => blocked.push(value),
+      renderTranscript: () => ({ type: "Pager", props: { children: "消息区" } }),
       speech: { available: true, state: busy ? "recording" : "idle", busy } });
     const tree = app.render();
-    const swipe = find(tree, (node) => node.type === "ProfileSwipe");
-    assert.ok(swipe);
-    assert.equal(swipe.props.enabled, !busy);
-    assert.equal(find(swipe, (node) => node.props.accessibilityLabel === "消息"), undefined);
+    const pager = find(tree, (node) => node.type === "Pager");
+    assert.ok(pager);
+    app.effects.splice(0).forEach((effect) => effect());
+    assert.equal(blocked.at(-1), busy);
+    assert.equal(find(pager, (node) => node.props.accessibilityLabel === "消息"), undefined);
     assert.ok(find(tree, (node) => node.props.accessibilityLabel === "消息"));
-    assert.equal(find(app.render({ settingsOpen: true }), (node) => node.type === "ProfileSwipe").props.enabled, false);
+    app.render({ settingsOpen: true });
+    app.effects.splice(0).forEach((effect) => effect());
+    assert.equal(blocked.at(-1), true);
   }
+});
+
+test("落页后重置输入焦点和高度，保留目标 Profile 的文字附件草稿", () => {
+  const screen = conversation(async () => {}, "原草稿", {
+    renderTranscript: () => ({ type: "Pager", props: {} }),
+    onDraftChange: () => assert.fail("切页不能清空文字"),
+    onAttachmentsChange: () => assert.fail("切页不能移除附件"),
+  });
+  let field = find(screen.render(), (node) => node.type === "Field");
+  screen.effects.splice(0).forEach((effect) => effect());
+  field.props.onFocus();
+  screen.render({ id: "research", draft: "研究草稿", attachments: [{ name: "报告.pdf", mime: "application/pdf" }] });
+  screen.effects.splice(0).forEach((effect) => effect());
+  const tree = screen.render();
+  field = find(tree, (node) => node.type === "Field");
+  assert.equal(field.key, "research");
+  assert.equal(field.props.value, "研究草稿");
+  assert.equal(field.props.style.at(-1).height, 44);
+  assert.ok(find(tree, (node) => node.props.children === "报告.pdf"));
+  assert.equal(findSend(screen.render({ paging: true })).props.disabled, true);
 });
 
 test("失败的无限会话可确认归档恢复，不改写草稿和待发消息", async () => {

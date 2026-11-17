@@ -7,7 +7,7 @@ function mount(props) {
   const values = [], effects = [], calls = [];
   let cursor = 0;
   const exported = {};
-  const jsx = (type, props, key) => ({ type, props, key });
+  const jsx = (type, props, key) => type?.name === "ConversationTranscript" ? type(props) : ({ type, props, key });
   const source = ts.transpileModule(readFileSync(require.resolve("../src/chat/conversation.tsx"), "utf8"), {
     compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS },
   }).outputText;
@@ -21,6 +21,7 @@ function mount(props) {
           return [values[index], (value) => { values[index] = typeof value === "function" ? value(values[index]) : value; }];
         },
         useRef(current) { return values[cursor++] ??= { current }; },
+        useImperativeHandle(ref, create) { if (typeof ref === "function") ref(create()); else if (ref) ref.current = create(); },
         useEffect(effect, dependencies) {
           const index = cursor++;
           if (!values[index] || dependencies.some((value, i) => value !== values[index][i])) effects.push(effect);
@@ -55,7 +56,6 @@ function mount(props) {
       case "./model-picker": return {};
       case "./native-command": return { NativeCommandSheet: "NativeCommandSheet" };
       case "./settings-drawer": return {};
-      case "../profiles/swipe": return { ProfileSwipe: "ProfileSwipe" };
       case "./use-speech-input": return { useSpeechInput: (_id, _enabled, draft) => ({
         available: false, state: "idle", busy: false, start: async () => {}, stop: async () => draft,
       }) };

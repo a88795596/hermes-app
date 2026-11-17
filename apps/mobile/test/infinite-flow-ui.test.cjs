@@ -10,7 +10,7 @@ const source = ts.transpileModule(readFileSync(require.resolve("../src/workspace
 function mount({ enabled = false, section = "topics", params = {}, profiles } = {}) {
   const events = [], values = [];
   let cursor = 0;
-  const jsx = (type, props) => ({ type, props });
+  const jsx = (type, props, key) => ({ type, props, key });
   const context = {
     section, profileId: "daily", session: {}, drafts: { stream: "未发送的草稿" }, draftAttachments: {},
     archiveInFlight: { current: false },
@@ -18,6 +18,9 @@ function mount({ enabled = false, section = "topics", params = {}, profiles } = 
       infiniteFlow: enabled, ready: true, preferencesSaving: false, pending: [], network: "online", connector_online: true,
       topics: [], inbox: [], profiles: profiles ?? [{ profile_id: "daily", label: "日常助手" }, { profile_id: "research", label: "研究助手" }],
       streamTopic: enabled ? { id: "stream", profileId: "daily" } : undefined,
+      streamTopics: { daily: { id: "stream", profileId: "daily" }, research: { id: "research-stream", profileId: "research" } },
+      topicDetails: { stream: { topic: { topic_id: "stream", profile_id: "daily" }, messages: ["日常消息"] },
+        "research-stream": { topic: { topic_id: "research-stream", profile_id: "research" }, messages: ["研究消息"] } },
       async setInfiniteFlow(value) { events.push(["mode", value]); context.workspace.infiniteFlow = value; },
     },
     setSection(value) { events.push(["section", value]); context.section = value; },
@@ -42,10 +45,11 @@ function mount({ enabled = false, section = "topics", params = {}, profiles } = 
     "react-native": { ...components("Pressable", "ScrollView", "RefreshControl", "Text", "View", "ActivityIndicator"),
       BackHandler: {}, Keyboard: { dismiss() {} }, Platform: { OS: "web", select: (values) => values.web ?? values.default },
       StyleSheet: { create: (value) => value, hairlineWidth: 1 } },
-    "react-native-reanimated": { default: { Text: "Animated.Text" } },
+    "react-native-reanimated": { default: { Text: "Animated.Text", View: "Animated.View" } },
     "react-native-safe-area-context": components("SafeAreaView"),
     "@hermes-mobile/protocol": { DEFAULT_TOPIC_TITLE: "新会话", topicTitlePreview: (value) => value },
-    "./chat/conversation": components("Conversation"),
+    "./chat/conversation": components("Conversation", "ConversationTranscript"),
+    "./profiles/pager": components("ProfilePager"),
     "./chat/composer-menu": components("ComposerSheet", "PickerRow"),
     "./chat/topic-list": components("TopicList"),
     "./chat/assistant-stream-border": components("AssistantStreamBorder"),
@@ -131,4 +135,28 @@ test("无限模式收件箱和设置保留返回聊天路径，加载时也不�
   assert.equal(find(tree, (node) => node.type === "TopicList"), undefined);
   assert.equal(find(tree, (node) => node.props.accessibilityLabel === "新建会话"), undefined);
   assert.ok(find(tree, (node) => node.props.accessibilityLabel === "设置中心"));
+});
+
+test("仅消息区分页，各页按 Profile 绑定数据，落页后更换顶部和固定输入草稿", () => {
+  const app = mount({ enabled: true });
+  let chat = find(app.render(), (node) => node.type === "Conversation");
+  const pager = chat.props.renderTranscript({ ref: "scroll-ref" });
+  assert.equal(pager.type, "ProfilePager");
+  assert.equal(pager.props.profileId, "daily");
+  const [daily, research] = pager.props.children;
+  assert.deepEqual(daily.props.children.props.workspace.detail.messages, ["日常消息"]);
+  assert.deepEqual(research.props.children.props.workspace.detail.messages, ["研究消息"]);
+  assert.equal(daily.props.children.props.ref, "scroll-ref");
+  assert.equal(research.props.children.props.ref, undefined);
+  assert.equal(research.props.pointerEvents, "none");
+  assert.equal(find(pager, (node) => node.props.accessibilityLabel === "消息"), undefined);
+  pager.props.onSelect("research");
+  app.context.workspace.streamTopic = app.context.workspace.streamTopics.research;
+  app.context.drafts["research-stream"] = "研究草稿";
+  const next = find(app.render(), (node) => node.type === "Conversation");
+  assert.equal(next.key, chat.key, "Profile 切换不能重挂载整个 Pager");
+  assert.equal(next.props.draft, "研究草稿");
+  assert.ok(find(app.render(), (node) => node.props.children === "研究助手"));
+  app.context.workspace.streamTopic = undefined;
+  assert.ok(find(app.render(), (node) => node.type === "Conversation"), "分配新会话期间不能卸载 Pager");
 });

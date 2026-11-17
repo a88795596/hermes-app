@@ -64,6 +64,7 @@ function mountWorkspace({ update, message, downloaded = false, reloadError, para
       case "./profiles/selection": return selectionExports;
       case "./profiles/avatar": return { ProfileAvatar: "ProfileAvatar" };
       case "./profiles/settings": return { ProfileSettings: "ProfileSettings" };
+      case "./profiles/pager": return { ProfilePager: "ProfilePager" };
       case "./workspace-context": return { useWorkspaceContext: () => state };
       case "./chat/composer-menu": return { ComposerSheet: "ComposerSheet", PickerRow: "PickerRow" };
       case "./chat/topic-list": return { TopicList: "TopicList" };

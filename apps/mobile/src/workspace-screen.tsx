@@ -2,10 +2,10 @@ import { randomUUID } from "expo-crypto";
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useRef, useState } from "react";
 import { ActivityIndicator, BackHandler, Keyboard, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
-import Animated from "react-native-reanimated";
+import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { DEFAULT_TOPIC_TITLE, topicTitlePreview } from "@hermes-mobile/protocol";
-import { Conversation } from "./chat/conversation";
+import { Conversation, ConversationTranscript } from "./chat/conversation";
 import { AssistantStreamBorder } from "./chat/assistant-stream-border";
 import { ComposerSheet, PickerRow } from "./chat/composer-menu";
 import { TopicList, type TopicListHandle, type TopicListRow } from "./chat/topic-list";
@@ -15,6 +15,7 @@ import { Group, Row, Toggle } from "./manage/shared";
 import { enablePushNotifications, pushAvailable } from "./notifications";
 import { ProfileAvatar } from "./profiles/avatar";
 import { ProfileSettings } from "./profiles/settings";
+import { ProfilePager } from "./profiles/pager";
 import { adjacentProfile, selectProfile } from "./profiles/selection";
 import type { Pending } from "./sync/use-workspace";
 import { motion, useReduceMotion } from "./ui/motion";
@@ -63,6 +64,7 @@ function Workspace() {
   const alert = useAlert();
   const { colors, styles } = useTheme();
   const router = useRouter();
+  const reduced = useReduceMotion();
   const navigation = useNavigation();
   const updateInFlight = useRef(false);
   const topicListRef = useRef<TopicListHandle>(null);
@@ -71,6 +73,8 @@ function Workspace() {
   const [refreshing, setRefreshing] = useState(false);
   const [chatSettingsOpen, setChatSettingsOpen] = useState(false);
   const [profileSwitchBlocked, setProfileSwitchBlocked] = useState(false);
+  const [paging, setPaging] = useState(false);
+  const [profileTarget, setProfileTarget] = useState<string>();
   const [managementTabsVisible, setManagementTabsVisible] = useState(true);
   const updateDisabled = Platform.OS === "web" || !!updateStatus;
   const params = useLocalSearchParams<{ page?: Page | "conversation" | "inbox-item"; topicId?: string; messageId?: string; newProfileId?: string; archived?: string }>();
@@ -80,12 +84,12 @@ function Workspace() {
     signingOut, setSigningOut, push, setPush, error, setError, archiveInFlight: archiveInFlightRef, archiving, setArchiving } = useWorkspaceContext();
   const page = params.page && params.page !== "conversation" && params.page !== "inbox-item" ? params.page : rootSection;
   const infiniteHome = workspace.infiniteFlow && !params.page && page === "topics";
+  const profile = selectProfile(workspace.profiles, profileId);
   const chat = params.page === "conversation" && typeof params.topicId === "string"
     ? { id: params.topicId, newProfileId: typeof params.newProfileId === "string" ? params.newProfileId : undefined }
-    : infiniteHome && workspace.streamTopic ? { id: workspace.streamTopic.id, newProfileId: workspace.streamTopic.profileId } : undefined;
+    : infiniteHome && profile ? { id: workspace.streamTopic?.id ?? "", newProfileId: workspace.streamTopic?.profileId } : undefined;
   const inboxItem = params.page === "inbox-item" ? selectedInboxItem : undefined;
   const topicId = chat?.id ?? null;
-  const profile = selectProfile(workspace.profiles, profileId);
   const topic = workspace.detail?.topic.topic_id === topicId
     ? workspace.detail.topic : workspace.topics.find((item) => item.topic_id === topicId);
   const pendingTopics = new Map<string, Pending>();
@@ -262,12 +266,12 @@ function Workspace() {
   }
 
   function switchProfile(direction: -1 | 1) {
-    if (profileSwitchBlocked) return;
+    if (profileSwitchBlocked || paging) return;
     const next = adjacentProfile(workspace.profiles, profile?.profile_id, direction);
     if (!next) return;
     Keyboard.dismiss();
     haptic("selection");
-    setProfileId(next.profile_id);
+    setProfileTarget(next.profile_id);
   }
 
   const applicationSettings = <Group>
@@ -289,15 +293,23 @@ function Workspace() {
         leading={<ProfileAvatar profile={item} session={session} size={40} />} selected={item.profile_id === profile?.profile_id}
         trailing={item.profile_id === profile?.profile_id ? "check" : undefined} disabled={profileSwitchBlocked}
         feedback={item.profile_id === profile?.profile_id ? false : undefined}
-        onPress={() => { if (!profileSwitchBlocked) { Keyboard.dismiss(); setProfileId(item.profile_id); setProfilesExpanded(false); } }} />)}
+        onPress={() => { if (!profileSwitchBlocked) {
+          Keyboard.dismiss();
+          if (infiniteHome) setProfileTarget(item.profile_id);
+          else setProfileId(item.profile_id);
+          setProfilesExpanded(false);
+        } }} />)}
       {workspace.profiles.length === 0 && <Text style={styles.muted}>暂无可用配置档案</Text>}
     </ScrollView>
   </ComposerSheet>;
   const profileAvatar = <Pressable accessibilityRole="button" accessibilityLabel={`选择配置档案${profile ? `，${profileLabel(profile)}` : ""}`}
-    accessibilityState={{ expanded: profilesExpanded, disabled: profileSwitchBlocked }} disabled={profileSwitchBlocked}
-    onPress={() => { if (!profileSwitchBlocked) { haptic("light"); Keyboard.dismiss(); setProfilesExpanded(true); } }}
+    accessibilityState={{ expanded: profilesExpanded, disabled: profileSwitchBlocked || paging }} disabled={profileSwitchBlocked || paging}
+    onPress={() => { if (!profileSwitchBlocked && !paging) { haptic("light"); Keyboard.dismiss(); setProfilesExpanded(true); } }}
     style={({ pressed }) => [layout.avatar, { backgroundColor: colors.tint }, pressed && styles.faded]}>
-    <ProfileAvatar profile={profile} session={session} size={48} />
+    <Animated.View key={profile?.profile_id} entering={infiniteHome && !reduced ? FadeIn.duration(180) : undefined}
+      exiting={infiniteHome && !reduced ? FadeOut.duration(140) : undefined}>
+      <ProfileAvatar profile={profile} session={session} size={48} />
+    </Animated.View>
   </Pressable>;
 
   if (workspace.sessionEnded) {
@@ -339,7 +351,9 @@ function Workspace() {
     const { id, newProfileId } = chat;
     return (
       <View style={styles.frame}>
-        <PageHeader title={infiniteHome ? <View style={layout.profileTitle} accessible accessibilityRole="adjustable"
+        <PageHeader title={infiniteHome ? <Animated.View key={profile?.profile_id} style={layout.profileTitle}
+          entering={reduced ? undefined : FadeIn.duration(180)} exiting={reduced ? undefined : FadeOut.duration(140)}
+          accessible accessibilityRole="adjustable"
           accessibilityLabel={profile ? `配置档案，${profileLabel(profile)}` : "配置档案"}
           accessibilityActions={[{ name: "increment", label: "下一个配置档案" }, { name: "decrement", label: "上一个配置档案" }]}
           onAccessibilityAction={({ nativeEvent }) => switchProfile(nativeEvent.actionName === "increment" ? 1 : -1)}>
@@ -349,15 +363,15 @@ function Workspace() {
               { backgroundColor: item.profile_id === profile?.profile_id ? colors.accent : colors.edge }]} />)
               : <Text style={styles.caption}>{workspace.profiles.findIndex((item) => item.profile_id === profile?.profile_id) + 1} / {workspace.profiles.length}</Text>}
           </View>}
-        </View> : chatTitle} leading={infiniteHome ? profileAvatar : <BackLink title={archived ? "已归档会话" : "话题列表"} onPress={goBack} />}
-          trailing={<Pressable accessibilityRole="button" accessibilityLabel="设置中心" accessibilityState={{ expanded: chatSettingsOpen, disabled: profileSwitchBlocked }}
-            disabled={profileSwitchBlocked}
+        </Animated.View> : chatTitle} leading={infiniteHome ? profileAvatar : <BackLink title={archived ? "已归档会话" : "话题列表"} onPress={goBack} />}
+          trailing={<Pressable accessibilityRole="button" accessibilityLabel="设置中心" accessibilityState={{ expanded: chatSettingsOpen, disabled: profileSwitchBlocked || paging }}
+            disabled={profileSwitchBlocked || paging}
             onPress={() => { haptic("light"); Keyboard.dismiss(); setChatSettingsOpen(true); }}
             style={({ pressed }) => [layout.backLink, pressed && styles.faded]}>
             <Icon name="settings" size={22} color={colors.accent} />
           </Pressable>} />
         <Conversation
-          key={id}
+          key={infiniteHome ? "infinite" : id}
           id={id}
           targetMessageId={typeof params.messageId === "string" ? params.messageId : undefined}
           topic={topic}
@@ -365,7 +379,33 @@ function Workspace() {
           settingsOpen={chatSettingsOpen}
           settingsNavigation={settingsNavigation}
           applicationSettings={applicationSettings}
-          onSwitchProfile={infiniteHome && workspace.profiles.length > 1 ? switchProfile : undefined}
+          paging={infiniteHome && paging}
+          renderTranscript={infiniteHome && profile ? (props) => <ProfilePager
+            key={JSON.stringify(workspace.profiles.map((item) => item.profile_id))}
+            profileIds={workspace.profiles.map((item) => item.profile_id)} profileId={profile.profile_id}
+            targetId={profileTarget} enabled={!profileSwitchBlocked && !profilesExpanded}
+            onMovingChange={setPaging}
+            onSelect={(next) => {
+              Keyboard.dismiss();
+              haptic("selection");
+              setProfileId(next);
+              setProfileTarget(undefined);
+            }}>
+            {workspace.profiles.map((item) => {
+              const stream = workspace.streamTopics[item.profile_id];
+              const detail = stream ? workspace.topicDetails[stream.id] : undefined;
+              const active = item.profile_id === profile.profile_id && !paging;
+              return <View key={item.profile_id} style={styles.frame} collapsable={false}
+                pointerEvents={active ? "auto" : "none"} accessibilityElementsHidden={!active}
+                importantForAccessibility={active ? "auto" : "no-hide-descendants"}>
+                <ConversationTranscript {...props} ref={active ? props.ref : undefined} active={active}
+                  id={stream?.id ?? ""} newProfileId={item.profile_id}
+                  topic={detail?.topic ?? workspace.topics.find((topic) => topic.topic_id === stream?.id)}
+                  workspace={{ ...workspace, detail, streamTopic: stream ?? { id: "", profileId: item.profile_id },
+                    error: active ? workspace.error : undefined, storageError: active ? workspace.storageError : undefined }} />
+              </View>;
+            })}
+          </ProfilePager> : undefined}
           onSwitchBlockedChange={infiniteHome ? setProfileSwitchBlocked : undefined}
           onCloseSettings={() => setChatSettingsOpen(false)}
           workspace={workspace}

@@ -42,14 +42,15 @@ export function useWorkspace(session: Session, routedTopicId: string | null, loc
   const preferenceWrite = useRef(false);
   const streamLoads = useRef(new Map<string, Promise<string>>());
   const streamPreparations = useRef(new Map<string, Promise<void>>());
-  const [storedStreamTopic, setStoredStreamTopic] = useState<{ id: string; profileId: string }>();
+  const [streamTopics, setStreamTopics] = useState<Record<string, { id: string; profileId: string }>>({});
   const streamProfileId = infiniteFlow && streamProfile ? selectProfile(directory.profiles, streamProfile.profileId)?.profile_id : undefined;
   const selectedStreamProfile = useRef(streamProfileId);
-  const streamTopic = !routedTopicId && streamProfileId && storedStreamTopic?.profileId === streamProfileId ? storedStreamTopic : undefined;
+  const streamTopic = !routedTopicId && streamProfileId ? streamTopics[streamProfileId] : undefined;
   const topicId = routedTopicId ?? streamTopic?.id ?? null;
   const visibleStream = useRef(streamTopic);
   const currentDirectory = useRef(directory);
-  const [detail, setDetail] = useState<TopicDetail>();
+  const [topicDetails, setTopicDetails] = useState<Record<string, TopicDetail>>({});
+  const detail = topicId ? topicDetails[topicId] : undefined;
   const [activity, setActivity] = useState<{ topicId: string; streamingIds: string; value: SessionStatus["activity"] }>();
   const [pending, setPending] = useState<Pending[]>([]);
   const [foreground, setForeground] = useState(AppState.currentState !== "background");
@@ -118,8 +119,8 @@ export function useWorkspace(session: Session, routedTopicId: string | null, loc
   useEffect(() => { visibleStream.current = streamTopic; }, [streamTopic]);
   useEffect(() => { selectedStreamProfile.current = streamProfileId; }, [streamProfileId]);
 
-  const storedTopic = directory.topics.find((topic) => topic.topic_id === storedStreamTopic?.id);
-  const invalidStream = !!storedTopic && (storedTopic.archived || storedTopic.profile_id !== storedStreamTopic?.profileId);
+  const storedTopic = directory.topics.find((topic) => topic.topic_id === streamTopic?.id);
+  const invalidStream = !!storedTopic && (storedTopic.archived || storedTopic.profile_id !== streamTopic?.profileId);
   const restoreStream = useCallback(() => {
     const profileId = selectedStreamProfile.current;
     if (!cache || !profileId || !active.current || revoked.current || signingOut.current) return Promise.resolve(undefined);
@@ -141,7 +142,7 @@ export function useWorkspace(session: Session, routedTopicId: string | null, loc
     return task.then((id) => {
       if (!active.current || revoked.current || selectedStreamProfile.current !== profileId) return;
       setStreamStorageError(undefined);
-      setStoredStreamTopic((current) => current?.id === id && current.profileId === profileId ? current : { id, profileId });
+      setStreamTopics((current) => current[profileId]?.id === id ? current : { ...current, [profileId]: { id, profileId } });
       return { id, profileId };
     }).catch((failure: unknown) => {
       if (active.current && selectedStreamProfile.current === profileId) {
@@ -154,6 +155,32 @@ export function useWorkspace(session: Session, routedTopicId: string | null, loc
   useEffect(() => {
     if (!sessionEnded) void restoreStream();
   }, [invalidStream, restoreStream, sessionEnded, streamProfileId]);
+
+  useEffect(() => {
+    if (!cache || !streamProfileId || sessionEnded) return;
+    let cancelled = false;
+    const index = directory.profiles.findIndex((profile) => profile.profile_id === streamProfileId);
+    const adjacent = directory.profiles.filter((_, i) => Math.abs(i - index) === 1);
+    void Promise.all(adjacent.map(async ({ profile_id: profileId }) => {
+      const id = await cache.get<string>(`infinite-topic:${profileId}`);
+      if (typeof id !== "string" || !id) return;
+      const saved = await cache.get<TopicDetail>(topicKey(id));
+      const topic = directory.topics.find((item) => item.topic_id === id) ?? saved?.topic;
+      if (cancelled || !active.current || revoked.current) return;
+      if (topic?.archived || (topic && topic.profile_id !== profileId) || (saved && saved.topic.profile_id !== profileId)) {
+        setStreamTopics((current) => {
+          if (!current[profileId]) return current;
+          const next = { ...current };
+          delete next[profileId];
+          return next;
+        });
+        return;
+      }
+      setStreamTopics((current) => current[profileId]?.id === id ? current : { ...current, [profileId]: { id, profileId } });
+      if (saved) setTopicDetails((current) => current[id] ? current : { ...current, [id]: saved });
+    })).catch(() => { /* 相邻页预读失败不阻塞当前会话，选中后走正常恢复。 */ });
+    return () => { cancelled = true; };
+  }, [cache, directory.profiles, directory.topics, sessionEnded, streamProfileId]);
 
   async function setInfiniteFlow(enabled: boolean) {
     if (!cache || revoked.current || signingOut.current) throw new Error("无法访问本地设置。");
@@ -315,7 +342,7 @@ export function useWorkspace(session: Session, routedTopicId: string | null, loc
         if (!active.current || revoked.current) return;
         await cache.set(topicKey(id), next);
         if (active.current && !revoked.current) {
-          if (visibleTopic.current === id) setDetail(next);
+          setTopicDetails((current) => ({ ...current, [id]: next }));
           setDirectory((current) => {
             const topic = current.topics.find((topic) => topic.topic_id === id);
             const updated = next.topic;
@@ -328,7 +355,7 @@ export function useWorkspace(session: Session, routedTopicId: string | null, loc
       } catch (failure) {
         if (!active.current || revoked.current) return;
         if (failure instanceof ApiError && failure.status === 404) {
-          if (visibleTopic.current === id) setDetail(undefined);
+          setTopicDetails((current) => { const next = { ...current }; delete next[id]; return next; });
           await cache.remove(topicKey(id)).catch(() => {});
         }
         if (visibleTopic.current === id) {
@@ -382,7 +409,7 @@ export function useWorkspace(session: Session, routedTopicId: string | null, loc
     void (async () => {
       try {
         const saved = await cache.get<TopicDetail>(topicKey(topicId));
-        if (!cancelled && saved) setDetail((current) => current?.topic.topic_id === topicId ? current : saved);
+        if (!cancelled && saved) setTopicDetails((current) => current[topicId] ? current : { ...current, [topicId]: saved });
       } catch (failure) {
         if (!cancelled) setError(failure instanceof Error ? failure.message : "无法读取本地历史记录。");
       }
@@ -655,6 +682,8 @@ export function useWorkspace(session: Session, routedTopicId: string | null, loc
     preferencesSaving,
     setInfiniteFlow,
     streamTopic,
+    streamTopics,
+    topicDetails,
     detail: detail?.topic.topic_id === topicId ? detail : undefined,
     activity: foreground && activity?.topicId === topicId && (!streamingIds || activity.streamingIds === streamingIds)
       ? activity.value : undefined,

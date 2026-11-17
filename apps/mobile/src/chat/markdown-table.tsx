@@ -1,8 +1,9 @@
 import { lockAsync, OrientationLock } from "expo-screen-orientation";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { Platform, Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { ScrollView as HorizontalScrollView } from "react-native-gesture-handler";
+import { ProfilePagingContext } from "../profiles/paging-context";
 import { haptic } from "../ui/haptics";
 import { OverlayModal } from "../ui/overlay";
 import { PageHeader } from "../ui/page-header";
@@ -15,6 +16,8 @@ export function MarkdownTable({ columns, children }: { columns: number; children
   const [open, setOpen] = useState(false);
   const [orientationError, setOrientationError] = useState<string>();
   const active = useRef(false);
+  const blockPaging = useContext(ProfilePagingContext);
+  useEffect(() => () => blockPaging?.(false), [blockPaging]);
 
   useEffect(() => {
     if (!open || Platform.OS === "web") return;
@@ -37,7 +40,10 @@ export function MarkdownTable({ columns, children }: { columns: number; children
 
   const close = () => setOpen(false);
   const grid = <View style={[table.frame, { borderColor: colors.edge }]}>
-    <HorizontalScrollView horizontal disallowInterruption tabIndex={0} contentContainerStyle={table.scrollContent}>
+    <HorizontalScrollView horizontal disallowInterruption tabIndex={0} contentContainerStyle={table.scrollContent}
+      onTouchStart={() => blockPaging?.(true)}
+      onTouchEnd={({ nativeEvent }) => { if (!nativeEvent.touches.length) blockPaging?.(false); }}
+      onTouchCancel={() => blockPaging?.(false)}>
       <View style={[table.grid, { width: columns * 100 }]}>{children}</View>
     </HorizontalScrollView>
   </View>;

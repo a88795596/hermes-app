@@ -1,6 +1,6 @@
 import { randomUUID } from "expo-crypto";
 import { openBrowserAsync, WebBrowserPresentationStyle } from "expo-web-browser";
-import { useCallback, useEffect, useRef, useState, type ComponentRef } from "react";
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, type ComponentRef, type ReactNode, type Ref } from "react";
 import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import Animated from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -20,7 +20,6 @@ import { ModelPicker } from "./model-picker";
 import { NativeCommandSheet } from "./native-command";
 import { MessageAttachments } from "./message-attachments";
 import { SettingsDrawer } from "./settings-drawer";
-import { ProfileSwipe } from "../profiles/swipe";
 import { useSpeechInput } from "./use-speech-input";
 
 const messageStatus: Record<Message["status"], string> = {
@@ -215,56 +214,33 @@ function ControlPrompt({
   );
 }
 
-export function Conversation({
-  id, topic, newProfileId, workspace, session, draft, onDraftChange, attachments, onAttachmentsChange,
-  settingsOpen, onCloseSettings, targetMessageId, settingsNavigation, applicationSettings, onSwitchProfile, onSwitchBlockedChange,
-}: {
+type TranscriptHandle = { followLatest: () => void };
+type TranscriptProps = {
   id: string;
   topic?: Topic;
   newProfileId?: string;
-  targetMessageId?: string;
   workspace: ReturnType<typeof useWorkspace>;
   session: Session;
-  draft: string;
-  attachments: AttachmentUpload[];
-  settingsOpen: boolean;
-  onCloseSettings: () => void;
-  settingsNavigation?: React.ReactNode;
-  applicationSettings?: React.ReactNode;
-  onSwitchProfile?: (direction: -1 | 1) => void;
-  onSwitchBlockedChange?: (blocked: boolean) => void;
-  onDraftChange: (value: string) => void;
-  onAttachmentsChange: (value: AttachmentUpload[]) => void;
-}) {
+  targetMessageId?: string;
+  active?: boolean;
+  ref?: Ref<TranscriptHandle>;
+  onOpenLink: (url: string) => void;
+  onError: (error: string) => void;
+  onRecover: () => void;
+  recovering: boolean;
+};
+
+export function ConversationTranscript({ id, topic, newProfileId, workspace, session, targetMessageId,
+  active = true, ref, onOpenLink: openLink, onError: setError, onRecover: recoverStream, recovering }: TranscriptProps) {
   const { colors, styles } = useTheme();
-  const { alert } = useAlert();
   const reduced = useReduceMotion();
   const { width } = useWindowDimensions();
-  const { top: safeAreaTop } = useSafeAreaInsets();
   const messageWidth = Math.min(560, (width - transcriptGutter * 2) * 0.84);
   const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
   const pinned = useRef(!targetMessageId);
   const focusTarget = useRef(Boolean(targetMessageId));
   const messageOffsets = useRef(new Map<string, number>());
-  const [sending, setSending] = useState(false);
-  const [recovering, setRecovering] = useState(false);
-  const recoveryInFlight = useRef(false);
   const [refreshing, setRefreshing] = useState(false);
-  const enqueueing = useRef(false);
-  const [stopping, setStopping] = useState(false);
-  const [draftFocused, setDraftFocused] = useState(false);
-  const [sendFocused, setSendFocused] = useState(false);
-  const [menu, setMenu] = useState<"commands" | "skills" | "reasoning" | "attachments">();
-  const [picking, setPicking] = useState(false);
-  const choosingAttachment = useRef(false);
-  const [error, setError] = useState<string>();
-  const [modelPicker, setModelPicker] = useState(false);
-  const [settingsBusy, setSettingsBusy] = useState(false);
-  const [commandNotice, setCommandNotice] = useState<string>();
-  const [openingSkills, setOpeningSkills] = useState(false);
-  const commandOpen = useRef(false);
-  const [nativeCommand, setNativeCommand] = useState<{ command: string; requestId: string }>();
-  const interruptId = useRef<string>(undefined);
   const messages = workspace.detail?.messages ?? [];
   const controls = workspace.detail?.controls ?? [];
   const submitted = new Set(messages.filter((message) => message.role === "user").map((message) => message.submission_id));
@@ -283,10 +259,216 @@ export function Conversation({
   const pending = workspace.pending
     .filter((item) => item.topic_id === id && !messages.some((message) => message.submission_id === item.submission_id))
     .sort((a, b) => a.created_at - b.created_at);
-  const canWrite = topic?.status === "ready" || (!!newProfileId && topic?.status !== "error");
+  const connected = workspace.network === "online" && workspace.connector_online === true;
+  const canControl = active && connected;
+  const attachmentsBlocked = connected && workspace.attachments_supported !== true;
+
+  function keepLatestVisible() {
+    if (focusTarget.current && targetMessageId) {
+      const y = messageOffsets.current.get(targetMessageId);
+      if (y !== undefined) scroll.current?.scrollTo({ y: Math.max(0, y - 8), animated: false });
+    } else if (pinned.current) scroll.current?.scrollToEnd({ animated: false });
+  }
+
+  useEffect(() => {
+    focusTarget.current = Boolean(targetMessageId);
+    pinned.current = !targetMessageId;
+    const y = targetMessageId ? messageOffsets.current.get(targetMessageId) : undefined;
+    if (y !== undefined) scroll.current?.scrollTo({ y: Math.max(0, y - 8), animated: false });
+    else if (!targetMessageId) scroll.current?.scrollToEnd({ animated: false });
+  }, [id, targetMessageId]);
+
+  useImperativeHandle(ref, () => ({ followLatest() {
+    focusTarget.current = false;
+    pinned.current = true;
+    scroll.current?.scrollToEnd({ animated: true });
+  } }));
+
+  return (
+    <ScrollView
+      ref={scroll}
+      contentContainerStyle={[chat.column, chat.transcript]}
+      keyboardShouldPersistTaps="handled"
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={async () => {
+            if (refreshing) return;
+            setRefreshing(true);
+            try { await workspace.refresh(); } finally { setRefreshing(false); }
+          }}
+          tintColor={colors.accent}
+          colors={[colors.accent]}
+        />
+      }
+      onContentSizeChange={keepLatestVisible}
+      onLayout={keepLatestVisible}
+      onScrollBeginDrag={() => { focusTarget.current = false; pinned.current = false; }}
+      onScroll={({ nativeEvent }) => {
+        if (!focusTarget.current) {
+          pinned.current = nativeEvent.contentSize.height - nativeEvent.layoutMeasurement.height - nativeEvent.contentOffset.y < 100;
+        }
+      }}
+      scrollEventThrottle={32}
+    >
+      {workspace.error && <Notice>{workspace.error}</Notice>}
+      {workspace.storageError && <Notice>{workspace.storageError}</Notice>}
+      {topic?.status === "creating" && (
+        <View style={chat.progress}>
+          <ActivityIndicator color={colors.accent} />
+          <Text accessibilityLiveRegion="polite" style={styles.muted}>正在创建 Hermes 会话…</Text>
+        </View>
+      )}
+      {topic?.status === "error" && <Notice>{topic.error ?? "Hermes 无法创建此会话。"}</Notice>}
+      {topic?.status === "error" && workspace.streamTopic?.id === id && <Action title={recovering ? "恢复中…" : "恢复会话"}
+        icon="refresh" disabled={!canControl || recovering} onPress={recoverStream} />}
+      {(topic?.status === "ready" || (!topic && newProfileId)) && messages.length === 0 && pending.length === 0 && controls.length === 0 && (
+        <View style={chat.empty}>
+          <Icon name="chat" size={36} color={colors.accent} />
+          <Text accessibilityRole="header" style={[styles.heading, chat.emptyTitle]}>开始对话</Text>
+          {workspace.streamTopic?.id !== id && <Text style={[styles.muted, chat.emptyDescription]}>给 Hermes 发送一条消息。</Text>}
+        </View>
+      )}
+      {messages.map((message, index) => {
+        const outgoing = message.role === "user";
+        const process = !outgoing ? message.process : undefined;
+        if (!outgoing && !message.text && !message.attachments?.length && !process?.length && message.status === "final") return null;
+        const startGroup = messages[index - 1]?.role !== message.role;
+        const attachedControls = outgoing && message.submission_id ? historyControls.get(message.submission_id) : undefined;
+        return (
+          <View key={message.message_id}
+            onLayout={({ nativeEvent }) => {
+              messageOffsets.current.set(message.message_id, nativeEvent.layout.y);
+              if (message.message_id === targetMessageId && focusTarget.current) keepLatestVisible();
+            }}
+            style={chat.messageGroup}>
+            <View style={[chat.message, outgoing ? [chat.outgoing, { maxWidth: messageWidth }] : chat.incoming, startGroup && chat.startGroup]}>
+              {!!process?.length && <ProcessTimeline steps={process} final={message.status === "final"} />}
+              {(!!message.text || !!message.attachments?.length) && (
+                <View style={[
+                  chat.messageContent,
+                  outgoing ? [chat.outgoingBubble, { backgroundColor: colors.tint }] : chat.incomingBody,
+                ]}>
+                  {!!message.attachments?.length && <MessageAttachments items={message.attachments} session={session}
+                    onOpenLink={openLink} tint={colors.foreground} />}
+                  {!!message.text && (outgoing ? <Text
+                    selectable
+                    accessibilityLabel={`你：${message.text}`}
+                    style={[styles.text, chat.messageText]}
+                  >
+                    {message.text}
+                  </Text> : <AnswerMarkdown text={message.text} onOpenLink={openLink} />)}
+                </View>
+              )}
+              {messageStatus[message.status] ? (
+                <Text style={[styles.caption, outgoing && chat.outgoingStatus]}>
+                  {!outgoing && !message.text && message.status === "streaming" ? "Hermes 正在回复…" : messageStatus[message.status]}
+                </Text>
+              ) : null}
+              {message.error && <Notice>{message.error}</Notice>}
+            </View>
+            {attachedControls?.map((control) => (
+              <ControlPrompt key={control.control_id} control={control} enabled={canControl} onAnswer={workspace.answer} />
+            ))}
+          </View>
+        );
+      })}
+      {pending.map((item) => (
+        <Animated.View key={item.submission_id} style={[chat.message, chat.outgoing, { maxWidth: messageWidth }, !reduced && motion.reveal]}>
+          <View style={[chat.messageContent, chat.outgoingBubble, { backgroundColor: colors.tint }]}>
+            {!!item.attachments?.length && <MessageAttachments items={item.attachments} onOpenLink={openLink} tint={colors.foreground} />}
+            {!!item.text && <Text selectable accessibilityLabel={`你：${item.text}`} style={[styles.text, chat.messageText]}>
+              {item.text}
+            </Text>}
+          </View>
+          {item.error ? (
+            <>
+              <Notice>{item.error}</Notice>
+              <Action
+                title="丢弃未发送的消息"
+                destructive
+                onPress={() => void workspace.discard(item).catch((failure: unknown) => {
+                  haptic("error");
+                  setError(failure instanceof Error ? failure.message : "无法丢弃未发送的消息。");
+                })}
+              />
+            </>
+          ) : <Text style={[styles.caption, chat.outgoingStatus]}>
+            {item.attachments?.length && attachmentsBlocked ? "更新连接器后发送" : "等待发送"}
+          </Text>}
+        </Animated.View>
+      ))}
+      {trailingControls.map((control) => (
+        <Animated.View key={control.control_id} style={!reduced && motion.reveal}>
+          <ControlPrompt control={control} enabled={canControl} onAnswer={workspace.answer} />
+        </Animated.View>
+      ))}
+    </ScrollView>
+  );
+}
+
+export function Conversation({
+  id, topic, newProfileId, workspace, session, draft, onDraftChange, attachments, onAttachmentsChange,
+  settingsOpen, onCloseSettings, targetMessageId, settingsNavigation, applicationSettings, renderTranscript, paging = false, onSwitchBlockedChange,
+}: {
+  id: string;
+  topic?: Topic;
+  newProfileId?: string;
+  targetMessageId?: string;
+  workspace: ReturnType<typeof useWorkspace>;
+  session: Session;
+  draft: string;
+  attachments: AttachmentUpload[];
+  settingsOpen: boolean;
+  onCloseSettings: () => void;
+  settingsNavigation?: React.ReactNode;
+  applicationSettings?: React.ReactNode;
+  renderTranscript?: (props: TranscriptProps) => ReactNode;
+  paging?: boolean;
+  onSwitchBlockedChange?: (blocked: boolean) => void;
+  onDraftChange: (value: string) => void;
+  onAttachmentsChange: (value: AttachmentUpload[]) => void;
+}) {
+  const { colors, styles } = useTheme();
+  const { alert } = useAlert();
+  const reduced = useReduceMotion();
+  const { top: safeAreaTop } = useSafeAreaInsets();
+  const [sending, setSending] = useState(false);
+  const [recovering, setRecovering] = useState(false);
+  const recoveryInFlight = useRef(false);
+  const transcript = useRef<TranscriptHandle>(null);
+  const attachTranscript = useCallback((handle: TranscriptHandle | null) => { transcript.current = handle; }, []);
+  const enqueueing = useRef(false);
+  const [stopping, setStopping] = useState(false);
+  const [draftFocused, setDraftFocused] = useState(false);
+  const [sendFocused, setSendFocused] = useState(false);
+  const [menu, setMenu] = useState<"commands" | "skills" | "reasoning" | "attachments">();
+  const [picking, setPicking] = useState(false);
+  const choosingAttachment = useRef(false);
+  const [error, setError] = useState<string>();
+  const [modelPicker, setModelPicker] = useState(false);
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const [commandNotice, setCommandNotice] = useState<string>();
+  const [composerId, setComposerId] = useState(id);
+  if (composerId !== id) {
+    setComposerId(id);
+    setDraftFocused(false);
+    setSendFocused(false);
+    setError(undefined);
+    setCommandNotice(undefined);
+  }
+  const [openingSkills, setOpeningSkills] = useState(false);
+  const commandOpen = useRef(false);
+  const [nativeCommand, setNativeCommand] = useState<{ command: string; requestId: string }>();
+  const interruptId = useRef<string>(undefined);
+  const messages = workspace.detail?.messages ?? [];
+  const pending = workspace.pending
+    .filter((item) => item.topic_id === id && !messages.some((message) => message.submission_id === item.submission_id))
+    .sort((a, b) => a.created_at - b.created_at);
+  const canWrite = !paging && (topic?.status === "ready" || (!!newProfileId && topic?.status !== "error"));
   const speech = useSpeechInput(id, canWrite && !picking, draft, onDraftChange);
   const canSend = canWrite && workspace.ready && !sending && !picking;
-  const canControl = workspace.network === "online" && workspace.connector_online === true;
+  const canControl = !paging && workspace.network === "online" && workspace.connector_online === true;
   const isModelCommand = !attachments.length && draft.trim().toLowerCase() === "/model";
   const isNativeCommand = /^\/[a-z0-9][a-z0-9_-]*(?:\s|$)/iu.test(draft.trim());
   const activeSubmission = messages.find((message) => message.role === "user" && message.status === "streaming")?.submission_id;
@@ -310,11 +492,16 @@ export function Conversation({
     : reasoningStatus === "pending" ? "切换中" : reasoningStatus === "unknown" ? "待确认"
     : reasoning === null ? "跟随配置档案" : reasoningLabels[reasoning];
   const currentProfile = workspace.profiles.find((item) => item.profile_id === (topic?.profile_id ?? newProfileId));
-  const switchBlocked = speech.busy || picking || sending || recovering || openingSkills || !!nativeCommand;
+  const switchBlocked = speech.busy || picking || sending || recovering || openingSkills || !!nativeCommand
+    || settingsOpen || !!menu || modelPicker;
   useEffect(() => {
     onSwitchBlockedChange?.(switchBlocked);
     return () => onSwitchBlockedChange?.(false);
   }, [onSwitchBlockedChange, switchBlocked]);
+
+  useEffect(() => {
+    Keyboard.dismiss();
+  }, [id]);
 
   function recoverStream() {
     alert("恢复会话", "将当前会话归档后重新连接。历史记录、草稿和待发消息会保留。", [
@@ -343,21 +530,6 @@ export function Conversation({
       windowFeatures: { noopener: true, noreferrer: true },
     }).catch(() => { haptic("error"); setError("无法打开网页，请重试。"); });
   }, [colors.foreground, colors.surface, setError]);
-
-  function keepLatestVisible() {
-    if (focusTarget.current && targetMessageId) {
-      const y = messageOffsets.current.get(targetMessageId);
-      if (y !== undefined) scroll.current?.scrollTo({ y: Math.max(0, y - 8), animated: false });
-    } else if (pinned.current) scroll.current?.scrollToEnd({ animated: false });
-  }
-
-  useEffect(() => {
-    focusTarget.current = Boolean(targetMessageId);
-    pinned.current = !targetMessageId;
-    const y = targetMessageId ? messageOffsets.current.get(targetMessageId) : undefined;
-    if (y !== undefined) scroll.current?.scrollTo({ y: Math.max(0, y - 8), animated: false });
-    else if (!targetMessageId) scroll.current?.scrollToEnd({ animated: false });
-  }, [id, targetMessageId]);
 
   useEffect(() => {
     interruptId.current = undefined;
@@ -477,9 +649,7 @@ export function Conversation({
       onDraftChange("");
       if (attachments.length) onAttachmentsChange([]);
       setCommandNotice(undefined);
-      focusTarget.current = false;
-      pinned.current = true;
-      scroll.current?.scrollToEnd({ animated: true });
+      transcript.current?.followLatest();
     } catch (failure) {
       haptic("error");
       setError(failure instanceof Error ? failure.message : "无法保存消息。");
@@ -522,6 +692,11 @@ export function Conversation({
       return workspace.requestReasoning(id, requestId, effort, signal);
     }} />;
 
+  const transcriptProps: TranscriptProps = { id, topic, newProfileId, workspace, session, targetMessageId,
+    ref: attachTranscript, onOpenLink: openLink, onError: setError, onRecover: recoverStream, recovering };
+  // eslint-disable-next-line react-hooks/refs -- The slot only forwards the callback ref to the transcript; it never reads it.
+  const transcriptView = renderTranscript ? renderTranscript(transcriptProps) : <ConversationTranscript {...transcriptProps} />;
+
   return (
     <KeyboardAvoidingView style={styles.frame} behavior={Platform.OS === "web" ? undefined : "padding"}
       keyboardVerticalOffset={safeAreaTop}>
@@ -539,128 +714,8 @@ export function Conversation({
       {nativeCommand && <NativeCommandSheet key={nativeCommand.requestId} {...nativeCommand} onOpenLink={openLink}
         onClose={() => { commandOpen.current = false; setNativeCommand(undefined); }}
         onRequest={(requestId, command, signal, approval) => workspace.requestNativeCommand(id, requestId, command, signal, approval)} />}
-      <ProfileSwipe onSwitch={onSwitchProfile} enabled={!!onSwitchProfile && !switchBlocked && !settingsOpen && !menu && !modelPicker}>
-      <ScrollView
-        ref={scroll}
-        contentContainerStyle={[chat.column, chat.transcript]}
-        keyboardShouldPersistTaps="handled"
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={async () => {
-              if (refreshing) return;
-              setRefreshing(true);
-              try { await workspace.refresh(); } finally { setRefreshing(false); }
-            }}
-            tintColor={colors.accent}
-            colors={[colors.accent]}
-          />
-        }
-        onContentSizeChange={keepLatestVisible}
-        onLayout={keepLatestVisible}
-        onScrollBeginDrag={() => { focusTarget.current = false; pinned.current = false; }}
-        onScroll={({ nativeEvent }) => {
-          if (!focusTarget.current) {
-            pinned.current = nativeEvent.contentSize.height - nativeEvent.layoutMeasurement.height - nativeEvent.contentOffset.y < 100;
-          }
-        }}
-        scrollEventThrottle={32}
-      >
-        {workspace.error && <Notice>{workspace.error}</Notice>}
-        {workspace.storageError && <Notice>{workspace.storageError}</Notice>}
-        {topic?.status === "creating" && (
-          <View style={chat.progress}>
-            <ActivityIndicator color={colors.accent} />
-            <Text accessibilityLiveRegion="polite" style={styles.muted}>正在创建 Hermes 会话…</Text>
-          </View>
-        )}
-        {topic?.status === "error" && <Notice>{topic.error ?? "Hermes 无法创建此会话。"}</Notice>}
-        {topic?.status === "error" && workspace.streamTopic?.id === id && <Action title={recovering ? "恢复中…" : "恢复会话"}
-          icon="refresh" disabled={!canControl || recovering} onPress={recoverStream} />}
-        {(topic?.status === "ready" || (!topic && newProfileId)) && messages.length === 0 && pending.length === 0 && controls.length === 0 && (
-          <View style={chat.empty}>
-            <Icon name="chat" size={36} color={colors.accent} />
-            <Text accessibilityRole="header" style={[styles.heading, chat.emptyTitle]}>开始对话</Text>
-            {workspace.streamTopic?.id !== id && <Text style={[styles.muted, chat.emptyDescription]}>给 Hermes 发送一条消息。</Text>}
-          </View>
-        )}
-        {messages.map((message, index) => {
-          const outgoing = message.role === "user";
-          const process = !outgoing ? message.process : undefined;
-          if (!outgoing && !message.text && !message.attachments?.length && !process?.length && message.status === "final") return null;
-          const startGroup = messages[index - 1]?.role !== message.role;
-          const attachedControls = outgoing && message.submission_id ? historyControls.get(message.submission_id) : undefined;
-          return (
-            <View key={message.message_id}
-              onLayout={({ nativeEvent }) => {
-                messageOffsets.current.set(message.message_id, nativeEvent.layout.y);
-                if (message.message_id === targetMessageId && focusTarget.current) keepLatestVisible();
-              }}
-              style={chat.messageGroup}>
-              <View style={[chat.message, outgoing ? [chat.outgoing, { maxWidth: messageWidth }] : chat.incoming, startGroup && chat.startGroup]}>
-                {!!process?.length && <ProcessTimeline steps={process} final={message.status === "final"} />}
-                {(!!message.text || !!message.attachments?.length) && (
-                  <View style={[
-                    chat.messageContent,
-                    outgoing ? [chat.outgoingBubble, { backgroundColor: colors.tint }] : chat.incomingBody,
-                  ]}>
-                    {!!message.attachments?.length && <MessageAttachments items={message.attachments} session={session}
-                      onOpenLink={openLink} tint={colors.foreground} />}
-                    {!!message.text && (outgoing ? <Text
-                      selectable
-                      accessibilityLabel={`你：${message.text}`}
-                      style={[styles.text, chat.messageText]}
-                    >
-                      {message.text}
-                    </Text> : <AnswerMarkdown text={message.text} onOpenLink={openLink} />)}
-                  </View>
-                )}
-                {messageStatus[message.status] ? (
-                  <Text style={[styles.caption, outgoing && chat.outgoingStatus]}>
-                    {!outgoing && !message.text && message.status === "streaming" ? "Hermes 正在回复…" : messageStatus[message.status]}
-                  </Text>
-                ) : null}
-                {message.error && <Notice>{message.error}</Notice>}
-              </View>
-              {attachedControls?.map((control) => (
-                <ControlPrompt key={control.control_id} control={control} enabled={canControl} onAnswer={workspace.answer} />
-              ))}
-            </View>
-          );
-        })}
-        {pending.map((item) => (
-          <Animated.View key={item.submission_id} style={[chat.message, chat.outgoing, { maxWidth: messageWidth }, !reduced && motion.reveal]}>
-            <View style={[chat.messageContent, chat.outgoingBubble, { backgroundColor: colors.tint }]}>
-              {!!item.attachments?.length && <MessageAttachments items={item.attachments} onOpenLink={openLink} tint={colors.foreground} />}
-              {!!item.text && <Text selectable accessibilityLabel={`你：${item.text}`} style={[styles.text, chat.messageText]}>
-                {item.text}
-              </Text>}
-            </View>
-            {item.error ? (
-              <>
-                <Notice>{item.error}</Notice>
-                <Action
-                  title="丢弃未发送的消息"
-                  destructive
-                  onPress={() => void workspace.discard(item).catch((failure: unknown) => {
-                    haptic("error");
-                    setError(failure instanceof Error ? failure.message : "无法丢弃未发送的消息。");
-                  })}
-                />
-              </>
-            ) : <Text style={[styles.caption, chat.outgoingStatus]}>
-              {item.attachments?.length && attachmentsBlocked ? "更新连接器后发送" : "等待发送"}
-            </Text>}
-          </Animated.View>
-        ))}
-        {trailingControls.map((control) => (
-          <Animated.View key={control.control_id} style={!reduced && motion.reveal}>
-            <ControlPrompt control={control} enabled={canControl} onAnswer={workspace.answer} />
-          </Animated.View>
-        ))}
-      </ScrollView>
-      </ProfileSwipe>
-      <View style={[chat.column, chat.composer, { borderTopColor: colors.edge }]}>
+      {transcriptView}
+      <View pointerEvents={paging ? "none" : "auto"} style={[chat.column, chat.composer, { borderTopColor: colors.edge }]}>
         {(error ?? speech.error) && <Notice>{error ?? speech.error}</Notice>}
         {commandNotice && <Text accessibilityLiveRegion="polite" style={styles.muted}>{commandNotice}</Text>}
         {isModelCommand && !canControl && <Text style={styles.muted}>连接 Hermes 后即可选择模型。</Text>}
@@ -704,10 +759,10 @@ export function Conversation({
               {picking ? <ActivityIndicator size="small" color={colors.accent} /> : <Icon name="attachment" size={22} color={colors.accent} />}
             </Pressable>
             <View style={[chat.composerDivider, { backgroundColor: colors.edge }]} />
-            <Field
+            <Field key={id}
               accessibilityLabel="消息"
               placeholder={speech.busy ? "正在聆听…" : attachments.length ? "添加描述…" : "发消息给 Hermes"}
-              style={chat.draft}
+              style={[chat.draft, !!renderTranscript && !draftFocused && { height: touchSize }]}
               multiline
               numberOfLines={Platform.OS === "web" ? 1 : undefined}
               editable={canWrite && !sending && !speech.busy}

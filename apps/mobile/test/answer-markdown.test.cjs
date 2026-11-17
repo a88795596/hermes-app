@@ -10,6 +10,7 @@ const ts = require("typescript");
 
 const component = pathToFileURL(require.resolve("../src/chat/answer-markdown.tsx"));
 const tableComponent = new URL("markdown-table.tsx", component);
+const pagingContext = new URL("../profiles/paging-context.ts", component);
 const themeModule = new URL("../src/ui/theme.tsx", component);
 const markdownModule = require.resolve("react-native-markdown-renderer");
 // Render the actual component through React Native Web in Node's test runner.
@@ -23,6 +24,9 @@ const hooks = registerHooks({
     }
     if (context.parentURL === component.href && specifier === "./markdown-table") {
       return { url: tableComponent.href, shortCircuit: true };
+    }
+    if (context.parentURL === tableComponent.href && specifier === "../profiles/paging-context") {
+      return { url: pagingContext.href, shortCircuit: true };
     }
     if (context.parentURL === tableComponent.href
       && ["expo-screen-orientation", "react-native-safe-area-context", "../ui/haptics", "../ui/page-header", "../ui/overlay", "../ui/alerts"].includes(specifier)) {
@@ -42,7 +46,7 @@ const hooks = registerHooks({
       }, styles: {} }); exports.Icon = () => null;` };
     }
     if (url === "markdown-test:fullscreen") return { format: "commonjs", shortCircuit: true, source: "exports.useAlert = () => ({ alert() {} });" };
-    if (![component.href, tableComponent.href].includes(url)) return nextLoad(url, context);
+    if (![component.href, tableComponent.href, pagingContext.href].includes(url)) return nextLoad(url, context);
     const source = ts.transpileModule(readFileSync(new URL(url), "utf8"), {
       compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, esModuleInterop: true },
     }).outputText;

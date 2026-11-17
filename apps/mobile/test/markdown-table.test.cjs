@@ -8,6 +8,7 @@ function mountTable(platform = "ios", failLandscape = false) {
   const state = [];
   const effects = new Map();
   const calls = [];
+  const paging = [];
   let cursor = 0;
   let pendingEffects = [];
   const children = jsx("View", { children: "指数表格内容" });
@@ -16,6 +17,7 @@ function mountTable(platform = "ios", failLandscape = false) {
   const modules = {
     "react/jsx-runtime": { jsx, jsxs: jsx, Fragment: "Fragment" },
     react: {
+      useContext: () => (blocked) => paging.push(blocked),
       useState(initial) {
         const slot = cursor++;
         if (!(slot in state)) state[slot] = typeof initial === "function" ? initial() : initial;
@@ -48,6 +50,7 @@ function mountTable(platform = "ios", failLandscape = false) {
     },
     "react-native-safe-area-context": { SafeAreaView: "SafeAreaView", SafeAreaProvider: "SafeAreaProvider" },
     "react-native-gesture-handler": { ScrollView: "HorizontalScrollView" },
+    "../profiles/paging-context": { ProfilePagingContext: {} },
     "expo-screen-orientation": {
       OrientationLock: orientation,
       lockAsync: async (lock) => {
@@ -82,7 +85,7 @@ function mountTable(platform = "ios", failLandscape = false) {
     return tree;
   }
   const unmount = () => { effects.forEach(({ cleanup }) => cleanup?.()); effects.clear(); };
-  return { render, unmount, calls, orientation, children };
+  return { render, unmount, calls, orientation, children, paging };
 }
 
 function find(node, predicate) {
@@ -93,6 +96,22 @@ function find(node, predicate) {
 }
 
 const modal = (tree) => find(tree, (node) => node.type === "Modal" && node.props.visible !== false);
+
+test("表格横向触摸期间锁定 Profile 分页，松手或取消后恢复", () => {
+  const app = mountTable();
+  const scroll = find(app.render(), (node) => node.type === "HorizontalScrollView");
+  scroll.props.onTouchStart();
+  scroll.props.onTouchEnd({ nativeEvent: { touches: [1] } });
+  assert.equal(app.paging.at(-1), true);
+  scroll.props.onTouchEnd({ nativeEvent: { touches: [] } });
+  assert.equal(app.paging.at(-1), false);
+  scroll.props.onTouchStart();
+  scroll.props.onTouchCancel();
+  assert.equal(app.paging.at(-1), false);
+  scroll.props.onTouchStart();
+  app.unmount();
+  assert.equal(app.paging.at(-1), false);
+});
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
 test("横向表格由原生滚动手势持有触摸，阻止外层切换档案", () => {
