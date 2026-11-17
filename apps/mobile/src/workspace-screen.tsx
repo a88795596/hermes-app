@@ -275,7 +275,7 @@ function Workspace() {
   }
 
   const applicationSettings = <Group>
-    <Toggle label="无限会话流" value={workspace.infiniteFlow} disabled={!workspace.ready || workspace.preferencesSaving || profileSwitchBlocked}
+    <Toggle label="无限会话流" value={workspace.infiniteFlow} disabled={!workspace.ready || workspace.preferencesSaving}
       onChange={(enabled) => void changeInfiniteFlow(enabled)} />
     <Row divided title="配置档案" icon="settings" onPress={() => showPage("profiles")} />
     <Row divided title="管理" icon="manage" onPress={() => showPage("manage")} />

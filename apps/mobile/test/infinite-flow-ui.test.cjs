@@ -118,6 +118,31 @@ test("开启模式首页直接显示持续会话与 Profile 头像，底部无 T
   assert.equal(app.context.section, "topics");
 });
 
+test("设置中心锁住 Profile 滑动时仍可关闭无限会话流并恢复列表", async () => {
+  const app = mount({ enabled: true });
+  app.context.workspace.topics = [{ topic_id: "stream", profile_id: "daily", title: "已有会话", status: "ready",
+    archived: false, created_at: 1, updated_at: 1 }];
+  find(app.render(), (node) => node.props.accessibilityLabel === "设置中心").props.onPress();
+  let chat = find(app.render(), (node) => node.type === "Conversation");
+  assert.equal(chat.props.settingsOpen, true);
+  chat.props.onSwitchBlockedChange(true);
+  chat = find(app.render(), (node) => node.type === "Conversation");
+  assert.equal(chat.props.renderTranscript({}).props.enabled, false, "打开设置中心时不能滑动切换 Profile");
+  const toggle = find(chat.props.applicationSettings, (node) => node.type === "Toggle");
+  assert.equal(toggle.props.disabled, false, "滑动锁不能禁用会话模式开关");
+  app.context.workspace.preferencesSaving = true;
+  assert.equal(find(app.render(), (node) => node.type === "Toggle").props.disabled, true, "保存期间仍需防止重复切换");
+  app.context.workspace.preferencesSaving = false;
+  await toggle.props.onChange(false);
+  await new Promise(setImmediate);
+  const tree = app.render();
+  assert.equal(find(tree, (node) => node.type === "Conversation"), undefined);
+  assert.equal(find(tree, (node) => node.type === "TopicList").props.rows[0].id, "stream");
+  assert.ok(find(tree, (node) => node.props.accessibilityRole === "tablist"));
+  assert.ok(find(tree, (node) => node.props.accessibilityLabel === "新建会话"));
+  assert.equal(app.context.drafts.stream, "未发送的草稿");
+});
+
 test("无限模式收件箱和设置保留返回聊天路径，加载时也不闪现列表和新建按钮", () => {
   for (const section of ["inbox", "settings"]) {
     const app = mount({ enabled: true, section });
