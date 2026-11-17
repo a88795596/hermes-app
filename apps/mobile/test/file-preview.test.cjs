@@ -2,17 +2,19 @@ const assert = require("node:assert/strict");
 const { readFileSync } = require("node:fs");
 const test = require("node:test");
 const ts = require("typescript");
+const Image = Object.assign(() => null, { getSize: (_uri, onSize) => onSize(640, 480) });
 
 function mountPreview({ kind = "markdown", dark = false, reduced = false, save = async () => "files" } = {}) {
   const jsx = (type, props) => ({ type, props });
   const state = [];
   const saves = [];
   let cursor = 0;
+  let loadEffect;
   const colors = { background: "page", surface: "sheet", edge: "edge" };
   const modules = {
     "react/jsx-runtime": { jsx, jsxs: jsx },
     react: {
-      useEffect() {},
+      useEffect(effect) { loadEffect = effect; },
       useRef(initial) {
         const slot = cursor++;
         if (!(slot in state)) state[slot] = { current: initial };
@@ -25,7 +27,7 @@ function mountPreview({ kind = "markdown", dark = false, reduced = false, save =
       },
     },
     "react-native": {
-      ActivityIndicator: "ActivityIndicator", Image: "Image", Modal: "Modal", Pressable: "Pressable",
+      ActivityIndicator: "ActivityIndicator", Image, Modal: "Modal", Pressable: "Pressable",
       ScrollView: "ScrollView", Text: "Text", View: "View",
       StyleSheet: { create: (styles) => styles, absoluteFill: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 }, hairlineWidth: 1 },
       useWindowDimensions: () => ({ width: 390, height: 844 }),
@@ -40,7 +42,7 @@ function mountPreview({ kind = "markdown", dark = false, reduced = false, save =
     "./attachment-content": { attachmentKind: () => kind },
     "./answer-markdown": { AnswerMarkdown: "AnswerMarkdown" },
     "./html-preview": { HtmlPreview: "HtmlPreview" },
-    "./load-attachment": { loadAttachment() { throw new Error("Unexpected download"); },
+    "./load-attachment": { async loadAttachment() { return { uri: "file:///cache/media", dispose() {} }; },
       saveAttachment: (...args) => { saves.push(args); return save(...args); } },
     "./media-player": { MediaPlayer: "MediaPlayer" },
   };
@@ -56,6 +58,7 @@ function mountPreview({ kind = "markdown", dark = false, reduced = false, save =
     session: {}, tint: "text", onOpenLink() {} }).props.children[0];
   const render = () => { cursor = 0; return file.type(file.props); };
   render.saves = saves;
+  render.load = async () => { loadEffect(); await new Promise(setImmediate); };
   return render;
 }
 
@@ -107,6 +110,35 @@ test("收到的文件可直接保存，图片预览内也能保存", async () =>
   find(image(), (node) => node.type === "Pressable").props.onPress();
   const modal = find(image(), (node) => node.type === "Modal");
   assert.ok(find(modal, (node) => node.type === "Action" && node.props.title === "保存"));
+});
+
+test("会话流中的图片和视频在媒体右上角显示独立的保存图标", async () => {
+  for (const [kind, mediaType] of [["image", Image], ["video", "MediaPlayer"]]) {
+    const render = mountPreview({ kind, save: async () => "album" });
+    if (kind === "video") find(render(), (node) => node.props.accessibilityLabel === "打开视频：报告").props.onPress();
+    render();
+    await render.load();
+
+    const frame = render().props.children[0];
+    const button = find(frame, (node) => node.props.accessibilityLabel === "保存报告");
+    assert.equal(button?.type, "Pressable", kind);
+    assert.equal(button.props.accessibilityRole, "button");
+    const { position, top, right } = flatten(button.props.style({ pressed: false }));
+    assert.equal(position, "absolute");
+    assert.ok(top >= 0 && right >= 0);
+    assert.ok(frame.props.children.includes(button));
+    assert.ok(find(frame, (node) => node.type === mediaType));
+    assert.ok(find(button, (node) => node.type === "Icon" && node.props.name === "download"));
+    assert.equal(find(button, (node) => node.type === "Text"), undefined);
+
+    button.props.onPress();
+    assert.equal(render.saves.length, 1);
+    const pending = find(render(), (node) => node.type === "Pressable" && node.props.accessibilityState?.busy);
+    assert.equal(pending?.props.disabled, true);
+    await new Promise(setImmediate);
+    assert.equal(find(render(), (node) => node.type === "Modal").props.visible, false);
+    assert.ok(find(render(), (node) => node.props.children === "已保存到相册"));
+  }
 });
 
 test("保存期间阻止重复点击，失败时显示错误并允许重试", async () => {

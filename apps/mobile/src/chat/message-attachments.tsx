@@ -110,14 +110,25 @@ function ReceivedFile({ item: { attachment_id, name, mime, size }, session, tint
   const aspectRatio = Math.max(0.5, Math.min(2, dimensions.width / dimensions.height));
 
   return <View style={layout.file}>
-    {kind === "image" && content ? (
-      <><Pressable accessibilityRole="button" accessibilityLabel={`查看图片：${name}`} onPress={show}
-        style={({ pressed }) => pressed && styles.faded}>
-        <Image source={{ uri: content.uri }} accessibilityLabel={name} resizeMode="contain"
-          onError={() => setError("无法显示图片，请重试。")}
-          style={[layout.image, { aspectRatio, minWidth: Math.min(180, width / 2), backgroundColor: colors.field }]} />
-      </Pressable><View style={layout.mediaActions}>{saveButton()}</View></>
-    ) : (kind === "audio" || kind === "video") && content ? (
+    {content && (kind === "image" || kind === "video") ? (
+      <View style={layout.media}>
+        {kind === "image" ? (
+          <Pressable accessibilityRole="button" accessibilityLabel={`查看图片：${name}`} onPress={show}
+            style={({ pressed }) => pressed && styles.faded}>
+            <Image source={{ uri: content.uri }} accessibilityLabel={name} resizeMode="contain"
+              onError={() => setError("无法显示图片，请重试。")}
+              style={[layout.image, { aspectRatio, minWidth: Math.min(180, width / 2), backgroundColor: colors.field }]} />
+          </Pressable>
+        ) : <MediaPlayer uri={content.uri} kind={kind} name={name} />}
+        <Pressable accessibilityRole="button" accessibilityLabel={`保存${name}`}
+          accessibilityState={{ disabled: saving, busy: saving }} disabled={saving} hitSlop={6}
+          onPress={() => { haptic("light"); void save(); }}
+          style={({ pressed }) => [layout.mediaSave, pressed && layout.mediaSavePressed]}>
+          {saving ? <ActivityIndicator size="small" color={colors.onAccent} />
+            : <Icon name="download" size={18} color={colors.onAccent} />}
+        </Pressable>
+      </View>
+    ) : kind === "audio" && content ? (
       <><MediaPlayer uri={content.uri} kind={kind} name={name} /><View style={layout.mediaActions}>{saveButton()}</View></>
     ) : (
       <View style={[layout.receivedRow, { borderBottomColor: colors.edge }]}>
@@ -195,6 +206,12 @@ const layout = StyleSheet.create({
   row: { flexDirection: "row", alignItems: "center", gap: 10, minHeight: 56, paddingVertical: 6, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "transparent" },
   receivedRow: { flexDirection: "row", alignItems: "center", gap: 4, minWidth: 0, borderBottomWidth: StyleSheet.hairlineWidth },
   openRow: { flex: 1, minWidth: 0, borderBottomWidth: 0 },
+  media: { position: "relative" },
+  mediaSave: {
+    position: "absolute", top: 8, right: 8, zIndex: 1, width: 36, height: 36, borderRadius: 18,
+    alignItems: "center", justifyContent: "center", backgroundColor: "rgba(0, 0, 0, 0.72)",
+  },
+  mediaSavePressed: { backgroundColor: "rgba(0, 0, 0, 0.9)" },
   mediaActions: { alignSelf: "flex-end" },
   headerActions: { flexDirection: "row", alignItems: "center", gap: 4 },
   fileIcon: { width: 36, height: 36, borderRadius: 9, alignItems: "center", justifyContent: "center" },
