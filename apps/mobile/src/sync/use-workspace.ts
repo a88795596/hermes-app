@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
+import { randomUUID } from "expo-crypto";
 import type { AttachmentUpload, Control, InboxItem, Message, MobileNotice, ModelRequest, ModelSelectionRequest, NativeCommandRequest, Profile, ProfilePreferencesUpdate, ReasoningEffort, ReasoningRequest, SessionStatus, Topic, TopicDetail } from "@hermes-mobile/protocol";
 import type { Session } from "../auth/session";
 import { openCache, type Cache } from "../db/cache";
+import { selectProfile } from "../profiles/selection";
 import { ApiError, request } from "./api";
 
 interface Directory {
@@ -32,9 +34,21 @@ const revokeError = (error: unknown) => error instanceof ApiError && error.statu
 const isPermanentApiFailure = (error: unknown): error is ApiError =>
   error instanceof ApiError && !error.retryable && error.status !== 429;
 
-export function useWorkspace(session: Session, topicId: string | null, localTopic: boolean) {
+export function useWorkspace(session: Session, routedTopicId: string | null, localTopic: boolean, streamProfile?: { profileId?: string }) {
   const [cache, setCache] = useState<Cache>();
   const [directory, setDirectory] = useState(emptyDirectory);
+  const [infiniteFlow, updateInfiniteFlow] = useState(false);
+  const [preferencesSaving, setPreferencesSaving] = useState(false);
+  const preferenceWrite = useRef(false);
+  const streamLoads = useRef(new Map<string, Promise<string>>());
+  const streamPreparations = useRef(new Map<string, Promise<void>>());
+  const [storedStreamTopic, setStoredStreamTopic] = useState<{ id: string; profileId: string }>();
+  const streamProfileId = infiniteFlow && streamProfile ? selectProfile(directory.profiles, streamProfile.profileId)?.profile_id : undefined;
+  const selectedStreamProfile = useRef(streamProfileId);
+  const streamTopic = !routedTopicId && streamProfileId && storedStreamTopic?.profileId === streamProfileId ? storedStreamTopic : undefined;
+  const topicId = routedTopicId ?? streamTopic?.id ?? null;
+  const visibleStream = useRef(streamTopic);
+  const currentDirectory = useRef(directory);
   const [detail, setDetail] = useState<TopicDetail>();
   const [activity, setActivity] = useState<{ topicId: string; streamingIds: string; value: SessionStatus["activity"] }>();
   const [pending, setPending] = useState<Pending[]>([]);
@@ -43,9 +57,10 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
   const [live, setLive] = useState(false);
   const [error, setError] = useState<string>();
   const [storageError, setStorageError] = useState<string>();
+  const [streamStorageError, setStreamStorageError] = useState<string>();
   const [refreshing, setRefreshing] = useState(false);
   const [sessionEnded, setSessionEnded] = useState(false);
-  const hasRemoteTopic = !localTopic || detail?.topic.topic_id === topicId
+  const hasRemoteTopic = !(localTopic || streamTopic) || detail?.topic.topic_id === topicId
     || directory.topics.some((topic) => topic.topic_id === topicId);
   const remoteId = hasRemoteTopic ? topicId : null;
   const streamingIds = detail?.topic.topic_id === topicId
@@ -73,9 +88,10 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
         await db.close();
         return;
       }
-      const [ended, savedPending] = await Promise.all([
+      const [ended, savedPending, savedInfiniteFlow] = await Promise.all([
         db.get<boolean>("session-ended"),
         db.list<Pending>("pending:"),
+        db.get<boolean>("infinite-flow"),
       ]);
       if (ended) {
         revoked.current = true;
@@ -85,6 +101,7 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
       }
       if (cancelled) return;
       setSessionEnded(Boolean(ended));
+      updateInfiniteFlow(savedInfiniteFlow === true);
       setPending(savedPending);
       setCache(db);
     }).catch((failure: unknown) => {
@@ -96,6 +113,61 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
       if (db) void db.close().catch(() => {});
     };
   }, [session]);
+
+  useEffect(() => { currentDirectory.current = directory; }, [directory]);
+  useEffect(() => { visibleStream.current = streamTopic; }, [streamTopic]);
+  useEffect(() => { selectedStreamProfile.current = streamProfileId; }, [streamProfileId]);
+
+  const storedTopic = directory.topics.find((topic) => topic.topic_id === storedStreamTopic?.id);
+  const invalidStream = !!storedTopic && (storedTopic.archived || storedTopic.profile_id !== storedStreamTopic?.profileId);
+  const restoreStream = useCallback(() => {
+    const profileId = selectedStreamProfile.current;
+    if (!cache || !profileId || !active.current || revoked.current || signingOut.current) return Promise.resolve(undefined);
+    let task = streamLoads.current.get(profileId);
+    if (!task) {
+      task = (async () => {
+        const key = `infinite-topic:${profileId}`;
+        let id = await cache.get<string>(key);
+        const topic = currentDirectory.current.topics.find((item) => item.topic_id === id);
+        if (typeof id !== "string" || !id || topic?.archived || (topic && topic.profile_id !== profileId)) {
+          if (!active.current || revoked.current || signingOut.current) throw new Error("设备会话已结束。");
+          id = randomUUID();
+          await cache.set(key, id);
+        }
+        return id;
+      })().finally(() => { streamLoads.current.delete(profileId); });
+      streamLoads.current.set(profileId, task);
+    }
+    return task.then((id) => {
+      if (!active.current || revoked.current || selectedStreamProfile.current !== profileId) return;
+      setStreamStorageError(undefined);
+      setStoredStreamTopic((current) => current?.id === id && current.profileId === profileId ? current : { id, profileId });
+      return { id, profileId };
+    }).catch((failure: unknown) => {
+      if (active.current && selectedStreamProfile.current === profileId) {
+        syncNeedsRetry.current = true;
+        setStreamStorageError(failure instanceof Error ? failure.message : "无法保存持续会话。");
+      }
+    });
+  }, [cache]);
+
+  useEffect(() => {
+    if (!sessionEnded) void restoreStream();
+  }, [invalidStream, restoreStream, sessionEnded, streamProfileId]);
+
+  async function setInfiniteFlow(enabled: boolean) {
+    if (!cache || revoked.current || signingOut.current) throw new Error("无法访问本地设置。");
+    if (preferenceWrite.current) return;
+    preferenceWrite.current = true;
+    setPreferencesSaving(true);
+    try {
+      await cache.set("infinite-flow", enabled);
+      if (active.current && !revoked.current) updateInfiniteFlow(enabled);
+    } finally {
+      preferenceWrite.current = false;
+      if (active.current) setPreferencesSaving(false);
+    }
+  }
 
   useEffect(() => {
     const listener = AppState.addEventListener("change", (state) => setForeground(state === "active"));
@@ -271,6 +343,36 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
     return task;
   }, [cache, call]);
 
+  const prepareTopic = useCallback(async (id: string, profileId: string, signal?: AbortSignal) => {
+    let topic = await createTopic(id, profileId, signal);
+    for (let tries = 0; topic.status === "creating" && tries < 20; tries += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      signal?.throwIfAborted();
+      topic = (await call<TopicDetail>(`/topics/${id}`, { signal })).topic;
+    }
+    await loadTopic(id);
+    if (topic.status !== "ready") throw new Error(topic.error ?? "Hermes 会话尚未就绪，请稍后重试。");
+  }, [call, createTopic, loadTopic]);
+
+  const prepareStream = useCallback(async () => {
+    const stream = await restoreStream();
+    if (!cache || !stream || !active.current || revoked.current || signingOut.current) return Promise.resolve();
+    const existing = streamPreparations.current.get(stream.id);
+    if (existing) return existing;
+    const task = (async () => {
+      const saved = await cache.get<TopicDetail>(topicKey(stream.id));
+      if (!active.current || revoked.current || signingOut.current || saved?.topic.status === "ready") return;
+      await prepareTopic(stream.id, stream.profileId);
+    })().catch((failure: unknown) => {
+      if (active.current && !revoked.current && visibleStream.current?.id === stream.id) {
+        syncNeedsRetry.current = true;
+        setError(failure instanceof Error ? failure.message : "无法创建持续会话，请下拉重试。");
+      }
+    }).finally(() => { streamPreparations.current.delete(stream.id); });
+    streamPreparations.current.set(stream.id, task);
+    return task;
+  }, [cache, prepareTopic, restoreStream]);
+
   useEffect(() => {
     visibleTopic.current = topicId;
     remoteTopic.current = remoteId;
@@ -288,6 +390,10 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
     })();
     return () => { cancelled = true; };
   }, [cache, foreground, loadTopic, remoteId, sessionEnded, topicId]);
+
+  useEffect(() => {
+    if (foreground && !sessionEnded && network === "online" && directory.connector_online) void prepareStream();
+  }, [directory.connector_online, foreground, network, prepareStream, sessionEnded, streamTopic?.id]);
 
   const flush = useCallback(() => {
     if (!cache || !foreground || !active.current || revoked.current) return Promise.resolve();
@@ -363,8 +469,9 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
     setError(undefined);
     const id = remoteTopic.current;
     await Promise.all([loadDirectory(), id ? loadTopic(id) : undefined]);
+    await prepareStream();
     await flush();
-  }, [flush, loadDirectory, loadTopic]);
+  }, [flush, loadDirectory, loadTopic, prepareStream]);
 
   function refresh() {
     if (manualRefresh.current) return manualRefresh.current;
@@ -489,7 +596,7 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
 
   async function finishSession(onSignOut: () => Promise<void>, discardIds: readonly string[] = []) {
     if (!cache) throw new Error("需要能够访问本地待发送的消息才能退出。");
-    if (signingOut.current || enqueueWrites.current) throw new Error("正在保存消息，请稍后重试。");
+    if (signingOut.current || enqueueWrites.current || preferenceWrite.current || streamLoads.current.size) throw new Error("正在保存消息或设置，请稍后重试。");
     signingOut.current = true;
     try {
       const savedPending = await cache.list<Pending>("pending:");
@@ -518,17 +625,6 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
     if (id) await loadTopic(id);
   }
 
-  async function prepareTopic(id: string, profileId: string, signal?: AbortSignal) {
-    let topic = await createTopic(id, profileId, signal);
-    for (let tries = 0; topic.status === "creating" && tries < 20; tries += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      signal?.throwIfAborted();
-      topic = (await call<TopicDetail>(`/topics/${id}`, { signal })).topic;
-    }
-    void loadTopic(id);
-    if (topic.status !== "ready") throw new Error(topic.error ?? "Hermes 会话尚未就绪，请稍后重试。");
-  }
-
   async function waitForRequest<T extends Exclude<ModelRequest | ReasoningRequest | NativeCommandRequest, { status: "pending" }>>(
     path: string, requestId: string, input: object | undefined, signal: AbortSignal,
   ) {
@@ -555,6 +651,10 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
 
   return {
     ...directory,
+    infiniteFlow,
+    preferencesSaving,
+    setInfiniteFlow,
+    streamTopic,
     detail: detail?.topic.topic_id === topicId ? detail : undefined,
     activity: foreground && activity?.topicId === topicId && (!streamingIds || activity.streamingIds === streamingIds)
       ? activity.value : undefined,
@@ -562,7 +662,7 @@ export function useWorkspace(session: Session, topicId: string | null, localTopi
     network,
     live,
     error,
-    storageError,
+    storageError: storageError ?? streamStorageError,
     refreshing,
     ready: Boolean(cache),
     refresh,

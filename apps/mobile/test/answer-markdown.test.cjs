@@ -28,7 +28,7 @@ const hooks = registerHooks({
       && ["expo-screen-orientation", "react-native-safe-area-context", "../ui/haptics", "../ui/page-header", "../ui/overlay", "../ui/alerts"].includes(specifier)) {
       return { url: "markdown-test:fullscreen", shortCircuit: true };
     }
-    return nextResolve(specifier === "react-native" ? "react-native-web" : specifier, context);
+    return nextResolve(["react-native", "react-native-gesture-handler"].includes(specifier) ? "react-native-web" : specifier, context);
   },
   load(url, context, nextLoad) {
     if (url === "markdown-test:renderer") return { format: "commonjs", shortCircuit: true, source: `

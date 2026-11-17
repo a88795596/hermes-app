@@ -30,7 +30,8 @@ function memoryCache() {
 async function workspace(cache, submit, messages = [], options = {}) {
   const values = [], effects = [], cleanup = [];
   const timers = new Map();
-  let cursor = 0, dirty = false, current, selectedTopic = "topic", changeAppState, timerId = 0;
+  let cursor = 0, dirty = false, current, selectedTopic = options.topicId === undefined ? "topic" : options.topicId,
+    streamProfile = options.streamProfile, changeAppState, timerId = 0;
   const same = (a, b) => a && b && a.length === b.length && a.every((value, index) => Object.is(value, b[index]));
   const react = {
     useState(initial) {
@@ -58,7 +59,7 @@ async function workspace(cache, submit, messages = [], options = {}) {
   const exports = {};
   const request = async (_origin, path, requestOptions = {}) => {
     if (path === "/profiles") return options.profiles ? options.profiles() : [];
-    if (path === "/topics?include_archived=true") return [topic];
+    if (path === "/topics?include_archived=true") return options.topics ? options.topics() : [topic];
     if (path === "/inbox") return [];
     if (path === "/status") return { connector_online: true };
     if (path === "/ws-tickets") return { ticket: "live-ticket" };
@@ -75,6 +76,14 @@ async function workspace(cache, submit, messages = [], options = {}) {
       if (name === "react-native") return { AppState: { currentState: "active",
         addEventListener: (_event, listener) => { changeAppState = listener; return { remove() {} }; } } };
       if (name === "../db/cache") return { openCache: async () => cache };
+      if (name === "expo-crypto") return { randomUUID: require("node:crypto").randomUUID };
+      if (name === "../profiles/selection") {
+        const selection = {};
+        new Function("exports", ts.transpileModule(readFileSync(require.resolve("../src/profiles/selection.ts"), "utf8"), {
+          compilerOptions: { module: ts.ModuleKind.CommonJS },
+        }).outputText)(selection);
+        return selection;
+      }
       if (name === "./api") return { ApiError, request };
       throw new Error(`Unexpected dependency: ${name}`);
     }, Socket, () => 1, () => {}, (callback, ms) => { timers.set(++timerId, { callback, ms }); return timerId; }, (id) => timers.delete(id),
@@ -82,7 +91,7 @@ async function workspace(cache, submit, messages = [], options = {}) {
   const render = () => {
     dirty = false;
     cursor = 0;
-    current = exports.useWorkspace(session, selectedTopic, false);
+    current = exports.useWorkspace(session, selectedTopic, false, streamProfile);
     effects.splice(0).forEach((effect) => effect());
   };
   const settle = async () => {
@@ -100,11 +109,180 @@ async function workspace(cache, submit, messages = [], options = {}) {
       await settle();
     },
     async selectTopic(id) { selectedTopic = id; render(); await settle(); },
+    async selectStreamProfile(profileId) { streamProfile = { profileId }; render(); await settle(); },
     async appState(state) { changeAppState(state); await settle(); },
   };
 }
 
 const supplemental = { submission_id: "supplemental-id", topic_id: "topic", text: "加上预算", created_at: 1 };
+
+function streamServer() {
+  const topics = new Map(), creates = [];
+  const profiles = [{ profile_id: "daily", label: "日常助手", is_default: true }, { profile_id: "research", label: "研究助手" }];
+  return {
+    topics, creates,
+    options: { topicId: null, streamProfile: {}, profiles: () => profiles, topics: () => [...topics.values()] },
+    async request(path, options) {
+      if (path === "/topics" && options.method === "POST") {
+        creates.push(options.body);
+        const id = options.body.request_id;
+        if (!topics.has(id)) topics.set(id, { topic_id: id, profile_id: options.body.profile_id, status: "ready", title: "新会话" });
+        return topics.get(id);
+      }
+      const id = path.match(/^\/topics\/([^/]+)$/)?.[1];
+      if (id && topics.has(id)) return { topic: topics.get(id), messages: [], controls: [] };
+      const archivedId = path.match(/^\/topics\/([^/]+)\/archive$/)?.[1];
+      if (archivedId && topics.has(archivedId)) {
+        topics.get(archivedId).archived = options.body.archived;
+        return topics.get(archivedId);
+      }
+      throw new Error(`Unexpected stream request: ${path}`);
+    },
+  };
+}
+
+test("无限会话流首次安装默认关闭，未开启不创建会话", async (t) => {
+  const server = streamServer();
+  const app = await workspace(memoryCache(), server.request, [], server.options);
+  t.after(app.close);
+  assert.equal(app.current.infiniteFlow, false);
+  assert.equal(app.current.streamTopic, undefined);
+  assert.equal(server.creates.length, 0);
+});
+
+test("无限会话流按 Profile 持久化复用，关闭再开启和重启不重复创建", async (t) => {
+  const cache = memoryCache(), server = streamServer();
+  const app = await workspace(cache, server.request, [], server.options);
+  t.after(app.close);
+  await app.current.setInfiniteFlow(true);
+  await app.settle();
+  const daily = app.current.streamTopic;
+  assert.equal(daily.profileId, "daily");
+  assert.equal(app.current.detail.topic.topic_id, daily.id);
+  await app.selectStreamProfile("research");
+  const research = app.current.streamTopic;
+  assert.equal(research.profileId, "research");
+  assert.notEqual(research.id, daily.id);
+  assert.equal(app.current.detail.topic.topic_id, research.id);
+  await app.selectStreamProfile("daily");
+  assert.deepEqual(app.current.streamTopic, daily);
+  await Promise.all([app.current.refresh(), app.current.refresh()]);
+  await app.current.setInfiniteFlow(false);
+  await app.settle();
+  assert.equal(app.current.streamTopic, undefined);
+  await app.current.setInfiniteFlow(true);
+  await app.settle();
+  assert.deepEqual(app.current.streamTopic, daily);
+  app.close();
+  const restored = await workspace(cache, server.request, [], server.options);
+  t.after(restored.close);
+  assert.equal(restored.current.infiniteFlow, true);
+  assert.deepEqual(restored.current.streamTopic, daily);
+  assert.equal(server.creates.length, 2);
+  assert.equal((await cache.get("infinite-topic:daily")), daily.id);
+});
+
+test("开关落盘失败保持原模式且不创建会话", async (t) => {
+  const cache = memoryCache(), server = streamServer();
+  const save = cache.set;
+  cache.set = async (key, value) => {
+    if (key === "infinite-flow") throw new Error("磁盘已满");
+    await save(key, value);
+  };
+  const app = await workspace(cache, server.request, [], server.options);
+  t.after(app.close);
+  await assert.rejects(app.current.setInfiniteFlow(true), /磁盘已满/);
+  await app.settle();
+  assert.equal(app.current.infiniteFlow, false);
+  assert.equal(app.current.preferencesSaving, false);
+  assert.equal(server.creates.length, 0);
+});
+
+test("持续会话 ID 读写短暂失败后刷新可恢复，保存成功前不创建远端会话", async (t) => {
+  for (const operation of ["get", "set"]) {
+    const cache = memoryCache(), server = streamServer();
+    const original = cache[operation];
+    let fail = true;
+    cache[operation] = async (key, ...args) => {
+      if (fail && key === "infinite-topic:daily") throw new Error("存储暂时不可用");
+      return original(key, ...args);
+    };
+    const app = await workspace(cache, server.request, [], server.options);
+    t.after(app.close);
+    await app.current.setInfiniteFlow(true);
+    await app.settle();
+    assert.equal(app.current.streamTopic, undefined);
+    assert.equal(server.creates.length, 0);
+    assert.match(app.current.storageError, /存储暂时不可用/);
+    fail = false;
+    await app.current.refresh();
+    await app.settle();
+    assert.equal(app.current.detail.topic.status, "ready");
+    assert.equal(app.current.streamTopic.id, await cache.get("infinite-topic:daily"));
+    assert.equal(app.current.storageError, undefined);
+    assert.equal(server.creates.length, 1);
+  }
+});
+
+test("服务端创建失败不会自动换 ID，主动归档后恢复且保留原会话待发消息", async (t) => {
+  const cache = memoryCache(), server = streamServer();
+  let fail = true;
+  const app = await workspace(cache, async (path, options) => {
+    const result = await server.request(path, options);
+    if (path === "/topics" && fail) Object.assign(result, { status: "error", error: "创建结果无法确认" });
+    return result;
+  }, [], server.options);
+  t.after(app.close);
+  await app.current.setInfiniteFlow(true);
+  await app.settle();
+  const first = app.current.streamTopic.id;
+  const pending = { submission_id: "unsent", topic_id: first, profile_id: "daily", text: "保留内容", created_at: 1, error: "创建失败" };
+  await cache.set("pending:unsent", pending);
+  await app.current.refresh();
+  await app.settle();
+  assert.equal(app.current.detail.topic.status, "error");
+  assert.equal(app.current.streamTopic.id, first);
+  assert.equal(server.topics.size, 1);
+  fail = false;
+  await app.current.setTopicArchived(first, true);
+  await app.settle();
+  assert.notEqual(app.current.streamTopic.id, first);
+  assert.equal(app.current.detail.topic.status, "ready");
+  assert.equal(server.topics.get(first).archived, true);
+  assert.deepEqual(await cache.get("pending:unsent"), pending);
+});
+
+test("创建失败重试保持同一幂等 ID，已归档流保留历史并创建新流", async (t) => {
+  const cache = memoryCache(), server = streamServer();
+  let fail = true;
+  const attempts = [];
+  const app = await workspace(cache, async (path, options) => {
+    if (path === "/topics") {
+      attempts.push(options.body.request_id);
+      if (fail) throw new Error("暂时离线");
+    }
+    return server.request(path, options);
+  }, [], server.options);
+  t.after(app.close);
+  await app.current.setInfiniteFlow(true);
+  await app.settle();
+  const first = app.current.streamTopic.id;
+  fail = false;
+  await app.current.refresh();
+  await app.settle();
+  assert.equal(app.current.detail.topic.topic_id, first);
+  assert.ok(attempts.length >= 2);
+  assert.ok(attempts.every((id) => id === first));
+  await app.current.setInfiniteFlow(false);
+  await app.settle();
+  server.topics.get(first).archived = true;
+  await app.current.refresh();
+  await app.settle();
+  await app.current.setInfiniteFlow(true);
+  await app.settle();
+  assert.notEqual(app.current.streamTopic.id, first);
+  assert.equal(server.topics.get(first).archived, true);
+});
 
 test("原生命令断线后用同一请求编号查询，不生成普通聊天消息", async (t) => {
   const calls = [];

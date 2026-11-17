@@ -2,6 +2,7 @@ import { lockAsync, OrientationLock } from "expo-screen-orientation";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Platform, Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
+import { ScrollView as HorizontalScrollView } from "react-native-gesture-handler";
 import { haptic } from "../ui/haptics";
 import { OverlayModal } from "../ui/overlay";
 import { PageHeader } from "../ui/page-header";
@@ -36,9 +37,9 @@ export function MarkdownTable({ columns, children }: { columns: number; children
 
   const close = () => setOpen(false);
   const grid = <View style={[table.frame, { borderColor: colors.edge }]}>
-    <ScrollView horizontal tabIndex={0} contentContainerStyle={table.scrollContent}>
+    <HorizontalScrollView horizontal disallowInterruption tabIndex={0} contentContainerStyle={table.scrollContent}>
       <View style={[table.grid, { width: columns * 100 }]}>{children}</View>
-    </ScrollView>
+    </HorizontalScrollView>
   </View>;
 
   return <View>

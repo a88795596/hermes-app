@@ -55,6 +55,7 @@ function mount(props) {
       case "./model-picker": return {};
       case "./native-command": return { NativeCommandSheet: "NativeCommandSheet" };
       case "./settings-drawer": return {};
+      case "../profiles/swipe": return { ProfileSwipe: "ProfileSwipe" };
       case "./use-speech-input": return { useSpeechInput: (_id, _enabled, draft) => ({
         available: false, state: "idle", busy: false, start: async () => {}, stop: async () => draft,
       }) };

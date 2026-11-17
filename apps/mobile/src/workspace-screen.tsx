@@ -1,7 +1,7 @@
 import { randomUUID } from "expo-crypto";
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useRef, useState } from "react";
-import { BackHandler, Keyboard, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, BackHandler, Keyboard, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import Animated from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { DEFAULT_TOPIC_TITLE, topicTitlePreview } from "@hermes-mobile/protocol";
@@ -11,18 +11,18 @@ import { ComposerSheet, PickerRow } from "./chat/composer-menu";
 import { TopicList, type TopicListHandle, type TopicListRow } from "./chat/topic-list";
 import { InboxDetail, InboxList } from "./inbox/inbox";
 import { ManagementMenu, ManagementScreen, type ManagementPage } from "./manage";
-import { Group, Row } from "./manage/shared";
+import { Group, Row, Toggle } from "./manage/shared";
 import { enablePushNotifications, pushAvailable } from "./notifications";
 import { ProfileAvatar } from "./profiles/avatar";
 import { ProfileSettings } from "./profiles/settings";
-import { selectProfile } from "./profiles/selection";
+import { adjacentProfile, selectProfile } from "./profiles/selection";
 import type { Pending } from "./sync/use-workspace";
 import { motion, useReduceMotion } from "./ui/motion";
 import { PageHeader } from "./ui/page-header";
 import { useAlert } from "./ui/alerts";
 import { haptic } from "./ui/haptics";
 import { formatDateTime, profileLabel } from "./ui/text";
-import { Action, Card, EmptyState, Icon, Notice, SectionLabel, useTheme, type IconName } from "./ui/theme";
+import { Action, Card, CloseButton, EmptyState, Icon, Notice, SectionLabel, useTheme, type IconName } from "./ui/theme";
 import { checkUpdateManually, currentUpdate } from "./updates";
 import { useWorkspaceContext, type Section } from "./workspace-context";
 
@@ -70,6 +70,7 @@ function Workspace() {
   const [profilesExpanded, setProfilesExpanded] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [chatSettingsOpen, setChatSettingsOpen] = useState(false);
+  const [profileSwitchBlocked, setProfileSwitchBlocked] = useState(false);
   const [managementTabsVisible, setManagementTabsVisible] = useState(true);
   const updateDisabled = Platform.OS === "web" || !!updateStatus;
   const params = useLocalSearchParams<{ page?: Page | "conversation" | "inbox-item"; topicId?: string; messageId?: string; newProfileId?: string; archived?: string }>();
@@ -78,8 +79,10 @@ function Workspace() {
     drafts, setDrafts, draftAttachments, setDraftAttachments,
     signingOut, setSigningOut, push, setPush, error, setError, archiveInFlight: archiveInFlightRef, archiving, setArchiving } = useWorkspaceContext();
   const page = params.page && params.page !== "conversation" && params.page !== "inbox-item" ? params.page : rootSection;
+  const infiniteHome = workspace.infiniteFlow && !params.page && page === "topics";
   const chat = params.page === "conversation" && typeof params.topicId === "string"
-    ? { id: params.topicId, newProfileId: typeof params.newProfileId === "string" ? params.newProfileId : undefined } : undefined;
+    ? { id: params.topicId, newProfileId: typeof params.newProfileId === "string" ? params.newProfileId : undefined }
+    : infiniteHome && workspace.streamTopic ? { id: workspace.streamTopic.id, newProfileId: workspace.streamTopic.profileId } : undefined;
   const inboxItem = params.page === "inbox-item" ? selectedInboxItem : undefined;
   const topicId = chat?.id ?? null;
   const profile = selectProfile(workspace.profiles, profileId);
@@ -92,7 +95,7 @@ function Workspace() {
     }
   }
   const archived = page === "archive" || params.archived === "1";
-  const topicListPage = page === "topics" || archived;
+  const topicListPage = (page === "topics" && !infiniteHome) || archived;
   const section = page === "topics" || page === "inbox" ? page : "settings";
   const settingsPage = page === "topics" || page === "inbox" || page === "settings" ? undefined : page;
   const managementPage = settingsPage === "manage" || settingsPage === "profiles" || settingsPage === "connection"
@@ -130,6 +133,7 @@ function Workspace() {
   const showPage = useCallback((next: Page) => {
     Keyboard.dismiss();
     setProfilesExpanded(false);
+    setChatSettingsOpen(false);
     if (next === "topics" || next === "inbox" || next === "settings") {
       setSection(next);
       if (router.canDismiss()) router.dismissAll();
@@ -248,6 +252,54 @@ function Workspace() {
     }
   }
 
+  async function changeInfiniteFlow(enabled: boolean) {
+    try {
+      await workspace.setInfiniteFlow(enabled);
+      showPage("topics");
+    } catch (failure) {
+      alert.alert("无法切换会话模式", failure instanceof Error ? failure.message : "请稍后重试。");
+    }
+  }
+
+  function switchProfile(direction: -1 | 1) {
+    if (profileSwitchBlocked) return;
+    const next = adjacentProfile(workspace.profiles, profile?.profile_id, direction);
+    if (!next) return;
+    Keyboard.dismiss();
+    haptic("selection");
+    setProfileId(next.profile_id);
+  }
+
+  const applicationSettings = <Group>
+    <Toggle label="无限会话流" value={workspace.infiniteFlow} disabled={!workspace.ready || workspace.preferencesSaving || profileSwitchBlocked}
+      onChange={(enabled) => void changeInfiniteFlow(enabled)} />
+    <Row divided title="配置档案" icon="settings" onPress={() => showPage("profiles")} />
+    <Row divided title="管理" icon="manage" onPress={() => showPage("manage")} />
+    <Row divided title="连接" value={connection} icon="link" onPress={() => showPage("connection")} />
+    <Row divided title="已归档会话" icon="archive" onPress={() => showPage("archive")} />
+    <Row divided title="版本信息" icon="info" onPress={() => showPage("version")} />
+  </Group>;
+  const settingsNavigation = <Group>
+    <Row title="聊天" icon="chat" onPress={() => showPage("topics")} />
+    <Row divided title="收件箱" icon="inbox" onPress={() => showPage("inbox")} />
+  </Group>;
+  const profilePicker = profilesExpanded && <ComposerSheet title="选择配置档案" closeLabel="关闭配置档案选择" onClose={() => setProfilesExpanded(false)}>
+    <ScrollView style={layout.profileList}>
+      {workspace.profiles.map((item) => <PickerRow key={item.profile_id} title={profileLabel(item)}
+        leading={<ProfileAvatar profile={item} session={session} size={40} />} selected={item.profile_id === profile?.profile_id}
+        trailing={item.profile_id === profile?.profile_id ? "check" : undefined} disabled={profileSwitchBlocked}
+        feedback={item.profile_id === profile?.profile_id ? false : undefined}
+        onPress={() => { if (!profileSwitchBlocked) { Keyboard.dismiss(); setProfileId(item.profile_id); setProfilesExpanded(false); } }} />)}
+      {workspace.profiles.length === 0 && <Text style={styles.muted}>暂无可用配置档案</Text>}
+    </ScrollView>
+  </ComposerSheet>;
+  const profileAvatar = <Pressable accessibilityRole="button" accessibilityLabel={`选择配置档案${profile ? `，${profileLabel(profile)}` : ""}`}
+    accessibilityState={{ expanded: profilesExpanded, disabled: profileSwitchBlocked }} disabled={profileSwitchBlocked}
+    onPress={() => { if (!profileSwitchBlocked) { haptic("light"); Keyboard.dismiss(); setProfilesExpanded(true); } }}
+    style={({ pressed }) => [layout.avatar, { backgroundColor: colors.tint }, pressed && styles.faded]}>
+    <ProfileAvatar profile={profile} session={session} size={48} />
+  </Pressable>;
+
   if (workspace.sessionEnded) {
     return (
       <ScrollView contentContainerStyle={styles.content}>
@@ -278,12 +330,28 @@ function Workspace() {
     router.push({ pathname: "/[page]", params: { page: "conversation", topicId: randomUUID(), newProfileId } });
   }
 
+  if (!workspace.ready) return <View style={styles.pairContent}>
+    {workspace.storageError ? <Notice>{workspace.storageError}</Notice>
+      : <ActivityIndicator accessibilityLabel="正在恢复工作区" color={colors.accent} />}
+  </View>;
+
   if (chat) {
     const { id, newProfileId } = chat;
     return (
       <View style={styles.frame}>
-        <PageHeader title={chatTitle} leading={<BackLink title={archived ? "已归档会话" : "话题列表"} onPress={goBack} />}
-          trailing={<Pressable accessibilityRole="button" accessibilityLabel="会话设置" accessibilityState={{ expanded: chatSettingsOpen }}
+        <PageHeader title={infiniteHome ? <View style={layout.profileTitle} accessible accessibilityRole="adjustable"
+          accessibilityLabel={profile ? `配置档案，${profileLabel(profile)}` : "配置档案"}
+          accessibilityActions={[{ name: "increment", label: "下一个配置档案" }, { name: "decrement", label: "上一个配置档案" }]}
+          onAccessibilityAction={({ nativeEvent }) => switchProfile(nativeEvent.actionName === "increment" ? 1 : -1)}>
+          <Text numberOfLines={1} style={[styles.heading, layout.profileName]}>{profile ? profileLabel(profile) : "Hermes"}</Text>
+          {workspace.profiles.length > 1 && <View style={layout.profileDots}>
+            {workspace.profiles.length <= 7 ? workspace.profiles.map((item) => <View key={item.profile_id} style={[layout.profileDot,
+              { backgroundColor: item.profile_id === profile?.profile_id ? colors.accent : colors.edge }]} />)
+              : <Text style={styles.caption}>{workspace.profiles.findIndex((item) => item.profile_id === profile?.profile_id) + 1} / {workspace.profiles.length}</Text>}
+          </View>}
+        </View> : chatTitle} leading={infiniteHome ? profileAvatar : <BackLink title={archived ? "已归档会话" : "话题列表"} onPress={goBack} />}
+          trailing={<Pressable accessibilityRole="button" accessibilityLabel="设置中心" accessibilityState={{ expanded: chatSettingsOpen, disabled: profileSwitchBlocked }}
+            disabled={profileSwitchBlocked}
             onPress={() => { haptic("light"); Keyboard.dismiss(); setChatSettingsOpen(true); }}
             style={({ pressed }) => [layout.backLink, pressed && styles.faded]}>
             <Icon name="settings" size={22} color={colors.accent} />
@@ -295,6 +363,10 @@ function Workspace() {
           topic={topic}
           newProfileId={newProfileId}
           settingsOpen={chatSettingsOpen}
+          settingsNavigation={settingsNavigation}
+          applicationSettings={applicationSettings}
+          onSwitchProfile={infiniteHome && workspace.profiles.length > 1 ? switchProfile : undefined}
+          onSwitchBlockedChange={infiniteHome ? setProfileSwitchBlocked : undefined}
           onCloseSettings={() => setChatSettingsOpen(false)}
           workspace={workspace}
           session={session}
@@ -303,6 +375,7 @@ function Workspace() {
           attachments={draftAttachments[id] ?? []}
           onAttachmentsChange={(value) => setDraftAttachments((current) => ({ ...current, [id]: value }))}
         />
+        {infiniteHome && profilePicker}
         {workspace.detail?.topic.topic_id === id && (workspace.activity === undefined
           ? workspace.detail.messages.some((message) => message.status === "streaming")
           : workspace.activity === "running") && <AssistantStreamBorder />}
@@ -321,25 +394,25 @@ function Workspace() {
     <>
       {page === "topics" ? (
         <PageHeader
-          leading={<Pressable accessibilityRole="button" accessibilityLabel={`选择配置档案${profile ? `，${profileLabel(profile)}` : ""}`}
-            accessibilityState={{ expanded: profilesExpanded }}
-            onPress={() => { haptic("light"); setProfilesExpanded(true); }}
-            style={({ pressed }) => [layout.avatar, { backgroundColor: colors.tint }, pressed && styles.faded]}>
-            <ProfileAvatar profile={profile} session={session} size={48} />
-          </Pressable>}
+          leading={profileAvatar}
           title={<Pressable accessibilityRole="button" accessibilityLabel={connection + "。打开连接设置"}
             onPress={() => { haptic("light"); showPage("connection"); }}
             style={({ pressed }) => [layout.connectionSummary, pressed && styles.faded]}>
             <Text accessibilityRole="header" numberOfLines={1} style={[styles.wordmark, layout.wordmark, layout.brand]}>Hermes</Text>
             <View style={[layout.dot, { backgroundColor: connected ? "#2F9461" : "#888888" }]} />
           </Pressable>}
-          trailing={<Pressable accessibilityRole="button" accessibilityLabel="新建会话" accessibilityState={{ disabled: !profile }} disabled={!profile}
+          trailing={infiniteHome ? <Pressable accessibilityRole="button" accessibilityLabel="设置中心" onPress={() => showPage("settings")} style={layout.backLink}>
+            <Icon name="settings" size={22} color={colors.accent} />
+          </Pressable> : <Pressable accessibilityRole="button" accessibilityLabel="新建会话" accessibilityState={{ disabled: !profile }} disabled={!profile}
             onPress={() => { if (profile) { haptic("medium"); startConversation(profile.profile_id); } }}
             style={({ pressed }) => [layout.compose, { backgroundColor: colors.accentFill }, (pressed || !profile) && styles.faded]}>
             <Icon name="compose" color={colors.onAccent} size={21} />
           </Pressable>}
         />
-      ) : <PageHeader title={pageTitle} leading={settingsPage && <BackLink title={sections[rootSection].title} onPress={goBack} />} />}
+      ) : <PageHeader title={workspace.infiniteFlow && page === "settings" ? "设置中心" : pageTitle}
+        leading={settingsPage ? <BackLink title={sections[rootSection].title} onPress={goBack} />
+          : workspace.infiniteFlow && page === "inbox" ? <BackLink title="聊天" onPress={() => showPage("topics")} /> : undefined}
+        trailing={workspace.infiniteFlow && page === "settings" ? <CloseButton accessibilityLabel="返回聊天" onPress={() => showPage("topics")} /> : undefined} />}
       <ScrollView
         onScrollBeginDrag={() => topicListRef.current?.close()}
         contentContainerStyle={[styles.content, layout.page]}
@@ -354,6 +427,8 @@ function Workspace() {
         {error && <Notice>{error}</Notice>}
         {workspace.error && <Notice>{workspace.error}</Notice>}
         {workspace.storageError && <Notice>{workspace.storageError}</Notice>}
+        {infiniteHome && (!workspace.ready || profile ? <ActivityIndicator accessibilityLabel="正在恢复持续会话" color={colors.accent} />
+          : <EmptyState icon="chat" title="暂无可用配置档案" />)}
         {topicListPage && (rows.length > 0 ? (
           <TopicList ref={topicListRef} key={archived ? "archive" : profile?.profile_id} rows={rows} archived={archived} busy={archiving}
             onOpen={({ id, newProfileId }) => router.push({ pathname: "/[page]", params: {
@@ -368,17 +443,7 @@ function Workspace() {
             setInboxItem(item);
             router.push({ pathname: "/[page]", params: { page: "inbox-item" } });
           }} />}
-        {page === "settings" && (
-          <>
-            <Group>
-              <Row title="配置档案" icon="settings" onPress={() => showPage("profiles")} />
-              <Row divided title="管理" icon="manage" onPress={() => showPage("manage")} />
-              <Row divided title="连接" value={connection} icon="link" onPress={() => showPage("connection")} />
-              <Row divided title="已归档会话" icon="archive" onPress={() => showPage("archive")} />
-              <Row divided title="版本信息" icon="info" onPress={() => showPage("version")} />
-            </Group>
-          </>
-        )}
+        {page === "settings" && <>{workspace.infiniteFlow && settingsNavigation}{applicationSettings}</>}
         {page === "version" && (
           <>
             <View>
@@ -458,20 +523,8 @@ function Workspace() {
       <View style={styles.frame}>
         {content}
       </View>
-      {page === "topics" && profilesExpanded && (
-        <ComposerSheet title="选择配置档案" closeLabel="关闭配置档案选择" onClose={() => setProfilesExpanded(false)}>
-          <ScrollView style={layout.profileList}>
-            {workspace.profiles.map((item) => (
-              <PickerRow key={item.profile_id} title={profileLabel(item)} leading={<ProfileAvatar profile={item} session={session} size={40} />} selected={item.profile_id === profile?.profile_id}
-                trailing={item.profile_id === profile?.profile_id ? "check" : undefined} disabled={false}
-                feedback={item.profile_id === profile?.profile_id ? false : undefined}
-                onPress={() => { setProfileId(item.profile_id); setProfilesExpanded(false); }} />
-            ))}
-            {workspace.profiles.length === 0 && <Text style={styles.muted}>暂无可用配置档案</Text>}
-          </ScrollView>
-        </ComposerSheet>
-      )}
-      {(!settingsPage || (managementPage && managementTabsVisible)) && (
+      {page === "topics" && profilePicker}
+      {!workspace.infiniteFlow && (!settingsPage || (managementPage && managementTabsVisible)) && (
         <View accessibilityRole="tablist" style={[layout.tabs, { borderColor: colors.edge, backgroundColor: colors.background }]}>
           {tabs.map((id) => {
             const { title, icon, activeIcon } = sections[id];
@@ -508,6 +561,10 @@ const layout = StyleSheet.create({
   connectionSummary: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, minHeight: 48, maxWidth: "100%" },
   dot: { width: 8, height: 8, borderRadius: 4 },
   profileList: { flexGrow: 0, flexShrink: 1 },
+  profileTitle: { alignItems: "center", gap: 5 },
+  profileName: { textAlign: "center" },
+  profileDots: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5 },
+  profileDot: { width: 5, height: 5, borderRadius: 3 },
   updateNotes: { gap: 8 },
   ruledRow: { borderBottomWidth: StyleSheet.hairlineWidth, minHeight: 56 },
   address: { borderRadius: 12, paddingHorizontal: 16, marginTop: 8 },

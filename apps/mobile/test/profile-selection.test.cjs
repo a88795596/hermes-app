@@ -11,10 +11,19 @@ function load(path) {
   new Function("exports", source)(exports);
   return exports;
 }
-const { selectProfile } = load("../src/profiles/selection.ts");
+const { selectProfile, adjacentProfile } = load("../src/profiles/selection.ts");
 const { profileLabel } = load("../src/ui/text.ts");
 const first = { profile_id: "first", label: "default" };
 const second = { profile_id: "second", label: "work", alias: "工作助手", is_default: true };
+
+test("左右滑动按档案顺序切换，首尾和单档案不越界", () => {
+  assert.equal(adjacentProfile([first, second], "first", 1), second);
+  assert.equal(adjacentProfile([first, second], "second", -1), first);
+  assert.equal(adjacentProfile([first, second], "first", -1), undefined);
+  assert.equal(adjacentProfile([first, second], "second", 1), undefined);
+  assert.equal(adjacentProfile([first], "first", 1), undefined);
+  assert.equal(adjacentProfile([], "missing", 1), undefined);
+});
 
 test("首页启动选择共享默认档案，临时切换优先，失效选择安全回退", () => {
   assert.equal(selectProfile([first, second]), second);

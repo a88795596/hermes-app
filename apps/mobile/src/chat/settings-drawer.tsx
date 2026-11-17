@@ -1,14 +1,14 @@
 import type { ReactNode } from "react";
-import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import Animated from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { haptic } from "../ui/haptics";
 import { motion, useReduceMotion } from "../ui/motion";
 import { OverlayModal } from "../ui/overlay";
 import { PageHeader } from "../ui/page-header";
-import { CloseButton, Icon, useTheme } from "../ui/theme";
+import { CloseButton, Icon, SectionLabel, useTheme } from "../ui/theme";
 
-export function SettingsDrawer({ busy, canWrite, reasoningLabel, onClose, onModel, onReasoning, children }: {
+export function SettingsDrawer({ busy, canWrite, reasoningLabel, onClose, onModel, onReasoning, children, settingsNavigation, applicationSettings }: {
   busy: boolean;
   canWrite: boolean;
   reasoningLabel: string;
@@ -16,16 +16,20 @@ export function SettingsDrawer({ busy, canWrite, reasoningLabel, onClose, onMode
   onModel: () => void;
   onReasoning: () => void;
   children?: ReactNode;
+  settingsNavigation?: ReactNode;
+  applicationSettings?: ReactNode;
 }) {
   const { colors, styles } = useTheme();
   const reduced = useReduceMotion();
   const { width } = useWindowDimensions();
-  const drawerWidth = Math.min(400, width - 32);
+  const drawerWidth = applicationSettings ? Math.min(680, width) : Math.min(400, width - 32);
+  const title = applicationSettings ? "设置中心" : "会话设置";
+  const closeLabel = `关闭${title}`;
   const close = () => { if (!busy) onClose(); };
   return <OverlayModal animationType="none" statusBarTranslucent onRequestClose={close}>
     <View style={drawer.overlay}>
       <Animated.View style={[StyleSheet.absoluteFill, !reduced && motion.fade]}>
-        <Pressable accessibilityRole="button" accessibilityLabel="关闭会话设置" accessibilityState={{ disabled: busy }}
+        <Pressable accessibilityRole="button" accessibilityLabel={closeLabel} accessibilityState={{ disabled: busy }}
           disabled={busy} style={StyleSheet.absoluteFill} onPress={close} />
       </Animated.View>
       <Animated.View style={[drawer.panel, { width: drawerWidth, backgroundColor: colors.background }, !reduced && {
@@ -35,8 +39,10 @@ export function SettingsDrawer({ busy, canWrite, reasoningLabel, onClose, onMode
         <SafeAreaView style={styles.frame} edges={["top", "bottom", "right"]}
           accessibilityViewIsModal importantForAccessibility="yes">
           {children ?? <>
-            <PageHeader title="会话设置" trailing={<CloseButton accessibilityLabel="关闭会话设置" onPress={close} />} />
-            <View style={drawer.content}>
+            <PageHeader title={title} trailing={<CloseButton accessibilityLabel={closeLabel} disabled={busy} onPress={close} />} />
+            <ScrollView contentContainerStyle={drawer.content}>
+              {settingsNavigation}
+              {applicationSettings && <View style={drawer.section}><SectionLabel>当前会话</SectionLabel></View>}
               {([
                 { title: "模型", icon: "model", onPress: onModel },
                 { title: "思考强度", icon: "reasoning", value: reasoningLabel, onPress: onReasoning },
@@ -50,7 +56,8 @@ export function SettingsDrawer({ busy, canWrite, reasoningLabel, onClose, onMode
                 {"value" in item && <Text numberOfLines={2} style={[styles.caption, drawer.value]}>{item.value}</Text>}
                 <Icon name="chevron" size={15} color={colors.accent} />
               </Pressable>)}
-            </View>
+              {applicationSettings && <View style={drawer.section}><SectionLabel>应用</SectionLabel>{applicationSettings}</View>}
+            </ScrollView>
           </>}
         </SafeAreaView>
       </Animated.View>
@@ -61,7 +68,8 @@ export function SettingsDrawer({ busy, canWrite, reasoningLabel, onClose, onMode
 const drawer = StyleSheet.create({
   overlay: { flex: 1, alignItems: "flex-end" },
   panel: { flex: 1 },
-  content: { paddingHorizontal: 24 },
+  content: { paddingHorizontal: 24, paddingBottom: 24 },
+  section: { marginTop: 24 },
   row: { flexDirection: "row", alignItems: "center", minHeight: 64, paddingVertical: 12, gap: 12,
     borderBottomWidth: StyleSheet.hairlineWidth },
   label: { flex: 1 },

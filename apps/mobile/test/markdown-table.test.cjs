@@ -47,6 +47,7 @@ function mountTable(platform = "ios", failLandscape = false) {
       useWindowDimensions: () => ({ width: 390, height: 844, fontScale: 1, scale: 3 }),
     },
     "react-native-safe-area-context": { SafeAreaView: "SafeAreaView", SafeAreaProvider: "SafeAreaProvider" },
+    "react-native-gesture-handler": { ScrollView: "HorizontalScrollView" },
     "expo-screen-orientation": {
       OrientationLock: orientation,
       lockAsync: async (lock) => {
@@ -93,6 +94,14 @@ function find(node, predicate) {
 
 const modal = (tree) => find(tree, (node) => node.type === "Modal" && node.props.visible !== false);
 const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+test("横向表格由原生滚动手势持有触摸，阻止外层切换档案", () => {
+  const table = mountTable();
+  const scroll = find(table.render(), (node) => node.type === "HorizontalScrollView");
+  assert.ok(scroll);
+  assert.equal(scroll.props.horizontal, true);
+  assert.equal(scroll.props.disallowInterruption, true);
+});
 
 test("表格 Modal 完成展示后才锁定横屏，关闭按钮恢复竖屏", async () => {
   for (const platform of ["ios", "android"]) {

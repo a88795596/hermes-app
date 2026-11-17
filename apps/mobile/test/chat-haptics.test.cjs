@@ -54,6 +54,7 @@ function mount(file, name, props, speech, reduceMotion = true) {
       };
       case "./model-picker": return { ModelPicker: "ModelPicker" };
       case "./settings-drawer": return { SettingsDrawer: "SettingsDrawer" };
+      case "../profiles/swipe": return { ProfileSwipe: "ProfileSwipe" };
       case "./answer-markdown": return { AnswerMarkdown: "AnswerMarkdown" };
       case "./assistant-stream-border": return { AssistantStreamBorder: "AssistantStreamBorder" };
       case "./message-attachments": return { MessageAttachments: "MessageAttachments" };
@@ -108,6 +109,39 @@ function conversation(enqueue, draft = "测试消息", { messages = [], workspac
     ...props,
   }, speech, reduceMotion);
 }
+
+test("无限会话横划在录音和弹层期间禁用，输入栏不在手势区域", () => {
+  for (const busy of [true, false]) {
+    const app = conversation(async () => {}, "", { onSwitchProfile() {},
+      speech: { available: true, state: busy ? "recording" : "idle", busy } });
+    const tree = app.render();
+    const swipe = find(tree, (node) => node.type === "ProfileSwipe");
+    assert.ok(swipe);
+    assert.equal(swipe.props.enabled, !busy);
+    assert.equal(find(swipe, (node) => node.props.accessibilityLabel === "消息"), undefined);
+    assert.ok(find(tree, (node) => node.props.accessibilityLabel === "消息"));
+    assert.equal(find(app.render({ settingsOpen: true }), (node) => node.type === "ProfileSwipe").props.enabled, false);
+  }
+});
+
+test("失败的无限会话可确认归档恢复，不改写草稿和待发消息", async () => {
+  const archived = [];
+  const screen = conversation(async () => assert.fail("不能发送失败会话"), "保留草稿", {
+    topic: { status: "error", error: "创建结果待确认" },
+    onDraftChange: () => assert.fail("恢复不丢弃旧草稿"),
+    workspace: { streamTopic: { id: "topic", profileId: "daily" },
+      setTopicArchived: async (...args) => archived.push(args) },
+  });
+  find(screen.render(), (node) => node.props.title === "恢复会话").props.onPress();
+  assert.equal(archived.length, 0, "不自动重建结果待确认的会话");
+  assert.match(screen.alerts[0].message, /历史记录、草稿和待发消息/);
+  screen.alerts[0].buttons.find((button) => button.text === "恢复").onPress();
+  await flush();
+  assert.deepEqual(archived, [["topic", true]]);
+  assert.equal(find(screen.render({ topic: { status: "ready" } }), (node) => node.props.title === "恢复会话"), undefined);
+  const regular = conversation(async () => {}, "", { topic: { status: "error" } });
+  assert.equal(find(regular.render(), (node) => node.props.title === "恢复会话"), undefined);
+});
 
 test("原生命令单独执行，保留菜单外草稿且不进入模型消息队列", async () => {
   const screen = conversation(async () => assert.fail("命令不能进入消息队列"), "保留草稿", {

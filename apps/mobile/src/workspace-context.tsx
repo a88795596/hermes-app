@@ -17,9 +17,10 @@ export type Section = "topics" | "inbox" | "settings";
 function useSignedInWorkspace(session: Session, onSignOut: () => Promise<void>) {
   const params = useGlobalSearchParams<{ page?: string; topicId?: string; newProfileId?: string }>();
   const topicId = params.page === "conversation" && typeof params.topicId === "string" ? params.topicId : null;
-  const workspace = useWorkspace(session, topicId, topicId !== null && typeof params.newProfileId === "string");
   const [section, setSection] = useState<Section>("topics");
   const [profileId, setProfileId] = useState<string>();
+  const workspace = useWorkspace(session, topicId, topicId !== null && typeof params.newProfileId === "string",
+    !params.page && section === "topics" ? { profileId } : undefined);
   const [inboxProfileId, setInboxProfileId] = useState<string>();
   const [inboxItem, setInboxItem] = useState<InboxItem>();
   const [drafts, setDrafts] = useState<Record<string, string>>({});

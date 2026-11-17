@@ -11,7 +11,7 @@ function renderDrawer(props, reduced = false) {
   const exports = {};
   const modules = {
     "react/jsx-runtime": { jsx, jsxs: jsx, Fragment: "Fragment" },
-    "react-native": { Modal: "Modal", Pressable: "Pressable", Text: "Text", View: "View", Switch: "Switch",
+    "react-native": { Modal: "Modal", Pressable: "Pressable", Text: "Text", View: "View", Switch: "Switch", ScrollView: "ScrollView",
       StyleSheet: { create: (styles) => styles, absoluteFill: {}, hairlineWidth: 1 }, useWindowDimensions: () => ({ width: 390 }) },
     "react-native-reanimated": { __esModule: true, default: { View: "Animated.View" } },
     "react-native-safe-area-context": { SafeAreaView: "SafeAreaView" },
@@ -19,7 +19,7 @@ function renderDrawer(props, reduced = false) {
     "../ui/haptics": { haptic() {} },
     "../ui/motion": { motion: { push: { animationDuration: 210 }, fade: {} }, useReduceMotion: () => reduced },
     "../ui/page-header": { PageHeader: "PageHeader" },
-    "../ui/theme": { Icon: "Icon", CloseButton: "CloseButton", useTheme: () => ({ colors: {}, styles: {} }) },
+    "../ui/theme": { Icon: "Icon", CloseButton: "CloseButton", SectionLabel: "SectionLabel", useTheme: () => ({ colors: {}, styles: {} }) },
   };
   new Function("exports", "require", source)(exports, (name) => {
     assert.ok(name in modules, name);
@@ -71,4 +71,17 @@ test("减少动态效果时关闭右侧滑入动画", () => {
     assert.equal(style.width, 358);
     assert.equal(Boolean(style.animationName), !reduced);
   }
+});
+
+test("设置中心集中导航和应用设置，当前会话控件仍可操作", () => {
+  let model = 0;
+  const settingsNavigation = { type: "Navigation", props: { children: "收件箱" } };
+  const applicationSettings = { type: "Application", props: { children: "无限会话流" } };
+  const tree = renderDrawer({ settingsNavigation, applicationSettings, onModel: () => model++ });
+  assert.equal(find(tree, (node) => node.type === "PageHeader").props.title, "设置中心");
+  assert.equal(find(tree, (node) => node.type === "Navigation"), settingsNavigation);
+  assert.equal(find(tree, (node) => node.type === "Application"), applicationSettings);
+  assert.ok(find(tree, (node) => node.type === "ScrollView"));
+  find(tree, (node) => node.props.accessibilityLabel === "模型").props.onPress();
+  assert.equal(model, 1);
 });

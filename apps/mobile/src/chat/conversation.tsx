@@ -8,6 +8,7 @@ import { MAX_ATTACHMENTS, type AttachmentUpload, type Control, type Message, typ
 import type { Session } from "../auth/session";
 import type { useWorkspace } from "../sync/use-workspace";
 import { haptic } from "../ui/haptics";
+import { useAlert } from "../ui/alerts";
 import { motion, useReduceMotion } from "../ui/motion";
 import { profileLabel } from "../ui/text";
 import { Action, CloseButton, Field, Icon, Notice, useTheme } from "../ui/theme";
@@ -19,6 +20,7 @@ import { ModelPicker } from "./model-picker";
 import { NativeCommandSheet } from "./native-command";
 import { MessageAttachments } from "./message-attachments";
 import { SettingsDrawer } from "./settings-drawer";
+import { ProfileSwipe } from "../profiles/swipe";
 import { useSpeechInput } from "./use-speech-input";
 
 const messageStatus: Record<Message["status"], string> = {
@@ -215,7 +217,7 @@ function ControlPrompt({
 
 export function Conversation({
   id, topic, newProfileId, workspace, session, draft, onDraftChange, attachments, onAttachmentsChange,
-  settingsOpen, onCloseSettings, targetMessageId,
+  settingsOpen, onCloseSettings, targetMessageId, settingsNavigation, applicationSettings, onSwitchProfile, onSwitchBlockedChange,
 }: {
   id: string;
   topic?: Topic;
@@ -227,10 +229,15 @@ export function Conversation({
   attachments: AttachmentUpload[];
   settingsOpen: boolean;
   onCloseSettings: () => void;
+  settingsNavigation?: React.ReactNode;
+  applicationSettings?: React.ReactNode;
+  onSwitchProfile?: (direction: -1 | 1) => void;
+  onSwitchBlockedChange?: (blocked: boolean) => void;
   onDraftChange: (value: string) => void;
   onAttachmentsChange: (value: AttachmentUpload[]) => void;
 }) {
   const { colors, styles } = useTheme();
+  const { alert } = useAlert();
   const reduced = useReduceMotion();
   const { width } = useWindowDimensions();
   const { top: safeAreaTop } = useSafeAreaInsets();
@@ -240,6 +247,8 @@ export function Conversation({
   const focusTarget = useRef(Boolean(targetMessageId));
   const messageOffsets = useRef(new Map<string, number>());
   const [sending, setSending] = useState(false);
+  const [recovering, setRecovering] = useState(false);
+  const recoveryInFlight = useRef(false);
   const [refreshing, setRefreshing] = useState(false);
   const enqueueing = useRef(false);
   const [stopping, setStopping] = useState(false);
@@ -301,6 +310,25 @@ export function Conversation({
     : reasoningStatus === "pending" ? "切换中" : reasoningStatus === "unknown" ? "待确认"
     : reasoning === null ? "跟随配置档案" : reasoningLabels[reasoning];
   const currentProfile = workspace.profiles.find((item) => item.profile_id === (topic?.profile_id ?? newProfileId));
+  const switchBlocked = speech.busy || picking || sending || recovering || openingSkills || !!nativeCommand;
+  useEffect(() => {
+    onSwitchBlockedChange?.(switchBlocked);
+    return () => onSwitchBlockedChange?.(false);
+  }, [onSwitchBlockedChange, switchBlocked]);
+
+  function recoverStream() {
+    alert("恢复会话", "将当前会话归档后重新连接。历史记录、草稿和待发消息会保留。", [
+      { text: "取消", style: "cancel" },
+      { text: "恢复", onPress: () => {
+        if (recoveryInFlight.current) return;
+        recoveryInFlight.current = true;
+        setRecovering(true);
+        void workspace.setTopicArchived(id, true).catch((failure: unknown) => {
+          setError(failure instanceof Error ? failure.message : "无法恢复会话，请重试。");
+        }).finally(() => { recoveryInFlight.current = false; setRecovering(false); });
+      } },
+    ]);
+  }
 
   const openLink = useCallback((url: string) => {
     haptic("light");
@@ -511,6 +539,7 @@ export function Conversation({
       {nativeCommand && <NativeCommandSheet key={nativeCommand.requestId} {...nativeCommand} onOpenLink={openLink}
         onClose={() => { commandOpen.current = false; setNativeCommand(undefined); }}
         onRequest={(requestId, command, signal, approval) => workspace.requestNativeCommand(id, requestId, command, signal, approval)} />}
+      <ProfileSwipe onSwitch={onSwitchProfile} enabled={!!onSwitchProfile && !switchBlocked && !settingsOpen && !menu && !modelPicker}>
       <ScrollView
         ref={scroll}
         contentContainerStyle={[chat.column, chat.transcript]}
@@ -546,11 +575,13 @@ export function Conversation({
           </View>
         )}
         {topic?.status === "error" && <Notice>{topic.error ?? "Hermes 无法创建此会话。"}</Notice>}
+        {topic?.status === "error" && workspace.streamTopic?.id === id && <Action title={recovering ? "恢复中…" : "恢复会话"}
+          icon="refresh" disabled={!canControl || recovering} onPress={recoverStream} />}
         {(topic?.status === "ready" || (!topic && newProfileId)) && messages.length === 0 && pending.length === 0 && controls.length === 0 && (
           <View style={chat.empty}>
             <Icon name="chat" size={36} color={colors.accent} />
             <Text accessibilityRole="header" style={[styles.heading, chat.emptyTitle]}>开始对话</Text>
-            <Text style={[styles.muted, chat.emptyDescription]}>给 Hermes 发送一条消息。</Text>
+            {workspace.streamTopic?.id !== id && <Text style={[styles.muted, chat.emptyDescription]}>给 Hermes 发送一条消息。</Text>}
           </View>
         )}
         {messages.map((message, index) => {
@@ -628,6 +659,7 @@ export function Conversation({
           </Animated.View>
         ))}
       </ScrollView>
+      </ProfileSwipe>
       <View style={[chat.column, chat.composer, { borderTopColor: colors.edge }]}>
         {(error ?? speech.error) && <Notice>{error ?? speech.error}</Notice>}
         {commandNotice && <Text accessibilityLiveRegion="polite" style={styles.muted}>{commandNotice}</Text>}
@@ -742,6 +774,7 @@ export function Conversation({
         </View>
       </View>
       {settingsOpen ? <SettingsDrawer busy={settingsBusy} canWrite={canWrite} reasoningLabel={reasoningLabel}
+        settingsNavigation={settingsNavigation} applicationSettings={applicationSettings}
         onModel={() => setModelPicker(true)} onReasoning={() => setMenu("reasoning")}
         onClose={() => { setModelPicker(false); setMenu(undefined); onCloseSettings(); }}>
         {modelSelection || reasoningSelection || undefined}
