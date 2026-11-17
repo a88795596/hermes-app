@@ -508,7 +508,7 @@ export function createHttpConnector({ url, token, send, spool, downloadAttachmen
           }
           if (!current() || shutdown.signal.aborted) throw new NativeCommandFailure('连接已中断，命令尚未执行。');
           if (entry.name === 'new' || entry.name === 'reset') await stopForReset(bound);
-          if (['undo', 'compress', 'new', 'reset'].includes(entry.name)) {
+          if (['undo', 'compress', 'new', 'reset', 'fast'].includes(entry.name)) {
             pendingNative = { commandId: command_id, name: entry.name, binding: bound };
             try { spool.beginNative(pendingNative); }
             catch { pendingNative = undefined; throw new NativeCommandFailure('请等待当前会话任务结束并确认结果后再执行此命令。'); }
@@ -540,7 +540,7 @@ export function createHttpConnector({ url, token, send, spool, downloadAttachmen
             }
             dispatched = true;
             const native_result = await native.execute(profile_ref, bound.sessionId, command_id, command.body.command,
-              shutdown.signal, command.body.approval);
+              shutdown.signal, command.body.approval, entry.name === 'fast' ? spool.modelSelection(topic_id)?.model : undefined);
             validateNativeMutation(entry.name, native_result);
             receipt = result(command_id, 'ok', { native_result });
           }
@@ -612,22 +612,25 @@ export function createHttpConnector({ url, token, send, spool, downloadAttachmen
           receipt = result(command_id, 'ok');
         }
       } else if (command.kind === 'submit') {
-        let systemPrompt: string;
+        let runtime: Awaited<ReturnType<NativeCommands['runtime']>>;
         try {
-          systemPrompt = await native.runtime(profile_ref, bound.sessionId, shutdown.signal);
+          runtime = await native.runtime(profile_ref, bound.sessionId, shutdown.signal);
           spool.markNativeRuntimeSupported(profile_ref);
         } catch (error) {
-          if (error instanceof QueryUnavailable && !spool.nativeRuntimeSupported(profile_ref)) systemPrompt = '';
+          if (error instanceof QueryUnavailable && !spool.nativeRuntimeSupported(profile_ref)) runtime = { system_prompt: '' };
           else {
-            receipt = result(command_id, 'error', { error: '无法读取 Hermes 当前人格配置，请检查原生命令插件连接后重试。' });
+            receipt = result(command_id, 'error', { error: '无法读取 Hermes 当前会话运行配置，请检查原生命令插件连接后重试。' });
             throw new Error('Native runtime configuration unavailable before admission');
           }
         }
         const effort = spool.reasoningEffort(topic_id);
         const { response, data } = await json(profile_ref, '/v1/runs', {
           session_id: bound.sessionId, input: input ?? command.body.text, ...spool.modelSelection(topic_id),
-          instructions: [systemPrompt, deliveryInstructions(bound.profileRef, bound.sessionId)].filter(Boolean).join('\n\n'),
-          ...(effort && { model_options: { reasoning_effort: effort } }),
+          instructions: [runtime.system_prompt, deliveryInstructions(bound.profileRef, bound.sessionId)].filter(Boolean).join('\n\n'),
+          ...((effort || runtime.service_tier !== undefined) && { model_options: {
+            ...(effort && { reasoning_effort: effort }),
+            ...(runtime.service_tier !== undefined && { service_tier: runtime.service_tier }),
+          } }),
         }, command_id);
         const id = string(data?.run_id);
         if (response.status === 202 && id && runId.test(id)) {

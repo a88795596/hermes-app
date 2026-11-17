@@ -67,6 +67,30 @@ class CommandReceiptsTest(unittest.TestCase):
         spool.finish_command(self.path, "work", "request-1", result)
         self.assertEqual(spool.read_command(self.path, "work", "request-1", "mobile_session"), result)
 
+    def test_fast_selection_and_receipt_are_durable_isolated_and_follow_compression_only(self):
+        result = {"ok": True, "output": "快速模式已切换"}
+        spool.start_command(self.path, "work", "fast-1", "mobile_session", "/fast on")
+        spool.finish_command(self.path, "work", "fast-1", result, fast_selection="priority")
+        importlib.reload(spool)
+        self.assertEqual(spool.fast_selection(self.path, "work", "mobile_session"), "priority")
+        self.assertIsNone(spool.fast_selection(self.path, "other", "mobile_session"))
+        self.assertIsNone(spool.fast_selection(self.path, "work", "other_session"))
+        spool.start_command(self.path, "work", "compress", "mobile_session", "/compress")
+        spool.finish_command(self.path, "work", "compress", {**result, "native_result": {"session_id": "continued"}})
+        self.assertEqual(spool.fast_selection(self.path, "work", "continued"), "priority")
+        spool.start_command(self.path, "work", "normal", "continued", "/fast off")
+        spool.finish_command(self.path, "work", "normal", result, fast_selection="normal")
+        self.assertEqual(spool.fast_selection(self.path, "work", "continued"), "normal")
+        spool.start_command(self.path, "work", "new", "continued", "/new")
+        spool.finish_command(self.path, "work", "new", {**result, "native_result": {"session_id": "new", "reset": True}})
+        self.assertIsNone(spool.fast_selection(self.path, "work", "new"))
+        spool.start_command(self.path, "work", "global", "continued", "/fast on --global")
+        spool.finish_command(self.path, "work", "global", result, fast_selection=None)
+        self.assertIsNone(spool.fast_selection(self.path, "work", "continued"))
+        with self.assertRaises(ValueError):
+            spool.finish_command(self.path, "other", "fast-1", result, fast_selection="normal")
+        self.assertIsNone(spool.fast_selection(self.path, "other", "mobile_session"))
+
 
 if __name__ == "__main__":
     unittest.main()

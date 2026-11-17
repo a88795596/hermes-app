@@ -23,7 +23,7 @@
 插件目前兼容以下原生命令，别名与参数仍交给 Hermes 的解析器和处理程序：
 
 - 原生格式化：`/help`、`/commands`、`/version`、`/profile`、`/bundles`。
-- 当前 API 会话：`/status`、`/usage`、`/title`、`/context`、`/diff`、`/undo`、`/new`（包括原生 `/reset` 别名）、`/compress`。
+- 当前 API 会话：`/status`、`/usage`、`/title`、`/context`、`/diff`、`/undo`、`/new`（包括原生 `/reset` 别名）、`/compress`、`/fast`。
 - 当前配置档案：`/personality`、`/memory`、`/skills` 的原生待审写入管理、`/insights`。命令仍受原生配置可用性控制；App 的技能选择器保持独立入口。
 - 网关控制：`/restart`。
 
@@ -31,7 +31,11 @@
 
 `/new` 和 `/undo` 保留原生破坏性命令确认。需要确认时只返回 `native_result.confirmation`，尚未修改历史；App 显示仅本次、始终允许和取消。确认后以新 `request_id` 提交相同命令及 `approval:"once"` 或 `approval:"always"`，由原生确认回调完成执行和永久偏好保存。`/new` 与原生网关一致，可能先停止正在运行的回复再显示确认；取消保留历史，但不恢复已停止的运行。
 
-`/personality` 等档案命令在目标 `HERMES_HOME` 下运行原版 Hermes 处理程序，避免多档案共用进程的模块级路径写入默认档案。连接器在每轮发送前调用私有 `{"kind":"runtime","profile_ref":"default","session_id":"..."}`，读取原生系统提示加载器返回的 `{"system_prompt":"..."}` 并合并到 API instructions，因此人格更改会影响后续回复。尚未提供此能力的旧插件保留原有聊天；一旦确认该档案支持运行配置读取，连接器会持久记录此能力，此后的读取故障会阻止发送，不静默丢弃人格。这份运行配置只留在 Hermes 主机与连接器之间。
+`/personality` 等档案命令在目标 `HERMES_HOME` 下运行原版 Hermes 处理程序，避免多档案共用进程的模块级路径写入默认档案。连接器在每轮发送前调用私有 `{"kind":"runtime","profile_ref":"default","session_id":"..."}`，读取原生系统提示加载器返回的 `system_prompt` 并合并到 API instructions，因此人格更改会影响后续回复。该响应还包含 `service_tier`（`"priority"` 或显式 `null`），连接器将其与思考强度一起传入 Runs 的 `model_options`。旧插件可以省略此字段。尚未提供 runtime 能力的旧插件保留原有聊天；一旦确认该档案支持运行配置读取，连接器会持久记录此能力，此后的读取故障会阻止发送。这份运行配置只留在 Hermes 主机与连接器之间。
+
+App 点击 `/fast` 后选择快速、普通或查看状态，再选择当前会话或保存为默认，确认后发送完整指令。HTTP 模式使用原版 CLI 处理程序解析 `fast/on`、`normal/off`、`status` 和 `--global`；连接器将当前选中的 `model` 随命令传给插件，没有覆盖时从原生 API 会话解析。会话档位与回执一起保存在插件私有 SQLite，压缩续接继承档位，新建会话恢复默认；`--global` 写入当前档案的原生配置。运行中的回复及未确认的快速模式命令会阻止下一次档位修改。
+
+插件通过 Hermes 原生 `llm_request` 中间件，将 API Run 的实际 `service_tier` 转换成提供商请求参数，兼容只保存档位、尚未组装请求参数的原生 API 版本。模型能力及 Anthropic 的速度参数、OAuth beta 请求头均复用原生实现；按实际运行对象和会话数据库隔离档案。缺少中间件接口的版本不开放 HTTP `/fast`。WebSocket 会话由连接器调用原生 `config.get/config.set`，保持原生模型校验。发布此功能需要同时更新插件、Connector 和 App；BFF 协议无变更，App 可使用 OTA。
 
 `/restart` 通过 `BasePlatformAdapter.handle_message()` 进入真正的网关命令分发，保留原生排空、去重、权限检查和重启通知，不调用强制重启 HTTP 接口。它使用独立控制来源，回复目标仍是请求中的移动端会话。会话与档案兼容命令也遵守原生 `command:<name>` 钩子的拒绝与接管结果；同名命令参数改写会重新校验，跨命令改写会提示重新提交，以免回执类型与实际副作用不一致。`/goal` 尚未接通 API 回合的持续执行生命周期，不会仅写目标状态就声称支持。其余命令由连接器依据原生能力进一步支持；不支持的命令不会作为普通提示词发送给模型。
 

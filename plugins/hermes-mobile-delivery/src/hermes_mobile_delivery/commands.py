@@ -12,7 +12,7 @@ from .profile_commands import PROFILE_COMMANDS
 
 
 FORMATTERS = frozenset({"help", "commands", "version", "profile", "bundles"})
-SESSION_COMMANDS = NATIVE_SESSION_COMMANDS | {"compress"}
+SESSION_COMMANDS = NATIVE_SESSION_COMMANDS | {"compress", "fast"}
 SUPPORTED = FORMATTERS | SESSION_COMMANDS | PROFILE_COMMANDS | {"restart"}
 REPLY_TIMEOUT = 10
 MAX_OUTPUT_BYTES = 128 * 1024
@@ -35,15 +35,16 @@ def output_result(text):
     return {"ok": True, "output": output}
 
 
-def catalog():
+def catalog(fast_supported):
     from hermes_cli.commands import COMMAND_REGISTRY, _is_gateway_available
 
+    supported = SUPPORTED if fast_supported else SUPPORTED - {"fast"}
     return {"commands": [
         {"name": cmd.name, "description": cmd.description, "category": cmd.category,
          "aliases": list(cmd.aliases), **({"args_hint": cmd.args_hint} if cmd.args_hint else {}),
          **({"subcommands": list(cmd.subcommands)} if getattr(cmd, "subcommands", ()) else {}),
-         "supported": cmd.name in SUPPORTED,
-         **({"unavailable_reason": "当前连接方式暂不支持此原生命令。"} if cmd.name not in SUPPORTED else {})}
+         "supported": cmd.name in supported,
+         **({"unavailable_reason": "当前连接方式暂不支持此原生命令。"} if cmd.name not in supported else {})}
         for cmd in COMMAND_REGISTRY if _is_gateway_available(cmd)
     ]}
 
@@ -113,14 +114,14 @@ async def dispatch(adapter, payload, configured):
         return failure("命令请求与当前 Hermes 配置档案不匹配。")
     kind = payload.get("kind")
     allowed = {"kind", "profile_ref"} if kind == "catalog" else {
-        "kind", "profile_ref", "request_id", "session_id"} | ({"command", "approval"} if kind == "execute" else set())
+        "kind", "profile_ref", "request_id", "session_id"} | ({"command", "approval", "model"} if kind == "execute" else set())
     if kind == "runtime":
         allowed = {"kind", "profile_ref", "session_id"}
     if set(payload) - allowed or kind not in {"catalog", "execute", "result", "runtime"}:
         return failure("命令请求包含不支持的字段或操作。")
     if kind == "catalog":
         try:
-            return catalog()
+            return catalog(adapter._fast_requests_supported)
         except Exception:
             return failure("无法读取 Hermes 原生命令目录。")
 
@@ -134,9 +135,13 @@ async def dispatch(adapter, payload, configured):
             prompt = await asyncio.to_thread(GatewayRunner._load_ephemeral_system_prompt)
             if not isinstance(prompt, str) or len(prompt.encode("utf-8")) > MAX_OUTPUT_BYTES or "\x00" in prompt:
                 return failure("Hermes 原生系统提示格式无效。")
-            return {"system_prompt": prompt}
+            from .fast_commands import runtime_tier
+            tier = await asyncio.to_thread(runtime_tier, configured[4], configured[0], payload.get("session_id", ""))
+            if tier == "priority" and not adapter._fast_requests_supported:
+                return failure("当前 Hermes 版本未提供快速模式所需的请求中间件。")
+            return {"system_prompt": prompt, "service_tier": tier}
         except Exception:
-            return failure("无法读取 Hermes 当前配置档案的系统提示。")
+            return failure("无法读取 Hermes 当前会话的运行配置。")
 
     if kind == "result":
         try:
@@ -156,6 +161,7 @@ async def dispatch(adapter, payload, configured):
 
     command, request_id, session_id = (payload.get(key) for key in ("command", "request_id", "session_id"))
     approval = payload.get("approval")
+    model = payload.get("model")
     try:
         if (not isinstance(command, str) or not COMMAND.fullmatch(command)
                 or len(command.encode("utf-8")) > 8 * 1024
@@ -168,6 +174,11 @@ async def dispatch(adapter, payload, configured):
         definition = resolve_command(pieces[0][1:])
         if not definition or not _is_gateway_available(definition) or definition.name not in SUPPORTED:
             return failure("当前连接方式不支持执行此原生命令。")
+        if definition.name == "fast" and not adapter._fast_requests_supported:
+            return failure("当前 Hermes 版本未提供快速模式所需的请求中间件。")
+        if "model" in payload and (definition.name != "fast" or not isinstance(model, str) or not model.strip()
+                or len(model.encode("utf-8")) > 512 or any(ord(char) < 32 or ord(char) == 127 for char in model)):
+            return failure("快速模式的会话模型无效。")
         source = SessionSource(platform=adapter.platform, chat_id=session_id, chat_type="dm",
             user_id="mobile-api", user_name="Hermes 移动端", profile=adapter._command_profile, message_id=request_id)
         check = getattr(getattr(adapter, "gateway_runner", None), "_check_slash_access", None)
@@ -177,7 +188,7 @@ async def dispatch(adapter, payload, configured):
             return failure(str(denied))
         if definition.name == "restart" and not getattr(adapter, "_message_handler", None):
             return failure("Hermes 网关尚未连接，无法执行重启命令。")
-        if (definition.name in {"undo", "compress", "new"}
+        if (definition.name in {"undo", "compress", "new", "fast"}
                 and any(current_session == session_id and not task.done()
                         for current_session, task in adapter._command_tasks.values())):
             return failure("当前会话仍在处理原生命令，请等待原请求完成。")
@@ -185,6 +196,8 @@ async def dispatch(adapter, payload, configured):
             return failure("Hermes 正在处理其他命令，请稍后重试。")
         profile, _, _, _, path = configured
         fingerprint = command if approval is None else json.dumps([command, approval], ensure_ascii=False)
+        if model is not None:
+            fingerprint = json.dumps([command, approval, model], ensure_ascii=False)
         claimed, prior = await asyncio.to_thread(start_command, path, profile, request_id, session_id, fingerprint)
         if not claimed:
             return prior
@@ -220,6 +233,9 @@ async def dispatch(adapter, payload, configured):
                 intercepted = await command_hook_result(adapter, event, definition.name)
                 if intercepted is not None:
                     result = intercepted
+                elif definition.name == "fast":
+                    from .fast_commands import execute_fast_command
+                    result = await execute_fast_command(adapter, event, path, model)
                 elif definition.name == "compress":
                     from .compression import execute_compression
                     result = await execute_compression(adapter, event)
@@ -239,7 +255,8 @@ async def dispatch(adapter, payload, configured):
             except Exception:
                 result = failure("无法确认 Hermes 命令结果，请查询原请求回执。", unknown=True)
             try:
-                await asyncio.to_thread(finish_command, path, profile, request_id, result)
+                selection = {"fast_selection": result.pop("fast_selection")} if definition.name == "fast" and "fast_selection" in result else {}
+                await asyncio.to_thread(finish_command, path, profile, request_id, result, **selection)
             except Exception:
                 return failure("无法保存 Hermes 命令回执，请勿重新执行。", unknown=True)
             return result

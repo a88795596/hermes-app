@@ -235,19 +235,20 @@ test('compress 续接原子更新绑定并保持 HTTP transport，未知结果�
   assert.match(String(app.calls.find(({ path }) => path.endsWith('/v1/runs'))?.body.instructions), /^用原生人格回答\n\n/u);
 });
 
-test('原生变更与 submit 同话题串行，未知变更 fence 不允许新提交越过', async (t) => {
+for (const name of ['compress', 'fast']) test(`${name} 与 submit 同话题串行，未知结果不允许新提交越过`, async (t) => {
   const app = await harness(t);
-  app.catalog.find(({ name }) => name === 'compress')!.supported = true;
-  app.reply({ ok: false, status: 'unknown', error: '仍在压缩' });
+  if (name === 'fast') app.catalog.push(entry('fast', true));
+  else app.catalog.find((entry) => entry.name === name)!.supported = true;
+  app.reply({ ok: false, status: 'unknown', error: '原生命令仍在执行' });
   const release = app.holdExecution();
-  const request = app.command('/compress');
-  const compressing = app.invoke(request);
+  const request = app.command(name === 'fast' ? '/fast fast' : '/compress');
+  const executing = app.invoke(request);
   const submit = { ...request, command_id: randomUUID(), kind: 'submit', body: { submission_id: randomUUID(), text: '继续' } } satisfies Command;
   const submitting = app.invoke(submit);
   for (let count = 0; count < 50 && !app.calls.some(({ body }) => body.kind === 'execute'); count++) await delay(5);
   assert.equal(app.spool.command(submit.command_id), undefined);
   release();
-  await Promise.all([compressing, submitting]);
+  await Promise.all([executing, submitting]);
   assert.equal(app.calls.some(({ path }) => path.endsWith('/v1/runs')), false);
   assert.equal(JSON.parse(app.spool.command(submit.command_id)!.result!).status, 'error');
 });
@@ -328,6 +329,40 @@ test('每轮读取原生人格并与投递指令合并，读取失败不会提�
   await app.invoke(failed);
   assert.equal(JSON.parse(app.spool.command(failed.command_id)!.result!).status, 'error');
   assert.equal(app.calls.filter(({ path }) => path.endsWith('/v1/runs')).length, 2);
+});
+
+test('HTTP fast 档位随每轮原生配置送入 run，普通模式显式清除优先档且保留思考参数', async (t) => {
+  const app = await harness(t);
+  const selection = { ...app.command('/unused'), kind: 'select_reasoning', body: { effort: 'high' } } satisfies Command;
+  await app.invoke(selection);
+  for (const tier of ['priority', null]) {
+    app.runtime({ system_prompt: '当前人格', service_tier: tier });
+    const submit = { ...app.command('/unused'), kind: 'submit', body: { submission_id: randomUUID(), text: '你好' } } satisfies Command;
+    await app.invoke(submit);
+    assert.deepEqual(app.calls.filter(({ path }) => path.endsWith('/v1/runs')).at(-1)?.body.model_options,
+      { reasoning_effort: 'high', service_tier: tier });
+  }
+  app.runtime({ system_prompt: '当前人格', service_tier: 'unverified-tier' });
+  const invalid = { ...app.command('/unused'), kind: 'submit', body: { submission_id: randomUUID(), text: '不要发送' } } satisfies Command;
+  await app.invoke(invalid);
+  assert.equal(JSON.parse(app.spool.command(invalid.command_id)!.result!).status, 'error');
+  assert.equal(app.calls.filter(({ path }) => path.endsWith('/v1/runs')).length, 2);
+});
+
+test('HTTP fast 执行携带当前会话选择的模型，仍使用原生命令回执和去重', async (t) => {
+  const app = await harness(t);
+  app.catalog.push(entry('fast', true));
+  const id = randomUUID();
+  app.spool.begin(id, id);
+  app.spool.finish(id, {}, undefined, undefined, { topicId: app.topicId, model: 'gpt-6', provider: 'openai' });
+  const request = app.command('/fast on');
+  await app.invoke(request);
+  await app.invoke(request);
+  const calls = app.calls.filter(({ body }) => body.kind === 'execute');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].body.model, 'gpt-6');
+  assert.equal(calls[0].body.command, '/fast on');
+  assert.equal(JSON.parse(app.spool.command(request.command_id)!.result!).status, 'ok');
 });
 
 test('旧插件明确缺失 runtime 保留原聊天，能力确认后不会因接口故障丢失人格', async (t) => {

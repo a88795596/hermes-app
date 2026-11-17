@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import sqlite3
 from urllib.parse import unquote, urlsplit
+from weakref import WeakSet
 
 from agent.redact import redact_sensitive_text
 from gateway.config import Platform
@@ -30,6 +31,11 @@ logger = logging.getLogger(__name__)
 
 
 def register_platform(ctx):
+    from .fast_commands import register_fast_requests
+
+    instances = WeakSet()
+    fast_requests_supported = register_fast_requests(ctx, instances)
+
     def route():
         profile = ctx.profile_name
         allowed_profile = get_env_value_prefer_dotenv("HERMES_MOBILE_PROFILE") or "default"
@@ -118,6 +124,8 @@ def register_platform(ctx):
             self._command_home = Path(get_hermes_home()).resolve()
             self._command_replies = {}
             self._command_tasks = {}
+            self._fast_requests_supported = fast_requests_supported
+            instances.add(self)
 
         @property
         def authorization_is_upstream(self):

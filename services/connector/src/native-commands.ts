@@ -197,18 +197,22 @@ export function createNativeCommands(origin: string, tokens: string | Readonly<R
       if (data.ok === false && text(data.error, 2048)) throw new NativeCommandFailure(boundedText(data.error, 1024));
       return nativeCommandList(data.commands);
     },
-    async runtime(profile: string, sessionId: string, signal?: AbortSignal): Promise<string> {
+    async runtime(profile: string, sessionId: string, signal?: AbortSignal): Promise<NativeRuntime> {
       const data = await request(profile, { kind: 'runtime', session_id: sessionId }, signal);
       if (data.ok === false && text(data.error, 2048)) throw new NativeCommandFailure(boundedText(data.error, 1024));
       if (!text(data.system_prompt, 256 * 1024, true)) throw new NativeCommandFailure('Hermes 人格运行配置无效。');
-      return data.system_prompt;
+      if (data.service_tier !== undefined && data.service_tier !== null && data.service_tier !== 'priority') {
+        throw new NativeCommandFailure('Hermes 快速模式运行配置无效。');
+      }
+      return { system_prompt: data.system_prompt,
+        ...(data.service_tier !== undefined && { service_tier: data.service_tier as 'priority' | null }) };
     },
     async execute(profile: string, sessionId: string, requestId: string, command: string, signal?: AbortSignal,
-      approval?: 'once' | 'always'): Promise<NativeCommandResult> {
+      approval?: 'once' | 'always', model?: string): Promise<NativeCommandResult> {
       let data: JsonObject;
       try {
         data = await request(profile, { kind: 'execute', request_id: requestId, session_id: sessionId, command,
-          ...(approval && { approval }) }, signal);
+          ...(approval && { approval }), ...(model !== undefined && { model }) }, signal);
       } catch (error) {
         if (error instanceof NativeCommandFailure) throw error;
         if (error instanceof QueryUnavailable) throw new NativeCommandFailure('请更新并启用 Hermes 移动端命令插件。');
@@ -224,3 +228,4 @@ export function createNativeCommands(origin: string, tokens: string | Readonly<R
 }
 
 export type NativeCommands = ReturnType<typeof createNativeCommands>;
+export type NativeRuntime = { system_prompt: string; service_tier?: 'priority' | null };

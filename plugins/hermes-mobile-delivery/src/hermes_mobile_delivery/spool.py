@@ -76,6 +76,10 @@ def _connect(path: Path):
             command TEXT NOT NULL,
             result TEXT
         )""")
+        db.execute("""CREATE TABLE IF NOT EXISTS fast_selections (
+            profile_ref TEXT NOT NULL, session_id TEXT NOT NULL, service_tier TEXT NOT NULL,
+            PRIMARY KEY (profile_ref, session_id)
+        )""")
         now = time.time()
         db.execute("""INSERT OR IGNORE INTO delivery_state (delivery_id, created_at, next_attempt_at)
             SELECT delivery_id, ?, ? FROM deliveries""", (now, now))
@@ -99,8 +103,36 @@ def start_command(path: Path, profile_ref: str, request_id: str, session_id: str
         }
 
 
-def finish_command(path: Path, profile_ref: str, request_id: str, result: dict) -> None:
+def fast_selection(path: Path, profile_ref: str, session_id: str) -> str | None:
     with _connect(path) as db:
+        row = db.execute("SELECT service_tier FROM fast_selections WHERE profile_ref = ? AND session_id = ?",
+                         (profile_ref, session_id)).fetchone()
+        return row[0] if row else None
+
+
+def finish_command(path: Path, profile_ref: str, request_id: str, result: dict, *, fast_selection="unchanged") -> None:
+    with _connect(path) as db:
+        row = db.execute("SELECT session_id, command, result FROM command_receipts WHERE request_id = ? AND profile_ref = ?",
+                         (request_id, profile_ref)).fetchone()
+        if row is None:
+            raise ValueError("命令回执不存在或不属于当前配置档案")
+        if fast_selection != "unchanged":
+            command = json.loads(row[1])[0] if row[1].startswith("[") else row[1]
+            if fast_selection not in {None, "priority", "normal"} or not result.get("ok") or command.split()[0].lower() != "/fast":
+                raise ValueError("快速模式回执无效")
+            if row[2] is not None:
+                return  # A late duplicate receipt must not restore an older selection.
+            if fast_selection is None:
+                db.execute("DELETE FROM fast_selections WHERE profile_ref = ? AND session_id = ?", (profile_ref, row[0]))
+            else:
+                db.execute("""INSERT INTO fast_selections VALUES (?, ?, ?)
+                    ON CONFLICT (profile_ref, session_id) DO UPDATE SET service_tier = excluded.service_tier""",
+                    (profile_ref, row[0], fast_selection))
+        metadata = result.get("native_result", {})
+        if result.get("ok") and metadata.get("session_id") and not metadata.get("reset"):
+            db.execute("""INSERT OR IGNORE INTO fast_selections (profile_ref, session_id, service_tier)
+                SELECT profile_ref, ?, service_tier FROM fast_selections WHERE profile_ref = ? AND session_id = ?""",
+                (metadata["session_id"], profile_ref, row[0]))
         changed = db.execute("""UPDATE command_receipts SET result = ?
             WHERE request_id = ? AND profile_ref = ?""",
             (json.dumps(result, ensure_ascii=False, allow_nan=False), request_id, profile_ref)).rowcount

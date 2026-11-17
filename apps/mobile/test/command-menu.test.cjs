@@ -76,6 +76,35 @@ const command = (name, fields = {}) => ({ name, description: name, category: "Se
 const list = (tree) => nodes(tree).find((node) => node.type === "FlatList");
 const flush = () => new Promise(setImmediate);
 
+test("fast 点击先选模式和作用范围，确认后才发送完整指令", async () => {
+  const fast = command("fast", { args_hint: "[normal|fast|status] [--global]",
+    subcommands: ["normal", "fast", "status", "on", "off", "--global"] });
+  const screen = mountCommands(async () => [fast]);
+  screen.render();
+  await flush();
+  list(screen.render()).props.renderItem({ item: fast }).props.onPress();
+  assert.equal(screen.render().props.title, "/fast");
+  assert.deepEqual(screen.selected, []);
+  assert.equal(nodes(screen.render()).find((node) => node.type === "Field"), undefined);
+  assert.equal(nodes(screen.render()).find((node) => node.props.title === "执行").props.disabled, true);
+  const choose = (title) => nodes(screen.render()).find((node) => node.props.title === title).props.onPress();
+  choose("快速");
+  choose("保存为默认");
+  assert.deepEqual(screen.selected, []);
+  assert.equal(nodes(screen.render()).find((node) => node.props.testID === "command-preview").props.children, "/fast fast --global");
+  choose("执行");
+  assert.deepEqual(screen.selected, ["/fast fast --global"]);
+  choose("查看状态");
+  assert.equal(nodes(screen.render()).find((node) => node.props.testID === "command-preview").props.children, "/fast status");
+  choose("执行");
+  assert.deepEqual(screen.selected, ["/fast fast --global", "/fast status"]);
+  choose("取消");
+  list(screen.render()).props.renderItem({ item: fast }).props.onPress();
+  choose("普通");
+  choose("执行");
+  assert.equal(screen.selected.at(-1), "/fast normal");
+});
+
 test("只显示原生目录项目，远端新增指令无须前端更新，支持名称别名及描述搜索", async () => {
   const commands = [command("fresh-native", { description: "服务端新增功能", aliases: ["fresh"] }), command("version"), command("constructor")];
   const calls = [];

@@ -282,6 +282,7 @@ function Commands({ call, path, connected, reasoningSupported, onClose, onComman
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<NativeCommand>();
   const [args, setArgs] = useState("");
+  const [fastGlobal, setFastGlobal] = useState(false);
   const query = search.trim().toLowerCase();
 
   useEffect(() => {
@@ -298,16 +299,28 @@ function Commands({ call, path, connected, reasoningSupported, onClose, onComman
   function back() {
     setSelected(undefined);
     setArgs("");
+    setFastGlobal(false);
   }
 
-  const preview = selected ? `/${selected.name}${args ? ` ${args}` : ""}` : "";
-  const canExecute = selected?.supported || !args.trim();
+  const isFast = selected?.name === "fast";
+  const preview = selected ? `/${selected.name}${args ? ` ${args}` : ""}${isFast && fastGlobal && args !== "status" ? " --global" : ""}` : "";
+  const canExecute = isFast ? selected.supported && !!args : selected?.supported || !args.trim();
   const content = !connected ? <Text style={styles.muted}>连接 Hermes 后可读取原生命令目录。</Text>
     : error ? <>
     <Notice>{error}</Notice>
     <Action title="重试" onPress={() => { setError(undefined); setAttempt((value) => value + 1); }} />
   </> : !commands ? <ActivityIndicator accessibilityLabel="正在加载原生命令目录" color={colors.accent} />
     : selected ? <>
+    {isFast ? <ScrollView style={menu.list} contentContainerStyle={menu.parameters} keyboardShouldPersistTaps="handled">
+      {[["fast", "快速"], ["normal", "普通"], ["status", "查看状态"]].map(([value, title]) =>
+        <PickerRow key={value} title={title} selected={args === value} disabled={false}
+          onPress={() => { setArgs(value); if (value === "status") setFastGlobal(false); }} />)}
+      {!!args && args !== "status" && <>
+        <Text style={styles.caption}>作用范围</Text>
+        <PickerRow title="当前会话" selected={!fastGlobal} disabled={false} onPress={() => setFastGlobal(false)} />
+        <PickerRow title="保存为默认" selected={fastGlobal} disabled={false} onPress={() => setFastGlobal(true)} />
+      </>}
+    </ScrollView> : <>
     <Text style={styles.caption}>/{selected.name} {selected.args_hint}</Text>
     {!!selected.subcommands?.length && <ScrollView style={menu.argumentOptions} keyboardShouldPersistTaps="handled">
       {selected.subcommands.map((option) => <PickerRow key={option} title={option} selected={args === option}
@@ -315,9 +328,10 @@ function Commands({ call, path, connected, reasoningSupported, onClose, onComman
     </ScrollView>}
     <Field accessibilityLabel={`/${selected.name} 参数`} placeholder="参数（可留空）" value={args} onChangeText={setArgs}
       autoCapitalize="none" autoCorrect={false} returnKeyType="done" />
+    </>}
     <Text style={styles.caption}>执行预览</Text>
     <Text testID="command-preview" accessibilityLabel={`完整命令：${preview}`} selectable style={styles.text}>{preview}</Text>
-    {!canExecute && <Notice>{selected.unavailable_reason || "当前会话暂不支持此命令的参数。"}</Notice>}
+    {!canExecute && !isFast && <Notice>{selected.unavailable_reason || "当前会话暂不支持此命令的参数。"}</Notice>}
     <View style={styles.row}>
       <Action title="取消" onPress={back} />
       <Action title="执行" primary disabled={!canExecute} onPress={() => {
@@ -343,7 +357,9 @@ function Commands({ call, path, connected, reasoningSupported, onClose, onComman
           onPress={() => {
             if (!available) return;
             haptic("light");
-            if ((item.args_hint || item.subcommands?.length) && !picker) { setArgs(""); setSelected(item); }
+            if ((item.name === "fast" || item.args_hint || item.subcommands?.length) && !picker) {
+              setArgs(""); setFastGlobal(false); setSelected(item);
+            }
             else onCommand(`/${item.name}`);
           }}
           style={({ pressed }) => [menu.row, { borderBottomColor: colors.edge }, (pressed || !available) && styles.faded]}>
@@ -403,6 +419,7 @@ const menu = StyleSheet.create({
   header: { marginHorizontal: -24, marginBottom: -6 },
   back: { width: 48, minHeight: 48, alignItems: "center", justifyContent: "center" },
   list: { flexGrow: 0, flexShrink: 1 },
+  parameters: { gap: 12 },
   argumentOptions: { maxHeight: 240, flexShrink: 1 },
   grow: { flex: 1, minWidth: 0 },
   row: { minHeight: 56, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: 12, borderBottomWidth: StyleSheet.hairlineWidth },

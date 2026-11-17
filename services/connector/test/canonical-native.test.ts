@@ -7,7 +7,7 @@ import { setImmediate as yieldTurn, setTimeout as delay } from 'node:timers/prom
 import test, { type TestContext } from 'node:test';
 import type { Command, NativeCommand, NativeCommandResult } from '@hermes-mobile/protocol';
 import { CanonicalConnector } from '../src/connector.js';
-import { Gateway, type JsonObject } from '../src/gateway.js';
+import { Gateway, GatewayRefusal, type JsonObject } from '../src/gateway.js';
 import { NativeCommandFailure, type NativeCommands } from '../src/native-commands.js';
 import { Spool } from '../src/spool.js';
 import { commandDigest } from '../src/wire.js';
@@ -21,12 +21,13 @@ function harness(t: TestContext, pending = false) {
     spool.begin(item.topicId, 'create');
     spool.finish(item.topicId, {}, item);
   }
-  const calls: { method: string; sessionId: unknown }[] = [];
+  const calls: { method: string; sessionId: unknown; params: JsonObject }[] = [];
+  let fast = 'normal', globalFast = 'normal', running = false, refuseFast = false;
   const nativeCalls: string[] = [];
   const resultCalls: { profile: string; sessionId: string; requestId: string }[] = [];
   let response: (command: string) => Promise<NativeCommandResult> = async (command) => ({ output: `原生完整输出 ${command}` });
   let resolution: () => Promise<NativeCommandResult> = async () => { throw new NativeCommandFailure('仍在执行', 'unknown'); };
-  const commands: NativeCommand[] = ['status', 'version', 'new', 'undo', 'compress', 'restart', 'insights'].map((name) => ({
+  const commands: NativeCommand[] = ['status', 'version', 'new', 'undo', 'compress', 'restart', 'insights', 'fast'].map((name) => ({
     name, aliases: name === 'new' ? ['reset'] : [], description: name, category: 'Session', supported: true,
   }));
   const native: NativeCommands = {
@@ -35,7 +36,7 @@ function harness(t: TestContext, pending = false) {
       nativeCalls.push(command);
       return response(command);
     },
-    async runtime() { return binding.sessionId; },
+    async runtime() { return { system_prompt: binding.sessionId }; },
     async result(profile, sessionId, requestId) {
       resultCalls.push({ profile, sessionId, requestId });
       return resolution();
@@ -45,12 +46,18 @@ function harness(t: TestContext, pending = false) {
   t.mock.method(Gateway, 'connect', async () => ({
     connected: true, identity: { profileId: 'work', authorityEpoch: '1' }, close() { closed++; },
     async rpc(method: string, params: JsonObject) {
-      calls.push({ method, sessionId: params.session_id });
+      calls.push({ method, sessionId: params.session_id, params });
       if (method === 'session.events.since') return { events: [], snapshot_required: false };
       if (method === 'session.resume') return { session_id: params.session_id, stored_session_id: params.session_id,
         subscription_id: 'subscription', authority_epoch: 1, replay_epoch: 'epoch', last_sequence: 0,
-        execution_generation: 1, revision: 1, running: false, pending: [], prompts: [] };
-      if (method === 'config.get') return { value: '1' };
+        execution_generation: 1, revision: 1, running, pending: [], prompts: [] };
+      if (method === 'config.get') return { value: params.key === 'fast' ? fast : '1' };
+      if (method === 'config.set' && params.key === 'fast') {
+        if (refuseFast) throw new GatewayRefusal(4002, 'fast mode is not available for this model');
+        if (params.session_id) fast = String(params.value);
+        else globalFast = String(params.value);
+        return { key: 'fast', value: params.value };
+      }
       if (method === 'prompt.submit') return { admission_id: `admission-${params.submission_id}`,
         ref: { session_id: params.session_id, profile_id: 'work' }, sequence: 1,
         status: 'queued', outcome: null, authority_epoch: 1, execution_generation: null };
@@ -73,6 +80,7 @@ function harness(t: TestContext, pending = false) {
   let connector = create();
   t.after(() => { connector.close(); spool.close(); rmSync(directory, { recursive: true, force: true }); });
   return { spool, get connector() { return connector; }, calls, nativeCalls, resultCalls, binding, command, submit, unresolved,
+    modes: () => ({ fast, globalFast }), busy: () => { running = true; }, refuseFast: () => { refuseFast = true; },
     closed: () => closed,
     reply: (next: typeof response) => { response = next; },
     resultReply: (next: typeof resolution) => { resolution = next; },
@@ -80,6 +88,47 @@ function harness(t: TestContext, pending = false) {
     receipt: (request: Command) => JSON.parse(spool.command(request.command_id)!.result!) as JsonObject,
   };
 }
+
+test('Canonical fast 使用原生配置接口，区分当前会话与默认设置且重复请求不重放', async (t) => {
+  const app = harness(t);
+  for (const [text, modes] of [['/fast on', { fast: 'fast', globalFast: 'normal' }],
+    ['/fast off --global', { fast: 'normal', globalFast: 'normal' }]] as const) {
+    const request = app.command(text);
+    await app.connector.command(request, () => true);
+    const writes = app.calls.filter(({ method }) => method === 'config.set').length;
+    await app.connector.command(request, () => true);
+    assert.equal(app.receipt(request).status, 'ok');
+    assert.deepEqual(app.modes(), modes);
+    assert.equal(app.calls.filter(({ method }) => method === 'config.set').length, writes);
+  }
+  assert.deepEqual(app.calls.filter(({ method }) => method === 'config.set').map(({ params }) => params), [
+    { session_id: app.binding.sessionId, key: 'fast', value: 'fast' },
+    { key: 'fast', value: 'normal' },
+    { session_id: app.binding.sessionId, key: 'fast', value: 'normal' },
+  ]);
+  const status = app.command('/fast');
+  await app.connector.command(status, () => true);
+  assert.equal(app.receipt(status).status, 'ok');
+  assert.match(String((app.receipt(status).native_result as JsonObject).output), /普通/);
+  assert.deepEqual(app.nativeCalls, []);
+});
+
+test('Canonical fast 拒绝无效参数、运行中修改和原生不支持的模型', async (t) => {
+  const app = harness(t);
+  const invalid = app.command('/fast turbo');
+  await app.connector.command(invalid, () => true);
+  assert.equal(app.receipt(invalid).status, 'error');
+  app.refuseFast();
+  const unsupported = app.command('/fast on');
+  await app.connector.command(unsupported, () => true);
+  assert.equal(app.receipt(unsupported).status, 'error');
+  const writes = app.calls.filter(({ method }) => method === 'config.set').length;
+  app.busy();
+  const busy = app.command('/fast off');
+  await app.connector.command(busy, () => true);
+  assert.equal(app.receipt(busy).status, 'error');
+  assert.equal(app.calls.filter(({ method }) => method === 'config.set').length, writes);
+});
 
 test('Canonical 优先保留插件 status/version 原生输出，重复请求不会再次执行', async (t) => {
   const app = harness(t);

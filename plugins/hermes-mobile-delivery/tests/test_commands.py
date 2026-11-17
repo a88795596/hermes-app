@@ -17,12 +17,13 @@ class CommandTest(unittest.IsolatedAsyncioTestCase):
         self.home = Path(directory.name)
         self.current_home = self.home
         self.registry = [self.command(name, aliases=("v",) if name == "version" else ())
-                         for name in ("help", "commands", "version", "profile", "bundles", "restart", "goal", "undo")]
+                         for name in ("help", "commands", "version", "profile", "bundles", "restart", "goal", "undo", "fast")]
         self.registry.append(self.command("clear", cli_only=True))
         self.formatted = []
         self.events = []
         self.native_output = "正在等待现有任务结束后重启。"
         self.session_calls = []
+        self.fast_calls = []
         self.session_gate = None
         self.denied = None
         self.api_key = "native-api-key-at-least-sixteen"
@@ -57,6 +58,10 @@ class CommandTest(unittest.IsolatedAsyncioTestCase):
                 await self.session_gate.wait()
             return {"ok": True, "output": "原生撤回", "native_result": {"rewound_turns": 1}}
 
+        async def execute_fast(adapter, event, path, model):
+            self.fast_calls.append((event.text, model))
+            return {"ok": True, "output": "原生快速模式", "fast_selection": "priority"}
+
         exports = {
             "agent.redact": {"redact_sensitive_text": lambda text, **kwargs: text},
             "gateway.config": {"Platform": str},
@@ -72,6 +77,8 @@ class CommandTest(unittest.IsolatedAsyncioTestCase):
             "hermes_cli.slash_exec": {"CommandContext": SimpleNamespace, "execute_command": execute},
             "hermes_mobile_delivery.session_commands": {"execute_session_command": execute_session,
                                                         "SESSION_COMMANDS": frozenset({"undo"})},
+            "hermes_mobile_delivery.fast_commands": {"execute_fast_command": execute_fast,
+                "runtime_tier": lambda *args: None, "register_fast_requests": lambda ctx, instances: True},
         }
         modules = {}
         for name, values in exports.items():
@@ -125,6 +132,7 @@ class CommandTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(commands["version"]["aliases"], ["v"])
         self.assertEqual(commands["version"]["subcommands"], ["show", "clear"])
         self.assertTrue(commands["restart"]["supported"])
+        self.assertTrue(commands["fast"]["supported"])
         self.assertFalse(commands["goal"]["supported"])
         self.assertNotIn("clear", commands)
         self.registry.append(self.command("future-native-command"))
@@ -135,9 +143,9 @@ class CommandTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_runtime_reads_current_native_prompt_on_each_request(self):
         request = {"kind": "runtime", "profile_ref": "default", "session_id": "mobile_session"}
-        self.assertEqual(await self.adapter.dispatch_http_event(request), {"system_prompt": "原生人格"})
+        self.assertEqual(await self.adapter.dispatch_http_event(request), {"system_prompt": "原生人格", "service_tier": None})
         self.runtime_prompt = ""
-        self.assertEqual(await self.adapter.dispatch_http_event(request), {"system_prompt": ""})
+        self.assertEqual(await self.adapter.dispatch_http_event(request), {"system_prompt": "", "service_tier": None})
         self.assertEqual((await self.adapter.dispatch_http_event({**request, "profile_ref": "other"}))["status"], "error")
 
     async def test_formatter_keeps_native_alias_arguments_and_result(self):
@@ -147,6 +155,30 @@ class CommandTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.formatted[1][1].surface, "gateway")
         self.assertEqual((await self.adapter.dispatch_http_event(self.payload("/V MixedCase")))["output"], "原生 /version MixedCase")
         self.assertEqual(self.events, [])
+
+    async def test_fast_uses_selected_model_and_native_hooks_and_persists_once(self):
+        from hermes_mobile_delivery.spool import fast_selection
+
+        request = self.payload("/fast on", model="gpt-6")
+        result = await self.adapter.dispatch_http_event(request)
+        self.assertEqual(result, {"ok": True, "output": "原生快速模式"})
+        self.assertEqual(await self.adapter.dispatch_http_event(request), result)
+        self.assertEqual(self.fast_calls, [("/fast on", "gpt-6")])
+        self.assertEqual(fast_selection(self.home / "queue.sqlite3", "default", "mobile_session"), "priority")
+        for invalid in [self.payload("/version", model="gpt-6"), self.payload("/fast on", model="bad\nmodel"),
+                        {**request, "model": "changed-model"}]:
+            self.assertFalse((await self.adapter.dispatch_http_event(invalid))["ok"])
+        self.adapter.gateway_runner.hooks = SimpleNamespace(emit_collect=AsyncMock(return_value=[
+            {"decision": "deny", "message": "拒绝修改快速模式"}]))
+        self.assertFalse((await self.adapter.dispatch_http_event(self.payload("/fast off")))["ok"])
+        self.assertEqual(self.fast_calls, [("/fast on", "gpt-6")])
+
+    async def test_fast_requires_native_request_middleware(self):
+        self.adapter._fast_requests_supported = False
+        catalog = await self.adapter.dispatch_http_event({"kind": "catalog", "profile_ref": "default"})
+        self.assertFalse(next(cmd for cmd in catalog["commands"] if cmd["name"] == "fast")["supported"])
+        self.assertFalse((await self.adapter.dispatch_http_event(self.payload("/fast fast")))["ok"])
+        self.assertEqual(self.fast_calls, [])
 
     async def test_native_hooks_deny_or_handle_without_calling_session_handler(self):
         self.adapter.gateway_runner.hooks = SimpleNamespace(emit_collect=AsyncMock(return_value=[

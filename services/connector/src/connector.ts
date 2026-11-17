@@ -157,7 +157,7 @@ export class CanonicalConnector {
       try {
         const native = await this.nativeCommands.catalog(binding.profileRef, this.#shutdown.signal);
         return {
-          commands: enableNativeCommands(native, ['status', 'version']).map((entry) => nativeSessionMutations.has(entry.name)
+          commands: enableNativeCommands(native, ['status', 'version', 'fast']).map((entry) => nativeSessionMutations.has(entry.name)
             ? { ...entry, supported: false, unavailable_reason: nativeMutationUnavailable } : entry),
           native: new Set(native.filter((entry) => entry.supported).map((entry) => entry.name)),
         };
@@ -167,7 +167,7 @@ export class CanonicalConnector {
     }
     try {
       return { commands: enableNativeCommands(tuiCommandList(await gateway.rpc('commands.catalog', { session_id: binding.sessionId }, undefined, queryTimeout)),
-        ['status', 'version']), native: new Set<string>() };
+        ['status', 'version', 'fast']), native: new Set<string>() };
     } catch (error) {
       if (error instanceof GatewayRefusal && error.code === -32601) throw new QueryUnavailable();
       throw error;
@@ -328,7 +328,47 @@ export class CanonicalConnector {
         const { entry, args } = resolveNativeCommand(command.body.command, catalog.commands);
         if (!entry.supported) throw new NativeCommandFailure(entry.unavailable_reason || '当前会话通道未开放此原生命令。');
         if (!current() || !session.gateway.connected) throw new NativeCommandFailure('连接已中断，命令尚未执行。');
-        if ((entry.name === 'status' || entry.name === 'version') && !catalog.native.has(entry.name)) {
+        if (entry.name === 'fast') {
+          const tokens = args.toLowerCase().replace(/[\u2010-\u2015\u2212]/gu, '-').split(/\s+/u);
+          const global = tokens.includes('--global');
+          const mode = tokens.filter((token) => token !== '--global' && token !== '--session').join(' ');
+          const value = mode === 'on' ? 'fast' : mode === 'off' ? 'normal' : mode || 'status';
+          if (!['fast', 'normal', 'status'].includes(value)) throw new NativeCommandFailure('/fast 请选择快速、普通或查看状态。');
+          const snapshot = parseSessionSnapshot(await session.gateway.rpc('session.resume', {
+            session_id: binding.sessionId, omit_messages: true,
+          }));
+          this.#checkSnapshot(session, snapshot);
+          if (value !== 'status' && (snapshot.running || snapshot.pending.length)) {
+            throw new NativeCommandFailure('请等待当前回复完成后再切换快速模式。');
+          }
+          let globalWritten = false;
+          try {
+            if (!current() || !session.gateway.connected) throw new NativeCommandFailure('连接已中断，命令尚未执行。');
+            if (value !== 'status' && global) {
+              dispatched = true;
+              const saved = await session.gateway.rpc('config.set', { key: 'fast', value });
+              globalWritten = true;
+              if (saved.key !== 'fast' || saved.value !== value) {
+                throw new NativeCommandFailure('Hermes 未确认默认快速模式的保存结果。', 'unknown');
+              }
+            }
+            dispatched = value !== 'status';
+            const reply = await session.gateway.rpc(value === 'status' ? 'config.get' : 'config.set', {
+              session_id: binding.sessionId, key: 'fast', ...(value !== 'status' && { value }),
+            });
+            if (!['fast', 'normal'].includes(String(reply.value)) || (value !== 'status' && (reply.key !== 'fast' || reply.value !== value))) {
+              throw new NativeCommandFailure('Hermes 未确认当前会话的快速模式。', 'unknown');
+            }
+            receipt = result(id, 'ok', { native_result: {
+              output: `快速模式：${reply.value === 'fast' ? '快速' : '普通'}${value === 'status' ? '' : global ? '（已保存为默认）' : '（当前会话）'}`,
+            } });
+          } catch (error) {
+            if (error instanceof GatewayRefusal) throw new NativeCommandFailure(globalWritten
+              ? '默认快速模式已保存，但当前会话的切换结果尚未确认。'
+              : 'Hermes 拒绝切换快速模式，请检查当前模型是否支持及网关版本。', globalWritten ? 'unknown' : 'error');
+            throw error;
+          }
+        } else if ((entry.name === 'status' || entry.name === 'version') && !catalog.native.has(entry.name)) {
           if (args) throw new NativeCommandFailure(`/${entry.name} 不接受参数。`);
           const data = await this.query({ type: 'topic_query', request_id: id, kind: entry.name,
             topic_id: topicId, profile_ref: ref, session_id: binding.sessionId });
