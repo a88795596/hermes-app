@@ -78,3 +78,33 @@ test("头像选择通过原生动画切页，途中经过的页面不覆盖目�
   assert.deepEqual(app.selected, ["work"]);
   assert.equal(app.paging.at(-1), false);
 });
+
+test("用户打断头像切页并落在中间页或原页时，提交实际页并解除输入禁用", () => {
+  for (const destination of [0, 1]) {
+    const app = mount();
+    app.render();
+    app.props.targetId = "work";
+    const pager = app.render();
+    state(pager, "settling");
+    state(pager, "dragging");
+    select(pager, destination);
+    state(pager, "idle");
+    assert.deepEqual(app.selected, [app.props.profileIds[destination]]);
+    assert.equal(app.paging.at(-1), false);
+  }
+});
+
+test("iOS 18 以下使用可报告落页时机的内置分页，其余原生平台使用 Expo UI", () => {
+  const source = ts.transpileModule(readFileSync(require.resolve("../src/profiles/pager-view.tsx"), "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
+  }).outputText;
+  for (const [OS, Version, expected] of [["ios", "16.4", "ScrollPager"], ["ios", "17.6", "ScrollPager"], ["ios", "18.6", "ExpoPager"], ["android", 35, "ExpoPager"]]) {
+    const exported = {};
+    new Function("exports", "require", source)(exported, (name) => ({
+      "react-native": { Platform: { OS, Version } },
+      "@expo/ui/community/pager-view": { __esModule: true, default: "ExpoPager" },
+      "./scroll-pager-view": { __esModule: true, default: "ScrollPager" },
+    })[name]);
+    assert.equal(exported.default, expected, `${OS} ${Version}`);
+  }
+});

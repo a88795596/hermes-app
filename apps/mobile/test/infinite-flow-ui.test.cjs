@@ -149,6 +149,7 @@ test("仅消息区分页，各页按 Profile 绑定数据，落页后更换顶�
   assert.equal(daily.props.children.props.ref, "scroll-ref");
   assert.equal(research.props.children.props.ref, undefined);
   assert.equal(research.props.pointerEvents, "none");
+  assert.equal(research.props["aria-hidden"], true);
   assert.equal(find(pager, (node) => node.props.accessibilityLabel === "消息"), undefined);
   pager.props.onSelect("research");
   app.context.workspace.streamTopic = app.context.workspace.streamTopics.research;

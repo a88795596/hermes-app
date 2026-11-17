@@ -396,7 +396,7 @@ function Workspace() {
               const detail = stream ? workspace.topicDetails[stream.id] : undefined;
               const active = item.profile_id === profile.profile_id && !paging;
               return <View key={item.profile_id} style={styles.frame} collapsable={false}
-                pointerEvents={active ? "auto" : "none"} accessibilityElementsHidden={!active}
+                pointerEvents={active ? "auto" : "none"} accessibilityElementsHidden={!active} aria-hidden={!active}
                 importantForAccessibility={active ? "auto" : "no-hide-descendants"}>
                 <ConversationTranscript {...props} ref={active ? props.ref : undefined} active={active}
                   id={stream?.id ?? ""} newProfileId={item.profile_id}

@@ -21,9 +21,9 @@
 
 ## Task 3：验证
 
-- [ ] 运行 pnpm typecheck、pnpm test、mobile lint。
-- [ ] 检查可用原生验证环境，验证跟手拖动与上下栏固定；记录设备限制。
-- [ ] 按 executing-plans 技能执行一次独立最终审查并处理实质问题。
+- [x] 运行 pnpm typecheck、pnpm test、mobile lint。
+- [x] 检查可用原生验证环境，验证跟手拖动与上下栏固定；记录设备限制。
+- [x] 按 executing-plans 技能执行一次独立最终审查并处理实质问题。
 
 ## Review Focus
 
@@ -34,3 +34,13 @@
 - 用户明确选择 Expo UI 并补充交互，直接实施，不再请求方案确认。
 - 复用现有 Codex worktree，分支 codex/profile-pager，基于 586003d。
 - 使用 writing-plans / executing-plans 流程，先回归测试再改实现。
+
+## 验证结果
+
+- `pnpm typecheck`、`pnpm --filter @hermes-mobile/mobile lint` 均通过。
+- `pnpm test`：406 通过、13 个依赖数据库的用例跳过；其中 Mobile 254 通过。
+- iOS 18.6「Hermes Mobile QA」模拟器：重新构建当前开发客户端成功；验证中间消息区跟手移动、落页后顶部切换、取消短拖、表格横滚、纵向拖动不切 Profile、头像跨页选择、切回保留多行草稿并收起键盘和恢复输入高度。
+- 一次独立审查发现的程序切页被打断、旧 iOS 无落页事件、Web 按住半页误提交均已用回归测试复现并修复；没有遗留审查问题。
+- iOS 18+ 与 Android 使用 Expo UI；iOS 16.4/17 与 Web 复用系统 ScrollView 分页，并在松手及页面对齐后提交选择。保持现有最低系统版本，不新增依赖。
+- Android 和 iOS 16.4/17 未进行设备交互验收；旧系统分支与触摸停顿行为由自动化回归覆盖。
+- 本次仅本地分支实现与验证，没有合并 main、push 或发布 OTA。

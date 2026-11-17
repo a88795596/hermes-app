@@ -23,7 +23,7 @@ function mount() {
     "react-native": { View: "View", ScrollView: "ScrollView" },
   };
   const exported = {};
-  const source = ts.transpileModule(readFileSync(require.resolve("../src/profiles/pager-view.web.tsx"), "utf8"), {
+  const source = ts.transpileModule(readFileSync(require.resolve("../src/profiles/scroll-pager-view.tsx"), "utf8"), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
   }).outputText;
   new Function("exports", "require", source)(exported, (name) => { assert.ok(name in modules, name); return modules[name]; });
@@ -58,4 +58,22 @@ test("Web 分页保持初始位置，滚动停稳才落页，窗口变化保持�
   assert.deepEqual(app.selected, [2, 0]);
   app.props.ref.current.setPage(10);
   assert.deepEqual(app.moves.at(-1), { x: 0, animated: false });
+});
+
+test("触摸按住半页或整页时不提交，拖回原页并松手后才结束分页", async () => {
+  const app = mount();
+  app.render().props.onLayout({ nativeEvent: { layout: { width: 390 } } });
+  const pager = app.render();
+  pager.props.onTouchStart?.();
+  pager.props.onScroll({ nativeEvent: { contentOffset: { x: 610 } } });
+  await new Promise((resolve) => setTimeout(resolve, 160));
+  assert.deepEqual(app.selected, [], "手指停顿不是落页");
+  pager.props.onScroll({ nativeEvent: { contentOffset: { x: 780 } } });
+  await new Promise((resolve) => setTimeout(resolve, 160));
+  assert.deepEqual(app.selected, [], "完整页面仍需等待松手");
+  pager.props.onScroll({ nativeEvent: { contentOffset: { x: 390 } } });
+  pager.props.onTouchEnd({ nativeEvent: { touches: [] } });
+  await new Promise((resolve) => setTimeout(resolve, 160));
+  assert.deepEqual(app.selected, [1]);
+  assert.equal(app.phases.at(-1), "idle");
 });

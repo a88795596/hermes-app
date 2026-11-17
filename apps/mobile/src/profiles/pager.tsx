@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Keyboard, Platform } from "react-native";
+import { Keyboard } from "react-native";
 import type { PagerViewRef } from "@expo/ui/community/pager-view";
 import { useReduceMotion } from "../ui/motion";
 import PagerView from "./pager-view";
@@ -27,7 +27,7 @@ export function ProfilePager({ profileIds, profileId, targetId, enabled, onSelec
   useEffect(() => {
     if (selected.current === target) return;
     requested.current = target;
-    if (!reduced && (Platform.OS !== "ios" || Number.parseInt(String(Platform.Version), 10) >= 18)) phase.current = "settling";
+    if (!reduced) phase.current = "settling";
     onMovingChange(true);
     if (reduced) pager.current?.setPageWithoutAnimation(target);
     else pager.current?.setPage(target);
@@ -46,7 +46,7 @@ export function ProfilePager({ profileIds, profileId, targetId, enabled, onSelec
       return;
     }
     selected.current = next;
-    if (profileIds[next] !== profileId) onSelect(profileIds[next]);
+    if (profileIds[next] !== profileId || targetId) onSelect(profileIds[next]);
     onMovingChange(false);
   }
 
@@ -60,7 +60,10 @@ export function ProfilePager({ profileIds, profileId, targetId, enabled, onSelec
       }}
       onPageScrollStateChanged={({ nativeEvent: { pageScrollState } }) => {
         phase.current = pageScrollState;
-        if (pageScrollState === "dragging") Keyboard.dismiss();
+        if (pageScrollState === "dragging") {
+          requested.current = undefined;
+          Keyboard.dismiss();
+        }
         if (pageScrollState === "idle") settle();
         else onMovingChange(true);
       }}>
