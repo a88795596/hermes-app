@@ -178,7 +178,7 @@ export function Toggle({ label, value, onChange, disabled }: {
   const { colors, styles } = useTheme();
   return <View style={[styles.row, layout.toggle]}>
     <Text style={[styles.text, layout.grow]}>{label}</Text>
-    <Switch accessibilityLabel={label} disabled={disabled} value={value} onValueChange={(next) => {
+    <Switch accessibilityLabel={label} disabled={disabled} value={value} style={{ alignSelf: "center" }} onValueChange={(next) => {
       if (disabled) return;
       haptic("selection");
       onChange(next);
