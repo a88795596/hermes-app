@@ -28,9 +28,10 @@ export function registerBridge(api: FastifyInstance, store: Store, refs: Set<str
     const position = Number(params.position);
     if (!Number.isInteger(position) || position < 1 || position > MAX_ATTACHMENTS) missing("附件");
     const { rows: [attachment] } = await store.query<{ content: Buffer }>(`
-      SELECT a.content FROM submission_attachments a
-      JOIN commands c ON c.id = a.submission_id JOIN topics t ON t.id = c.topic_id
-      WHERE a.submission_id = $1 AND a.position = $2 AND c.dispatched AND c.result IS NULL AND t.profile_ref = ANY($3)`,
+      SELECT a.content FROM commands c JOIN topics t ON t.id = c.topic_id
+      JOIN received_attachments a ON a.profile_ref = t.profile_ref
+        AND a.id = (c.receipt->'attachments'->($2::int - 1)->>'attachment_id')::uuid
+      WHERE c.id = $1 AND c.payload->>'kind' = 'submit' AND c.dispatched AND c.result IS NULL AND t.profile_ref = ANY($3)`,
     [id, position, [...refs]]);
     if (!attachment) missing("附件");
     return reply.type("application/octet-stream").header("X-Content-Type-Options", "nosniff").send(attachment.content);

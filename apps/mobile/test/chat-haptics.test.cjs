@@ -720,6 +720,24 @@ test("纯附件回复保留文件，没有过程的回复不显示空模块", ()
   assert.equal(find(screen, (node) => Array.isArray(node.props.steps)), undefined);
 });
 
+test("发出的纯附件消息在等待发送和进入历史后都有可容纳文件预览的气泡", () => {
+  const attachment = { name: "录像.mp4", mime: "video/mp4", size: 30 };
+  const session = { origin: "https://example.test", token: "device" };
+  for (const pending of [true, false]) {
+    const item = { topic_id: "topic", submission_id: "submit", message_id: "message", role: "user", text: "",
+      attachments: [pending ? attachment : { ...attachment, attachment_id: "file" }], status: "accepted" };
+    const screen = conversation(async () => {}, "", { session, messages: pending ? [] : [item],
+      workspace: { pending: pending ? [item] : [] } });
+    const tree = screen.render();
+    const files = find(tree, (node) => node.type === "MessageAttachments");
+    assert.deepEqual(files.props.items, item.attachments);
+    if (!pending) assert.equal(files.props.session, session);
+    const bubble = find(tree, (node) => [node.props.children].flat().includes(files));
+    const width = Object.assign({}, ...[bubble.props.style].flat(Infinity)).width;
+    assert.ok(width >= 180 && width < screen.dimensions.width, "纯附件气泡应能显示文件名和播放控件");
+  }
+});
+
 async function selectModel(result, { aborted = false, currentModel = "old", global = false, onSelected = () => {} } = {}) {
   const screen = mount("model-picker", "ModelPicker", {
     enabled: true, onClose() {}, onSelected,

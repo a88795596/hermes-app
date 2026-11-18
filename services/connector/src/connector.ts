@@ -626,10 +626,11 @@ export class CanonicalConnector {
     try {
       if (snapshot?.running) this.spool.addIntent(topicId, command.body.submission_id);
       const text = [command.body.text, files.join('\n')].filter((part) => part.trim()).join('\n\n') || '请查看上传的图片。';
+      const prompt = `${text}\n\n${deliveryInstructions(binding.profileRef, binding.sessionId)}`;
       const receipt = parseAdmissionReceipt(await session.gateway.rpc('prompt.submit', {
         session_id: binding.sessionId, submission_id: command.body.submission_id,
-        text, api_text: `${text}\n\n${deliveryInstructions(binding.profileRef, binding.sessionId)}`,
-        ...(images.length && { attachments: images }),
+        // Hermes 在入站阶段补入图片识别结果，随后设置的 api_text 会将它覆盖。
+        ...(images.length ? { text: prompt, attachments: images } : { text, api_text: prompt }),
         ...(session.gateway.clarifyBatch ? { clarify_batch: true } : {}),
       }, id));
       if (receipt.kind === 'voice_stopped') {

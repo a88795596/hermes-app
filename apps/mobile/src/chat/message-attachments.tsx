@@ -24,7 +24,7 @@ const saveErrorMessages = new Set([
   "目标文件夹中有过多同名文件，请选择其他位置。",
 ]);
 
-function ReceivedFile({ item: { attachment_id, name, mime, size }, session, tint, onOpenLink }: {
+function MessageFile({ item: { attachment_id, name, mime, size }, session, tint, onOpenLink }: {
   item: Attachment; session: Session; tint: string; onOpenLink: (url: string) => void;
 }) {
   const { colors, dark, styles } = useTheme();
@@ -189,13 +189,16 @@ export function MessageAttachments({ items, session, tint, onOpenLink }: {
 }) {
   const { colors, styles } = useTheme();
   return <View style={layout.files}>{items.map((item, index) => item.attachment_id && session ? (
-    <ReceivedFile key={item.attachment_id} item={item} session={session} tint={tint} onOpenLink={onOpenLink} />
+    <MessageFile key={item.attachment_id} item={item} session={session} tint={tint} onOpenLink={onOpenLink} />
   ) : (
     <View key={index} style={layout.row}>
       <View style={[layout.fileIcon, { backgroundColor: colors.tint }]}>
         <Icon name={item.mime.startsWith("image/") ? "photo" : "attachment"} size={18} color={colors.accent} />
       </View>
-      <Text numberOfLines={2} style={[styles.heading, layout.fileName, layout.name, { color: tint }]}>{item.name}</Text>
+      <View style={layout.name}>
+        <Text numberOfLines={2} style={[styles.heading, layout.fileName, { color: tint }]}>{item.name}</Text>
+        {!!session && <Text style={styles.caption}>暂无可用预览</Text>}
+      </View>
     </View>
   ))}</View>;
 }

@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { DEFAULT_TOPIC_TITLE, topicTitlePreview } from "@hermes-mobile/protocol";
-import type { AttachmentReference, Command, Control, Message, ModelSelectionRequest, ReasoningEffort, Topic } from "@hermes-mobile/protocol";
+import type { Command, Control, Message, ModelSelectionRequest, ReasoningEffort, Topic } from "@hermes-mobile/protocol";
 import type { PoolClient } from "pg";
+import { storeAttachment, type ValidatedUpload } from "./attachments.js";
 import { profileId, topicData, topicRow } from "./projections.js";
 import { ApiError, conflict, missing } from "./validation.js";
 
@@ -83,7 +84,7 @@ async function requireSettledCommands(db: PoolClient, topicId: string, reset: bo
 }
 
 export async function submit(db: PoolClient, refs: Set<string>, topicId: string, submissionId: string, text: string,
-  attachments: { reference: AttachmentReference; content: Buffer }[], attachmentsSupported: boolean) {
+  attachments: ValidatedUpload[], attachmentsSupported: boolean) {
   const row = await topicRow(db, topicId, refs);
   const body = { submission_id: submissionId, text,
     ...(attachments.length && { attachments: attachments.map(({ reference }) => reference) }) };
@@ -98,15 +99,15 @@ export async function submit(db: PoolClient, refs: Set<string>, topicId: string,
     await db.query(`UPDATE topics SET title = $2 WHERE id = $1 AND NOT EXISTS
       (SELECT 1 FROM submissions WHERE topic_id = $1)`, [topicId, topicTitlePreview(text.trim() || attachments[0]?.reference.name || "")]);
   }
+  const files = [];
+  for (const attachment of attachments) {
+    files.push(await storeAttachment(db, randomUUID(), row.profile_ref, attachment));
+  }
   const message: Message = { message_id: randomUUID(), role: "user", text, status: "accepted", submission_id: submissionId,
-    ...(attachments.length && { attachments: attachments.map(({ reference: { name, mime, size } }) => ({ name, mime, size })) }) };
+    ...(files.length && { attachments: files }) };
   await db.query("INSERT INTO messages (id, topic_id, data) VALUES ($1, $2, $3)", [message.message_id, topicId, message]);
   await db.query("INSERT INTO submissions (id, topic_id, message_id, data) VALUES ($1, $2, $3, $4)",
     [submissionId, topicId, message.message_id, { status: "accepted" }]);
-  for (const [index, { content }] of attachments.entries()) {
-    await db.query("INSERT INTO submission_attachments (submission_id, position, content) VALUES ($1, $2, $3)",
-      [submissionId, index + 1, content]);
-  }
   await enqueue(db, { type: "command", command_id: submissionId, topic_id: topicId, profile_ref: row.profile_ref,
     session_id: sessionId, kind: "submit", body: { ...body, steer_if_running: true } }, message);
   await touchTopic(db, topicId);

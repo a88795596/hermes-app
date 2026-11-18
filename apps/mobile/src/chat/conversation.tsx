@@ -348,6 +348,7 @@ export function ConversationTranscript({ id, topic, newProfileId, workspace, ses
                 <View style={[
                   chat.messageContent,
                   outgoing ? [chat.outgoingBubble, { backgroundColor: colors.tint }] : chat.incomingBody,
+                  outgoing && !!message.attachments?.length && { width: messageWidth },
                 ]}>
                   {!!message.attachments?.length && <MessageAttachments items={message.attachments} session={session}
                     onOpenLink={openLink} tint={colors.foreground} />}
@@ -375,7 +376,8 @@ export function ConversationTranscript({ id, topic, newProfileId, workspace, ses
       })}
       {pending.map((item) => (
         <Animated.View key={item.submission_id} style={[chat.message, chat.outgoing, { maxWidth: messageWidth }, !reduced && motion.reveal]}>
-          <View style={[chat.messageContent, chat.outgoingBubble, { backgroundColor: colors.tint }]}>
+          <View style={[chat.messageContent, chat.outgoingBubble, { backgroundColor: colors.tint },
+            !!item.attachments?.length && { width: messageWidth }]}>
             {!!item.attachments?.length && <MessageAttachments items={item.attachments} onOpenLink={openLink} tint={colors.foreground} />}
             {!!item.text && <Text selectable accessibilityLabel={`你：${item.text}`} style={[styles.text, chat.messageText]}>
               {item.text}

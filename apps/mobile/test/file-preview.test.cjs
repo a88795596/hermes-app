@@ -4,7 +4,8 @@ const test = require("node:test");
 const ts = require("typescript");
 const Image = Object.assign(() => null, { getSize: (_uri, onSize) => onSize(640, 480) });
 
-function mountPreview({ kind = "markdown", dark = false, reduced = false, save = async () => "files" } = {}) {
+function mountPreview({ kind = "markdown", dark = false, reduced = false, save = async () => "files",
+  attachmentId = "file-id", session = {} } = {}) {
   const jsx = (type, props) => ({ type, props });
   const state = [];
   const saves = [];
@@ -54,9 +55,9 @@ function mountPreview({ kind = "markdown", dark = false, reduced = false, save =
     assert.ok(name in modules, name);
     return modules[name];
   });
-  const file = exports.MessageAttachments({ items: [{ attachment_id: "file-id", name: "报告", mime: "text/plain", size: 10 }],
-    session: {}, tint: "text", onOpenLink() {} }).props.children[0];
-  const render = () => { cursor = 0; return file.type(file.props); };
+  const file = exports.MessageAttachments({ items: [{ attachment_id: attachmentId, name: "报告", mime: "text/plain", size: 10 }],
+    session, tint: "text", onOpenLink() {} }).props.children[0];
+  const render = () => { cursor = 0; return typeof file.type === "function" ? file.type(file.props) : file; };
   render.saves = saves;
   render.load = async () => { loadEffect(); await new Promise(setImmediate); };
   return render;
@@ -69,6 +70,15 @@ function find(node, predicate) {
   return find([node.props.children, node.props.trailing], predicate);
 }
 const flatten = (style) => Object.assign({}, ...[style].flat(Infinity));
+
+test("旧消息缺少原件时保留文件名并说明原因，等待发送的附件不显示丢失提示", () => {
+  for (const session of [{}, null]) {
+    const row = mountPreview({ attachmentId: null, session })();
+    assert.ok(find(row, (node) => node.props.children === "报告"));
+    assert.equal(!!find(row, (node) => node.props.children === "暂无可用预览"), !!session);
+    assert.equal(find(row, (node) => node.type === "Pressable"), undefined);
+  }
+});
 
 test("文件预览使用共享弹出层，内容面板清晰并保留关闭与横屏支持", () => {
   for (const kind of ["markdown", "html", "image"]) for (const dark of [false, true]) {

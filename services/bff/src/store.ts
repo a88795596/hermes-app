@@ -102,6 +102,29 @@ export function openStore(connectionString: string) {
           content bytea NOT NULL,
           sha256 text NOT NULL
         );
+        -- 旧版只在连接器回执前暂存原件。仅为仍有字节的附件补齐消息和重试回执中的同一个 ID。
+        DO $upgrade$
+        DECLARE
+          file record;
+          file_id uuid;
+          id_path text[];
+        BEGIN
+          FOR file IN
+            SELECT a.*, s.message_id, t.profile_ref, c.payload->'body'->'attachments'->(a.position - 1) AS ref
+            FROM submission_attachments a JOIN submissions s ON s.id = a.submission_id
+            JOIN commands c ON c.id = s.id JOIN topics t ON t.id = s.topic_id
+            WHERE c.receipt->'attachments'->(a.position - 1)->>'attachment_id' IS NULL
+          LOOP
+            file_id := gen_random_uuid();
+            id_path := ARRAY['attachments', (file.position - 1)::text, 'attachment_id'];
+            INSERT INTO received_attachments (id, profile_ref, metadata, content, sha256)
+              VALUES (file_id, file.profile_ref, (file.ref - 'sha256') || jsonb_build_object('attachment_id', file_id),
+                file.content, file.ref->>'sha256');
+            UPDATE messages SET data = jsonb_set(data, id_path, to_jsonb(file_id)) WHERE id = file.message_id;
+            UPDATE commands SET receipt = jsonb_set(receipt, id_path, to_jsonb(file_id)) WHERE id = file.submission_id;
+          END LOOP;
+        END;
+        $upgrade$;
         CREATE TABLE IF NOT EXISTS connector_ingest (
           kind text NOT NULL,
           id uuid NOT NULL,

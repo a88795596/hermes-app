@@ -252,6 +252,10 @@ test('idle, legacy-policy and attachment submissions retain ordinary admission',
       assert.deepEqual(await invoke(), { type: 'command_result', command_id: id, status: 'ok', admission_id: `admission-${id}` });
       assert.deepEqual(calls.map(({ method }) => method), state === 'idle' ? ['session.resume', 'prompt.submit']
         : state === 'attachment' ? ['file.attach', 'prompt.submit'] : ['prompt.submit']);
+      const prompt = calls.at(-1)!.params;
+      assert.doesNotMatch(String(prompt.text), /hermes_mobile:/);
+      assert.match(String(prompt.api_text), /hermes_mobile:session-steering/);
+      if (state === 'attachment') assert.match(String(prompt.api_text), /@file:\/report.txt/);
       assert.equal(spool.hasIntent(topicId, id), true);
       assert.equal(spool.turn(topicId, `admission-${id}`)?.submissionId, id);
       assert.equal(calls.at(-1)?.params.steer_if_running, undefined);

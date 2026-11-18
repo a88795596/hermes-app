@@ -2,10 +2,10 @@ import { isDeepStrictEqual } from "node:util";
 import { isAttachmentMime, isAttachmentName, MAX_ATTACHMENTS, MAX_RECEIVED_ATTACHMENT_BYTES, type Attachment } from "@hermes-mobile/protocol";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { PoolClient } from "pg";
-import { attachmentUpload } from "./attachments.js";
+import { attachmentUpload, storeAttachment } from "./attachments.js";
 import { matchesToken, readBearer } from "./auth.js";
 import type { Store } from "./store.js";
-import { ApiError, conflict, invalid, missing, record, string, uuid } from "./validation.js";
+import { ApiError, invalid, missing, record, string, uuid } from "./validation.js";
 
 export function receivedAttachmentReferences(value: unknown): Attachment[] {
   if (!Array.isArray(value) || value.length > MAX_ATTACHMENTS) invalid(`每条消息最多可添加 ${MAX_ATTACHMENTS} 个附件。`);
@@ -49,19 +49,8 @@ export function registerReceivedAttachments(api: FastifyInstance, store: Store, 
     const { profile_ref, ...upload } = record(request.body, ["profile_ref", "name", "mime", "size", "content_base64"]);
     const profile = string(profile_ref, "配置档案名称", 64);
     if (!refs.has(profile)) missing("配置档案");
-    const { reference: { sha256, ...file }, content } = attachmentUpload(upload, MAX_RECEIVED_ATTACHMENT_BYTES);
-    const metadata: Attachment = { attachment_id: id, ...file };
-    // shortcut: 附件持久保存在 PostgreSQL；媒体量增大时迁移对象存储并增加未引用文件的回收。
-    await store.transaction(async (db) => {
-      const inserted = await db.query(`INSERT INTO received_attachments (id, profile_ref, metadata, content, sha256)
-        VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`, [id, profile, metadata, content, sha256]);
-      if (inserted.rowCount) return;
-      const { rows: [old] } = await db.query<{ profile_ref: string; metadata: Attachment; sha256: string }>(
-        "SELECT profile_ref, metadata, sha256 FROM received_attachments WHERE id = $1", [id]);
-      if (!old || old.profile_ref !== profile || old.sha256 !== sha256 || !isDeepStrictEqual(old.metadata, metadata)) {
-        conflict("同一个附件 ID 对应不同的文件。");
-      }
-    });
+    const file = attachmentUpload(upload, MAX_RECEIVED_ATTACHMENT_BYTES);
+    const metadata = await store.transaction((db) => storeAttachment(db, id, profile, file));
     return { data: metadata, request_id: request.id, server_time: new Date().toISOString() };
   });
 

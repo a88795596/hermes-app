@@ -161,7 +161,7 @@ pnpm typecheck
 
 会话流光同时反映原生执行和当前会话中排队、运行的后台子任务。主轮次结束、等待子任务或自动续轮时仍保持运行提示；App 在前台每 3 秒通过状态接口核对，离开会话或进入后台后停止。连接器使用 `subagent.list` 和 `session.resume` 快照，不将单次 `message.complete` 当作整个任务完成。[Hermes 官方后台任务状态](https://github.com/NousResearch/hermes-agent/blob/3b421578588243f920886e6fe79a6faa87ea026e/apps/desktop/src/store/session-dot-state.ts)
 
-点输入框左侧的回形针，选择「图片」或「文件」。选中的附件会显示在输入框上方，可移除或继续添加。写好描述后点发送，附件和描述会一起交给 Hermes，也可以单独发送附件。每条消息最多 10 个附件，单个最多 5 MB，合计最多 6 MB。
+点输入框左侧的回形针，选择「图片」或「文件」。选中的附件会显示在输入框上方，可移除或继续添加。写好描述后点发送，附件和描述会一起交给 Hermes，也可以单独发送附件。每条消息最多 10 个附件，单个最多 5 MB，合计最多 6 MB。发送后可在聊天气泡中点开图片、播放音视频、预览 Markdown 和 HTML，也可以保存原文件。
 
 图片和普通文件分别通过原版 Hermes 的 `image.attach_bytes` 和 `file.attach` 发送。使用反向代理时，请为消息提交请求允许至少 9 MiB 请求体，并将 `/internal/connector/v1/submissions/` 的 HTTPS 请求转发给 BFF。图片读取由 Hermes 和当前模型的视觉能力决定。
 

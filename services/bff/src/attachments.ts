@@ -1,11 +1,30 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   isAttachmentMime, isAttachmentName, MAX_ATTACHMENTS, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_TOTAL_BYTES,
-  type AttachmentReference,
+  type Attachment, type AttachmentReference,
 } from "@hermes-mobile/protocol";
-import { invalid, record, string } from "./validation.js";
+import type { PoolClient } from "pg";
+import { conflict, invalid, record, string } from "./validation.js";
 
-export function submissionAttachments(value: unknown): { reference: AttachmentReference; content: Buffer }[] {
+export type ValidatedUpload = { reference: AttachmentReference; content: Buffer };
+
+export async function storeAttachment(db: PoolClient, id: string, profile: string, { reference, content }: ValidatedUpload) {
+  const { name, mime, size, sha256 } = reference;
+  const metadata = { attachment_id: id, name, mime, size };
+  const inserted = await db.query(`INSERT INTO received_attachments (id, profile_ref, metadata, content, sha256)
+    VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`, [id, profile, metadata, content, sha256]);
+  if (!inserted.rowCount) {
+    const { rows: [old] } = await db.query<{ profile_ref: string; metadata: Attachment; sha256: string }>(
+      "SELECT profile_ref, metadata, sha256 FROM received_attachments WHERE id = $1", [id]);
+    if (!old || old.profile_ref !== profile || old.sha256 !== sha256 || !isDeepStrictEqual(old.metadata, metadata)) {
+      conflict("同一个附件 ID 对应不同的文件。");
+    }
+  }
+  return metadata;
+}
+
+export function submissionAttachments(value: unknown): ValidatedUpload[] {
   if (value === undefined) return [];
   if (!Array.isArray(value) || value.length > MAX_ATTACHMENTS) invalid(`每条消息最多可添加 ${MAX_ATTACHMENTS} 个附件。`);
   let total = 0;
@@ -17,7 +36,7 @@ export function submissionAttachments(value: unknown): { reference: AttachmentRe
   });
 }
 
-export function attachmentUpload(value: unknown, maxBytes: number): { reference: AttachmentReference; content: Buffer } {
+export function attachmentUpload(value: unknown, maxBytes: number): ValidatedUpload {
   const item = record(value, ["name", "mime", "size", "content_base64"]);
   const name = string(item.name, "附件名称", 200).trim();
   const declared = string(item.mime, "附件类型", 127).toLowerCase();

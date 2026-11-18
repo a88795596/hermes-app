@@ -98,6 +98,7 @@ export async function applyResult(db: PoolClient, frame: CommandResult, refs: Se
     if (frame.status === "ok" && !frame.steering && !frame.admission_id) invalid("提交结果缺少受理 ID。");
     const status = frame.status === "ok" ? (frame.steering ? "final" : "queued") : frame.status === "error" ? "failed" : "unknown";
     await applySubmission(db, topic.id, payload.body.submission_id, status, frame.error, frame.admission_id);
+    // 清理旧版待发队列里遗留的暂存副本。
     if (payload.body.attachments) await db.query("DELETE FROM submission_attachments WHERE submission_id = $1", [frame.command_id]);
   } else if (isNative) {
     if (frame.native_result?.session_id !== undefined) {
