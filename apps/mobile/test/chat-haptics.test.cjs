@@ -29,7 +29,7 @@ function mount(file, name, props, speech, reduceMotion = true) {
         useEffectEvent: (callback) => callback,
       };
       case "react-native": return {
-        ActivityIndicator: "ActivityIndicator", FlatList: "FlatList", Modal: "Modal", Pressable: "Pressable",
+        ActivityIndicator: "ActivityIndicator", FlatList: "FlatList", Image: "Image", Modal: "Modal", Pressable: "Pressable",
         Text: "Text", View: "View", ScrollView: "ScrollView", KeyboardAvoidingView: "KeyboardAvoidingView", RefreshControl: "RefreshControl",
         StyleSheet: { create: (styles) => styles, hairlineWidth: 1 }, Platform: { OS: "ios" },
         Keyboard: { dismiss() {} }, useWindowDimensions: () => dimensions,
@@ -60,6 +60,7 @@ function mount(file, name, props, speech, reduceMotion = true) {
       case "./message-attachments": return { MessageAttachments: "MessageAttachments" };
       case "./native-command": return { NativeCommandSheet: "NativeCommandSheet" };
       case "./attachments": return { pickAttachments: async () => [] };
+      case "./attachment-content": return require("../src/chat/attachment-content.ts");
       case "./use-speech-input": return { useSpeechInput: (_id, _enabled, draft) => speech ?? {
         available: false, state: "idle", busy: false, start: async () => {}, stop: async () => draft,
       } };
@@ -109,6 +110,26 @@ function conversation(enqueue, draft = "测试消息", { messages = [], workspac
     ...props,
   }, speech, reduceMotion);
 }
+
+test("输入栏上方的图片草稿显示 100 × 100 缩略图，可单独移除并保留其他附件", () => {
+  const photo = { name: "横图.png", mime: "image/png", size: 3, content_base64: "AQID" };
+  const document = { name: "报告.pdf", mime: "application/pdf", size: 3, content_base64: "BAUG" };
+  let remaining;
+  const tree = conversation(async () => {}, "图片描述", {
+    attachments: [photo, document], onAttachmentsChange: (next) => { remaining = next; },
+  }).render();
+  const tray = find(tree, (node) => node.type === "ScrollView" && !!find(node.props.children,
+    (child) => child.props.accessibilityLabel === "移除附件 横图.png"));
+  const thumbnail = find(tray, (node) => node.type === "Image");
+  assert.ok(thumbnail, "所选图片立即显示缩略图");
+  assert.equal(thumbnail.props.source.uri, "data:image/png;base64,AQID");
+  const size = Object.assign({}, ...[thumbnail.props.style].flat(Infinity));
+  assert.deepEqual([size.width, size.height, thumbnail.props.resizeMode], [100, 100, "cover"]);
+  assert.equal(find(tray, (node) => node.type === "Text" && node.props.children === photo.name), undefined);
+  assert.ok(find(tray, (node) => node.props.children === document.name));
+  find(tray, (node) => node.props.accessibilityLabel === "移除附件 横图.png").props.onPress();
+  assert.deepEqual(remaining, [document]);
+});
 
 test("无限会话录音和弹层阻止切页，输入栏独立于分页消息区", () => {
   for (const busy of [true, false]) {
@@ -731,6 +752,7 @@ test("发出的纯附件消息在等待发送和进入历史后都有可容纳�
     const tree = screen.render();
     const files = find(tree, (node) => node.type === "MessageAttachments");
     assert.deepEqual(files.props.items, item.attachments);
+    assert.equal(files.props.outgoing, true);
     if (!pending) assert.equal(files.props.session, session);
     const bubble = find(tree, (node) => [node.props.children].flat().includes(files));
     const width = Object.assign({}, ...[bubble.props.style].flat(Infinity)).width;

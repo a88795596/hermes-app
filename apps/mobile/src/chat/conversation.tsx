@@ -1,10 +1,10 @@
 import { randomUUID } from "expo-crypto";
 import { openBrowserAsync, WebBrowserPresentationStyle } from "expo-web-browser";
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, type ComponentRef, type ReactNode, type Ref } from "react";
-import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { ActivityIndicator, Image, Keyboard, KeyboardAvoidingView, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import Animated from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { MAX_ATTACHMENTS, type AttachmentUpload, type Control, type Message, type MessageProcessStep, type Skill, type Topic } from "@hermes-mobile/protocol";
+import { MAX_ATTACHMENTS, type Attachment, type AttachmentUpload, type Control, type Message, type MessageProcessStep, type Skill, type Topic } from "@hermes-mobile/protocol";
 import type { Session } from "../auth/session";
 import type { useWorkspace } from "../sync/use-workspace";
 import { haptic } from "../ui/haptics";
@@ -14,6 +14,7 @@ import { profileLabel } from "../ui/text";
 import { Action, CloseButton, Field, Icon, Notice, useTheme } from "../ui/theme";
 import { AnswerMarkdown } from "./answer-markdown";
 import { AssistantStreamBorder } from "./assistant-stream-border";
+import { sentImageSize, uploadImageUri } from "./attachment-content";
 import { pickAttachments } from "./attachments";
 import { AttachmentMenu, ComposerMenu, ReasoningMenu, reasoningLabels } from "./composer-menu";
 import { ModelPicker } from "./model-picker";
@@ -22,6 +23,7 @@ import { MessageAttachments } from "./message-attachments";
 import { SettingsDrawer } from "./settings-drawer";
 import { useSpeechInput } from "./use-speech-input";
 
+const outgoingBubblePadding = 16;
 const messageStatus: Record<Message["status"], string> = {
   accepted: "已接收",
   queued: "排队中",
@@ -236,6 +238,11 @@ export function ConversationTranscript({ id, topic, newProfileId, workspace, ses
   const reduced = useReduceMotion();
   const { width } = useWindowDimensions();
   const messageWidth = Math.min(560, (width - transcriptGutter * 2) * 0.84);
+  function attachmentBubbleWidth(items?: Attachment[]) {
+    if (!items?.length) return;
+    const imagesOnly = items.every((item) => item.mime.startsWith("image/"));
+    return { width: imagesOnly ? Math.min(messageWidth, sentImageSize + 2 * outgoingBubblePadding) : messageWidth };
+  }
   const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
   const pinned = useRef(!targetMessageId);
   const focusTarget = useRef(Boolean(targetMessageId));
@@ -348,9 +355,9 @@ export function ConversationTranscript({ id, topic, newProfileId, workspace, ses
                 <View style={[
                   chat.messageContent,
                   outgoing ? [chat.outgoingBubble, { backgroundColor: colors.tint }] : chat.incomingBody,
-                  outgoing && !!message.attachments?.length && { width: messageWidth },
+                  outgoing && attachmentBubbleWidth(message.attachments),
                 ]}>
-                  {!!message.attachments?.length && <MessageAttachments items={message.attachments} session={session}
+                  {!!message.attachments?.length && <MessageAttachments items={message.attachments} session={session} outgoing={outgoing}
                     onOpenLink={openLink} tint={colors.foreground} />}
                   {!!message.text && (outgoing ? <Text
                     selectable
@@ -377,8 +384,8 @@ export function ConversationTranscript({ id, topic, newProfileId, workspace, ses
       {pending.map((item) => (
         <Animated.View key={item.submission_id} style={[chat.message, chat.outgoing, { maxWidth: messageWidth }, !reduced && motion.reveal]}>
           <View style={[chat.messageContent, chat.outgoingBubble, { backgroundColor: colors.tint },
-            !!item.attachments?.length && { width: messageWidth }]}>
-            {!!item.attachments?.length && <MessageAttachments items={item.attachments} onOpenLink={openLink} tint={colors.foreground} />}
+            attachmentBubbleWidth(item.attachments)]}>
+            {!!item.attachments?.length && <MessageAttachments items={item.attachments} outgoing onOpenLink={openLink} tint={colors.foreground} />}
             {!!item.text && <Text selectable accessibilityLabel={`你：${item.text}`} style={[styles.text, chat.messageText]}>
               {item.text}
             </Text>}
@@ -737,18 +744,32 @@ export function Conversation({
           )}
         </ScrollView>
         {!!attachments.length && (
-          <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={chat.attachmentTray}>
-            {attachments.map((item, index) => (
-              <View key={index} style={[chat.attachmentChip, { backgroundColor: colors.tint, borderColor: colors.edge }]}>
-                <Icon name={item.mime.startsWith("image/") ? "photo" : "attachment"} size={16} color={colors.accent} />
-                <Text numberOfLines={1} style={[styles.text, chat.attachmentName, chat.chipName]}>{item.name}</Text>
-                <CloseButton accessibilityLabel={`移除附件 ${item.name}`} disabled={sending || picking}
-                  onPress={() => {
-                    onAttachmentsChange(attachments.filter((_item, itemIndex) => itemIndex !== index));
-                    setError(undefined);
-                  }} />
-              </View>
-            ))}
+          <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false}
+            style={chat.toolbarScroll} contentContainerStyle={chat.attachmentTray}>
+            {attachments.map((item, index) => {
+              const uri = uploadImageUri(item);
+              const remove = <CloseButton accessibilityLabel={`移除附件 ${item.name}`} disabled={sending || picking}
+                onPress={() => {
+                  onAttachmentsChange(attachments.filter((_item, itemIndex) => itemIndex !== index));
+                  setError(undefined);
+                }} />;
+              return uri ? (
+                <View key={index}>
+                  <Image source={{ uri }} resizeMode="cover" accessibilityLabel={item.name}
+                    style={[chat.draftImage, { backgroundColor: colors.tint }]} />
+                  <View style={chat.removeImage}>
+                    <View style={[chat.removeImageBackground, { backgroundColor: colors.surface }]} />
+                    {remove}
+                  </View>
+                </View>
+              ) : (
+                <View key={index} style={[chat.attachmentChip, { backgroundColor: colors.tint, borderColor: colors.edge }]}>
+                  <Icon name="attachment" size={16} color={colors.accent} />
+                  <Text numberOfLines={1} style={[styles.text, chat.attachmentName, chat.chipName]}>{item.name}</Text>
+                  {remove}
+                </View>
+              );
+            })}
           </ScrollView>
         )}
         <View style={chat.composerControls}>
@@ -870,14 +891,17 @@ const chat = StyleSheet.create({
   startGroup: { marginTop: 8 },
   messageContent: { gap: 8, maxWidth: "100%" },
   incomingBody: { alignSelf: "stretch" },
-  outgoingBubble: { borderRadius: 19, paddingHorizontal: 16, paddingVertical: 11 },
+  outgoingBubble: { borderRadius: 19, paddingHorizontal: outgoingBubblePadding, paddingVertical: 11 },
   messageText: { fontSize: 17, lineHeight: 26 },
   outgoingStatus: { textAlign: "right", marginEnd: 3 },
   composer: { paddingVertical: 8, borderTopWidth: StyleSheet.hairlineWidth, gap: 4 },
   toolbarScroll: { flexGrow: 0 },
   toolbar: { flexDirection: "row", flexWrap: "nowrap", alignItems: "center", gap: 6 },
   attachmentName: { flexShrink: 1, fontSize: 13 },
-  attachmentTray: { gap: 6, paddingVertical: 3 },
+  attachmentTray: { gap: 6, paddingVertical: 3, alignItems: "center" },
+  draftImage: { width: 100, height: 100, borderRadius: 12 },
+  removeImage: { position: "absolute", top: 0, right: 0, alignItems: "center", justifyContent: "center" },
+  removeImageBackground: { position: "absolute", width: 26, height: 26, borderRadius: 13 },
   attachmentChip: { flexDirection: "row", gap: 6, alignItems: "center", paddingStart: 10, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth },
   chipName: { maxWidth: 140 },
   iconButton: { width: touchSize, height: touchSize, alignItems: "center", justifyContent: "center" },

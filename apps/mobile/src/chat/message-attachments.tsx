@@ -9,7 +9,7 @@ import { OverlayModal } from "../ui/overlay";
 import { PageHeader } from "../ui/page-header";
 import { Action, CloseButton, Icon, Notice, useTheme } from "../ui/theme";
 import { AnswerMarkdown } from "./answer-markdown";
-import { attachmentKind, type AttachmentContent } from "./attachment-content";
+import { attachmentKind, sentImageSize, uploadImageUri, type AttachmentContent } from "./attachment-content";
 import { HtmlPreview } from "./html-preview";
 import { loadAttachment, saveAttachment } from "./load-attachment";
 import { MediaPlayer } from "./media-player";
@@ -24,13 +24,14 @@ const saveErrorMessages = new Set([
   "目标文件夹中有过多同名文件，请选择其他位置。",
 ]);
 
-function MessageFile({ item: { attachment_id, name, mime, size }, session, tint, onOpenLink }: {
-  item: Attachment; session: Session; tint: string; onOpenLink: (url: string) => void;
+function MessageFile({ item: { attachment_id, name, mime, size }, session, outgoing, localUri, tint, onOpenLink }: {
+  item: Attachment; session?: Session; outgoing: boolean; localUri?: string; tint: string; onOpenLink: (url: string) => void;
 }) {
   const { colors, dark, styles } = useTheme();
   const { height, width } = useWindowDimensions();
   const reduced = useReduceMotion();
   const kind = attachmentKind({ name, mime });
+  const sentImage = outgoing && kind === "image";
   const [requested, setRequested] = useState(kind === "image");
   const [attempt, setAttempt] = useState(0);
   const [content, setContent] = useState<AttachmentContent>();
@@ -44,7 +45,7 @@ function MessageFile({ item: { attachment_id, name, mime, size }, session, tint,
   const [dimensions, setDimensions] = useState({ width: 4, height: 3 });
 
   useEffect(() => {
-    if (!requested) return;
+    if (!requested || !session || localUri) return;
     const controller = new AbortController();
     let resource: AttachmentContent | undefined;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- Invalidate the revoked file URI before waiting for its replacement.
@@ -56,7 +57,7 @@ function MessageFile({ item: { attachment_id, name, mime, size }, session, tint,
       if (controller.signal.aborted) return result.dispose();
       const text = kind === "html" || kind === "markdown" ? await result.text() : undefined;
       if (controller.signal.aborted) return result.dispose();
-      if (kind === "image") Image.getSize(result.uri, (width, height) => {
+      if (kind === "image" && !sentImage) Image.getSize(result.uri, (width, height) => {
         if (!controller.signal.aborted && width && height) setDimensions({ width, height });
       }, () => {});
       setDocument(text);
@@ -66,10 +67,11 @@ function MessageFile({ item: { attachment_id, name, mime, size }, session, tint,
       if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : "无法读取附件，请重试。");
     });
     return () => { controller.abort(); resource?.dispose(); };
-  }, [requested, attempt, session, attachment_id, name, mime, size, kind]);
+  }, [requested, attempt, session, attachment_id, name, mime, size, kind, sentImage, localUri]);
 
   const retry = () => { setError(undefined); setAttempt((value) => value + 1); setRequested(true); };
-  const busy = requested && !content && !error;
+  const imageUri = localUri ?? content?.uri;
+  const busy = requested && !content && !localUri && !error;
   const label = kind === "audio" ? "打开音频" : kind === "video" ? "打开视频"
     : kind === "file" ? "查看文件" : "打开预览";
   const show = () => {
@@ -79,7 +81,7 @@ function MessageFile({ item: { attachment_id, name, mime, size }, session, tint,
     if (kind === "image" || kind === "markdown" || kind === "html") setOpen(true);
   };
   async function save() {
-    if (savingRef.current) return;
+    if (!session || savingRef.current) return;
     savingRef.current = true;
     setSaving(true);
     setSaveError(undefined);
@@ -110,7 +112,15 @@ function MessageFile({ item: { attachment_id, name, mime, size }, session, tint,
   const aspectRatio = Math.max(0.5, Math.min(2, dimensions.width / dimensions.height));
 
   return <View style={layout.file}>
-    {content && (kind === "image" || kind === "video") ? (
+    {sentImage ? (
+      <Pressable accessibilityRole="button" accessibilityLabel={`查看图片：${name}`} onPress={show}
+        style={({ pressed }) => [layout.sentThumbnail, { backgroundColor: colors.field }, pressed && styles.faded]}>
+        {error ? <Icon name="photo" size={24} color={colors.muted} />
+          : imageUri ? <Image source={{ uri: imageUri }} resizeMode="cover" style={layout.thumbnailImage}
+            onError={() => setError("无法显示图片，请重试。")} />
+          : <ActivityIndicator color={colors.accent} />}
+      </Pressable>
+    ) : content && (kind === "image" || kind === "video") ? (
       <View style={layout.media}>
         {kind === "image" ? (
           <Pressable accessibilityRole="button" accessibilityLabel={`查看图片：${name}`} onPress={show}
@@ -146,9 +156,7 @@ function MessageFile({ item: { attachment_id, name, mime, size }, session, tint,
         {saveButton()}
       </View>
     )}
-    {!open && loading}
-    {!open && failure}
-    {!open && saveFeedback}
+    {!open && !sentImage && <>{loading}{failure}{saveFeedback}</>}
     <OverlayModal visible={open} animationType={reduced ? "none" : "slide"} onRequestClose={() => setOpen(false)}
       supportedOrientations={["portrait", "landscape-left", "landscape-right"]}>
       <SafeAreaView style={layout.previewWindow} edges={["top"]}>
@@ -164,13 +172,13 @@ function MessageFile({ item: { attachment_id, name, mime, size }, session, tint,
                 <Icon name="logs" size={18} color={colors.accent} />
               </View>}
               trailing={<View style={layout.headerActions}>
-                {kind === "image" && saveButton()}
+                {kind === "image" && session && saveButton()}
                 <CloseButton accessibilityLabel="关闭文件预览" onPress={() => setOpen(false)} />
               </View>} />
           </View>
           {loading}{failure}{saveFeedback}
-          {open && content && kind === "image" && <View style={layout.imagePreview}>
-            <Image source={{ uri: content.uri }} accessibilityLabel={name} resizeMode="contain" style={layout.fullImage} />
+          {open && imageUri && kind === "image" && <View style={layout.imagePreview}>
+            <Image source={{ uri: imageUri }} accessibilityLabel={name} resizeMode="contain" style={layout.fullImage} />
           </View>}
           {open && document !== undefined && kind === "markdown" && <ScrollView contentContainerStyle={layout.markdown}>
             <AnswerMarkdown text={document} onOpenLink={onOpenLink} />
@@ -184,23 +192,28 @@ function MessageFile({ item: { attachment_id, name, mime, size }, session, tint,
   </View>;
 }
 
-export function MessageAttachments({ items, session, tint, onOpenLink }: {
-  items: Attachment[]; session?: Session; tint: string; onOpenLink: (url: string) => void;
+export function MessageAttachments({ items, session, outgoing = false, tint, onOpenLink }: {
+  items: Attachment[]; session?: Session; outgoing?: boolean; tint: string; onOpenLink: (url: string) => void;
 }) {
   const { colors, styles } = useTheme();
-  return <View style={layout.files}>{items.map((item, index) => item.attachment_id && session ? (
-    <MessageFile key={item.attachment_id} item={item} session={session} tint={tint} onOpenLink={onOpenLink} />
-  ) : (
-    <View key={index} style={layout.row}>
-      <View style={[layout.fileIcon, { backgroundColor: colors.tint }]}>
-        <Icon name={item.mime.startsWith("image/") ? "photo" : "attachment"} size={18} color={colors.accent} />
+  return <View style={layout.files}>{items.map((item, index) => {
+    const localUri = outgoing && !item.attachment_id ? uploadImageUri(item) : undefined;
+    if ((item.attachment_id && session) || localUri) {
+      return <MessageFile key={item.attachment_id ?? index} item={item} session={session} outgoing={outgoing}
+        localUri={localUri} tint={tint} onOpenLink={onOpenLink} />;
+    }
+    return (
+      <View key={index} style={layout.row}>
+        <View style={[layout.fileIcon, { backgroundColor: colors.tint }]}>
+          <Icon name={item.mime.startsWith("image/") ? "photo" : "attachment"} size={18} color={colors.accent} />
+        </View>
+        <View style={layout.name}>
+          <Text numberOfLines={2} style={[styles.heading, layout.fileName, { color: tint }]}>{item.name}</Text>
+          {!!session && <Text style={styles.caption}>暂无可用预览</Text>}
+        </View>
       </View>
-      <View style={layout.name}>
-        <Text numberOfLines={2} style={[styles.heading, layout.fileName, { color: tint }]}>{item.name}</Text>
-        {!!session && <Text style={styles.caption}>暂无可用预览</Text>}
-      </View>
-    </View>
-  ))}</View>;
+    );
+  })}</View>;
 }
 
 const layout = StyleSheet.create({
@@ -221,6 +234,8 @@ const layout = StyleSheet.create({
   fileName: { fontSize: 16, lineHeight: 22 },
   name: { flex: 1, minWidth: 0 },
   image: { width: "100%", maxHeight: 360, borderRadius: 16 },
+  sentThumbnail: { width: sentImageSize, maxWidth: "100%", aspectRatio: 1, alignItems: "center", justifyContent: "center", borderRadius: 14, overflow: "hidden" },
+  thumbnailImage: { width: "100%", height: "100%" },
   loading: { padding: 16, flexDirection: "row", gap: 8, alignItems: "center", justifyContent: "center" },
   error: { padding: 12, gap: 8 },
   previewWindow: { flex: 1 },

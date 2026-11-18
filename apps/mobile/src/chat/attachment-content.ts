@@ -1,6 +1,12 @@
 import { MAX_RECEIVED_ATTACHMENT_BYTES, type Attachment } from "@hermes-mobile/protocol";
 import type { Session } from "../auth/session";
 
+export const sentImageSize = 200;
+
+export function uploadImageUri(item: Attachment & { content_base64?: string }) {
+  if (item.mime.startsWith("image/") && item.content_base64) return `data:${item.mime};base64,${item.content_base64}`;
+}
+
 export function attachmentKind({ name, mime }: Pick<Attachment, "name" | "mime">) {
   if (mime.startsWith("image/")) return "image";
   if (mime.startsWith("audio/") || /\.(mp3|m4a|aac|wav|ogg|opus|flac)$/iu.test(name)) return "audio";

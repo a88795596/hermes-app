@@ -53,6 +53,7 @@ function mount(props) {
       case "./assistant-stream-border": return { AssistantStreamBorder: "AssistantStreamBorder" };
       case "./message-attachments": return { MessageAttachments: "MessageAttachments" };
       case "./attachments": return {};
+      case "./attachment-content": return require("../src/chat/attachment-content.ts");
       case "./model-picker": return {};
       case "./native-command": return { NativeCommandSheet: "NativeCommandSheet" };
       case "./settings-drawer": return {};

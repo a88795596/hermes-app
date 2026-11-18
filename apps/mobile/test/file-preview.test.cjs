@@ -5,7 +5,7 @@ const ts = require("typescript");
 const Image = Object.assign(() => null, { getSize: (_uri, onSize) => onSize(640, 480) });
 
 function mountPreview({ kind = "markdown", dark = false, reduced = false, save = async () => "files",
-  attachmentId = "file-id", session = {} } = {}) {
+  attachmentId = "file-id", session = {}, outgoing = false, upload } = {}) {
   const jsx = (type, props) => ({ type, props });
   const state = [];
   const saves = [];
@@ -40,7 +40,7 @@ function mountPreview({ kind = "markdown", dark = false, reduced = false, save =
     "../ui/page-header": { PageHeader: "PageHeader" },
     "../ui/theme": { Action: "Action", CloseButton: "CloseButton", Icon: "Icon", Notice: "Notice",
       useTheme: () => ({ colors, dark, styles: {} }) },
-    "./attachment-content": { attachmentKind: () => kind },
+    "./attachment-content": { ...require("../src/chat/attachment-content.ts"), attachmentKind: () => kind },
     "./answer-markdown": { AnswerMarkdown: "AnswerMarkdown" },
     "./html-preview": { HtmlPreview: "HtmlPreview" },
     "./load-attachment": { async loadAttachment() { return { uri: "file:///cache/media", dispose() {} }; },
@@ -55,8 +55,9 @@ function mountPreview({ kind = "markdown", dark = false, reduced = false, save =
     assert.ok(name in modules, name);
     return modules[name];
   });
-  const file = exports.MessageAttachments({ items: [{ attachment_id: attachmentId, name: "报告", mime: "text/plain", size: 10 }],
-    session, tint: "text", onOpenLink() {} }).props.children[0];
+  const file = exports.MessageAttachments({ items: [{ attachment_id: attachmentId, name: "报告",
+    mime: kind === "image" ? "image/png" : "text/plain", size: 10, ...upload }],
+    session, outgoing, tint: "text", onOpenLink() {} }).props.children[0];
   const render = () => { cursor = 0; return typeof file.type === "function" ? file.type(file.props) : file; };
   render.saves = saves;
   render.load = async () => { loadEffect(); await new Promise(setImmediate); };
@@ -70,6 +71,34 @@ function find(node, predicate) {
   return find([node.props.children, node.props.trailing], predicate);
 }
 const flatten = (style) => Object.assign({}, ...[style].flat(Infinity));
+
+test("发出的图片从等待发送到进入历史都显示 200 × 200 缩略图，点击后展示完整图片", async () => {
+  for (const pending of [false, true]) {
+    const file = mountPreview({ kind: "image", outgoing: true,
+      ...(pending && { session: null, attachmentId: null, upload: { content_base64: "AQID" } }) });
+    file();
+    if (!pending) await file.load();
+    const tree = file();
+    const button = find(tree, (node) => node.props.accessibilityLabel === "查看图片：报告");
+    assert.ok(button, "图片缩略图可点击");
+    const thumb = find(button, (node) => node.type === Image);
+    const size = flatten(typeof button.props.style === "function" ? button.props.style({ pressed: false }) : button.props.style);
+    assert.deepEqual([size.width, size.height ?? size.width / size.aspectRatio], [200, 200]);
+    assert.equal(thumb.props.resizeMode, "cover");
+    const uri = pending ? "data:image/png;base64,AQID" : "file:///cache/media";
+    assert.equal(thumb.props.source.uri, uri);
+    assert.equal(find(tree.props.children[0], (node) => node.props.accessibilityLabel === "保存报告"), undefined);
+    assert.equal(find(tree, (node) => node.type === "Modal").props.visible, false);
+    button.props.onPress();
+    const modal = find(file(), (node) => node.type === "Modal");
+    assert.equal(modal.props.visible, true);
+    const original = find(modal, (node) => node.type === Image);
+    assert.equal(original.props.resizeMode, "contain");
+    assert.equal(original.props.source.uri, uri);
+    find(modal, (node) => node.type === "CloseButton").props.onPress();
+    assert.equal(find(file(), (node) => node.type === "Modal").props.visible, false);
+  }
+});
 
 test("旧消息缺少原件时保留文件名并说明原因，等待发送的附件不显示丢失提示", () => {
   for (const session of [{}, null]) {
