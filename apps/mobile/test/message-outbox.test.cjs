@@ -65,7 +65,7 @@ async function workspace(cache, submit, messages = [], options = {}) {
     if (path === "/ws-tickets") return { ticket: "live-ticket" };
     const status = path.match(/^\/topics\/([^/]+)\/status$/);
     if (status) return options.status ? options.status(status[1], requestOptions) : { activity: "idle" };
-    if (path === `/topics/${selectedTopic}`) return { topic: { ...topic, topic_id: selectedTopic }, messages: structuredClone(messages), controls: [] };
+    if (path === `/topics/${selectedTopic}`) return { topic: { ...topic, ...options.topicDetail?.(), topic_id: selectedTopic }, messages: structuredClone(messages), controls: [] };
     return submit(path, requestOptions);
   };
   // The live transport stays idle; explicit refresh exercises the real recovery path.
@@ -425,6 +425,26 @@ test("会话状态查询不重叠，切换会话或进入后台后忽略旧响�
   assert.equal(calls.length, before + 1);
 });
 
+test("模型和上下文跟随当前会话，切换期间和后续刷新均不沿用旧用量", async (t) => {
+  const first = { activity: "idle", model: "model-a", context_usage: { used: 800, max: 1000 } };
+  let next = { activity: "running", model: "model-b", context_usage: { used: 20, max: 200 } };
+  let release;
+  const app = await workspace(memoryCache(), () => {}, [], { status: (id) => id === "topic" ? first
+    : new Promise((resolve) => { release = () => resolve(next); }) });
+  t.after(app.close);
+  assert.deepEqual(app.current.sessionStatus?.status, first);
+  await app.selectTopic("other");
+  assert.equal(app.current.sessionStatus, undefined);
+  release();
+  await app.settle();
+  assert.deepEqual(app.current.sessionStatus?.status, next);
+  next = { activity: "idle", model: "model-c" };
+  await app.pollStatus();
+  release();
+  await app.settle();
+  assert.deepEqual(app.current.sessionStatus?.status, next);
+});
+
 test("临时查询失败不把仍在工作的会话判为空闲，后续权威状态可恢复", async (t) => {
   let fail = false, activity = "running";
   const app = await workspace(memoryCache(), () => {}, [], { status: async () => {
@@ -439,6 +459,27 @@ test("临时查询失败不把仍在工作的会话判为空闲，后续权威�
   activity = "idle";
   await app.pollStatus();
   assert.equal(app.current.activity, "idle");
+});
+
+test("更改会话思考设置时立即重查，等待新回报期间保留模型和上下文", async (t) => {
+  const status = { activity: "idle", model: "model", context_usage: { used: 10, max: 100 } };
+  let selected, release;
+  const app = await workspace(memoryCache(), () => {}, [], {
+    topicDetail: () => ({ reasoning_effort: selected }),
+    status: () => selected === undefined ? { ...status, reasoning_effort: "low" }
+      : new Promise((resolve) => { release = resolve; }),
+  });
+  t.after(app.close);
+  assert.equal(app.current.sessionStatus.status.reasoning_effort, "low");
+  selected = "xhigh";
+  await app.current.refresh();
+  await app.settle();
+  assert.equal(app.current.sessionStatus.status.reasoning_effort, undefined);
+  assert.equal(app.current.sessionStatus.status.model, status.model);
+  assert.deepEqual(app.current.sessionStatus.status.context_usage, status.context_usage);
+  release({ ...status, reasoning_effort: "high" });
+  await app.settle();
+  assert.equal(app.current.sessionStatus.status.reasoning_effort, "high");
 });
 
 test("新执行开始后立即丢弃上一轮空闲状态，重新查询后原生状态仍优先", async (t) => {

@@ -1,5 +1,5 @@
-import type { ConnectorFrame, MessageProcessStep, ModelResult, NativeCommand, NativeCommandResult } from "@hermes-mobile/protocol";
-import { MAX_CLARIFY_CHOICE_BYTES, MAX_INBOX_TITLE_BYTES, MAX_MESSAGE_PROCESS_STEPS, MAX_MESSAGE_PROCESS_TEXT_BYTES, MAX_TOPIC_TITLE_BYTES } from "@hermes-mobile/protocol";
+import type { ConnectorFrame, MessageProcessStep, ModelResult, NativeCommand, NativeCommandResult, SessionStatus } from "@hermes-mobile/protocol";
+import { MAX_CLARIFY_CHOICE_BYTES, MAX_INBOX_TITLE_BYTES, MAX_MESSAGE_PROCESS_STEPS, MAX_MESSAGE_PROCESS_TEXT_BYTES, MAX_TOPIC_TITLE_BYTES, reasoningEfforts } from "@hermes-mobile/protocol";
 import { deliverySessionId, invalid, record, string, uuid } from "./validation.js";
 import { receivedAttachmentReferences } from "./received-attachments.js";
 
@@ -8,6 +8,16 @@ const controlStatuses = ["pending", "responding", "closed", "unknown"] as const;
 function option<const T extends string>(value: unknown, allowed: readonly T[]): T {
   if (typeof value !== "string" || !allowed.includes(value as T)) invalid("连接器的枚举值无效。");
   return value as T;
+}
+
+function contextUsage(value: unknown): NonNullable<SessionStatus["context_usage"]> {
+  const { used, max, estimated } = record(value, ["used", "max", "estimated"]);
+  if (typeof used !== "number" || !Number.isSafeInteger(used) || used < 0) invalid("上下文占用无效。");
+  if (max !== undefined && (typeof max !== "number" || !Number.isSafeInteger(max) || max < 1 || used > max)) {
+    invalid("上下文窗口大小无效。");
+  }
+  if (estimated !== undefined && typeof estimated !== "boolean") invalid("上下文估算标记无效。");
+  return { used, ...(max !== undefined && { max }), ...(estimated !== undefined && { estimated }) };
 }
 
 function messageProcess(value: unknown): MessageProcessStep[] {
@@ -132,7 +142,7 @@ export function connectorFrame(value: unknown): ConnectorFrame {
         return { type, request_id, data: { kind: "version", version: string(data.version, "Hermes 版本", 128) } };
       }
       if (data.kind !== "status") invalid("查询结果无效。");
-      const status = record(data.status, ["activity", "model", "message_count"]);
+      const status = record(data.status, ["activity", "model", "message_count", "context_usage", "reasoning_effort"]);
       const count = status.message_count;
       if (count !== undefined && (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0)) {
         invalid("消息数量无效。");
@@ -140,7 +150,9 @@ export function connectorFrame(value: unknown): ConnectorFrame {
       return { type, request_id, data: { kind: "status", status: {
         activity: option(status.activity, ["idle", "running", "queued", "unknown"]),
         ...(status.model === undefined ? {} : { model: string(status.model, "模型", 512) }),
+        ...(status.reasoning_effort === undefined ? {} : { reasoning_effort: option(status.reasoning_effort, reasoningEfforts) }),
         ...(count === undefined ? {} : { message_count: count }),
+        ...(status.context_usage === undefined ? {} : { context_usage: contextUsage(status.context_usage) }),
       } } };
     }
     case "delivery": {

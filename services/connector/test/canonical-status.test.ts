@@ -36,6 +36,9 @@ test('会话状态查询结合原生执行和所属会话的后台子任务', { 
     url: `ws://127.0.0.1:${address.port}/api/ws`, ticket: 'test', protocol,
     protocols: [protocol, 'hermes-gateway-ticket.test'] })}\nEND\n`, { mode: 0o700 });
   let running = false;
+  let usage: JsonObject = { model: 'test-model', context_used: 32_000, context_max: 128_000, total: 700_000 };
+  let reasoning: JsonObject = {};
+  let breakdown: JsonObject = {};
   let roster: JsonObject = { subagents: [] };
   let refusal: { code: number; data: { reason: string } } | undefined;
   const calls: { method: string; params: JsonObject }[] = [];
@@ -44,7 +47,7 @@ test('会话状态查询结合原生执行和所属会话的后台子任务', { 
     send({ method: 'event', params: { type: 'gateway.ready', payload: { session_authority: true } } });
     socket.on('message', (raw) => {
       const { id, method, params } = JSON.parse(String(raw));
-      if (method === 'session.info' || method === 'session.resume' || method === 'subagent.list') calls.push({ method, params });
+      if (['session.info', 'session.resume', 'subagent.list', 'session.context_breakdown'].includes(method)) calls.push({ method, params });
       if (method === 'subagent.list' && refusal) {
         send({ id, error: refusal });
         return;
@@ -56,7 +59,8 @@ test('会话状态查询结合原生执行和所属会话的后台子任务', { 
         : method === 'session.events.since' ? { snapshot_required: true, events: [] }
         : method === 'session.resume' ? { session_id: sessionId, stored_session_id: sessionId, authority_epoch: 1,
           replay_epoch: 'epoch', last_sequence: 0, subscription_id: 'subscription', execution_generation: 2,
-          revision: 2, running, prompts: [], pending: [], message_count: 3, info: { profile_id: 'default', model: 'test-model' } }
+          revision: 2, running, prompts: [], pending: [], message_count: 3, info: { profile_id: 'default', model: 'test-model', usage, ...reasoning } }
+        : method === 'session.context_breakdown' ? breakdown
         : method === 'session.info' ? { profile_id: 'default', model: 'test-model' }
         : roster;
       send({ id, result });
@@ -64,7 +68,9 @@ test('会话状态查询结合原生执行和所属会话的后台子任务', { 
   });
   await connector.command({ type: 'command', command_id: randomUUID(), topic_id: topicId, profile_ref: 'default',
     session_id: sessionId, kind: 'watch', body: {} }, () => true);
-  const query = () => connector.query({ type: 'topic_query', kind: 'status', request_id: randomUUID(),
+  const query = (includeContext = true, includeReasoning = true) => connector.query({ type: 'topic_query', kind: 'status', request_id: randomUUID(),
+    ...(includeContext && { include_context: true as const }),
+    ...(includeReasoning && { include_reasoning: true as const }),
     topic_id: topicId, profile_ref: 'default', session_id: sessionId });
   const cases = [
     { name: '无移动端提交时仍识别原生执行', running: true, children: [], stale: false, activity: 'running' },
@@ -81,11 +87,43 @@ test('会话状态查询结合原生执行和所属会话的后台子任务', { 
     spool.record(topicId, [], undefined, { topicId, admissionId: 'stale-local', submissionId: randomUUID(),
       text: '', status: value.queued ? 'queued' : value.stale ? 'streaming' : 'final' });
     calls.length = 0;
-    assert.deepEqual(await query(), { kind: 'status', status: { activity: value.activity, model: 'test-model', message_count: 3 } });
+    assert.deepEqual(await query(), { kind: 'status', status: { activity: value.activity, model: 'test-model', message_count: 3,
+      context_usage: { used: 32_000, max: 128_000 } } });
     assert.deepEqual(calls, [
       { method: 'subagent.list', params: { session_id: sessionId } },
       { method: 'session.resume', params: { session_id: sessionId, omit_messages: true } },
     ], '子任务必须按已验证的会话范围查询，并在之后读取最新父执行状态');
+  });
+  await t.test('旧版 BFF 查询仅返回其认识的状态字段', async () => {
+    reasoning = { reasoning_effort: 'high' };
+    const data = await query(false, false);
+    assert(data.kind === 'status');
+    assert.equal(data.status.context_usage, undefined);
+    const contextOnly = await query(true, false);
+    assert(contextOnly.kind === 'status' && contextOnly.status.context_usage);
+    assert.equal(contextOnly.status.reasoning_effort, undefined);
+    assert.equal(data.status.reasoning_effort, undefined);
+  });
+  await t.test('读取本会话原生思考档位，优先返回模型实际采用的档位', async () => {
+    for (const [configured, wire, expected] of [
+      ['xhigh', 'high', 'high'], ['none', '', 'none'], ['minimal', '', 'minimal'], ['new-value', '', undefined],
+    ] as const) {
+      reasoning = { reasoning_effort: configured, reasoning_effort_wire: wire };
+      const data = await query();
+      assert(data.kind === 'status');
+      assert.equal(data.status.reasoning_effort, expected);
+    }
+  });
+  await t.test('恢复旧会话时读取 Hermes 的上下文估算，累计吞吐量不计入占用', async () => {
+    running = false;
+    usage = { total: 700_000, input: 600_000 };
+    roster = { subagents: [] };
+    breakdown = { context_used: 0, context_max: 0, estimated_total: 9_250 };
+    calls.length = 0;
+    const data = await query();
+    assert(data.kind === 'status');
+    assert.deepEqual(data.status.context_usage, { used: 9_250, estimated: true });
+    assert.deepEqual(calls.at(-1), { method: 'session.context_breakdown', params: { session_id: sessionId } });
   });
   for (const [code, reason] of [[-32601, 'unknown_method'], [4001, 'unsupported_projection']] as const) {
     await t.test(`旧网关 ${reason} 回退原生父状态`, async () => {
@@ -119,4 +157,14 @@ test('HTTP 旧会话缺少原生运行字段时继续从本地提交推断状态
   assert.equal(sessionStatus({}, [{ ...turn, status: 'queued' }]).activity, 'queued');
   assert.equal(sessionStatus({}, []).activity, 'idle');
   assert.throws(() => sessionStatus({ running: 'false' }, []));
+});
+
+test('可用的上下文占用保留零值和估算标记，缺失或属于旧模型的用量不显示', () => {
+  assert.deepEqual(sessionStatus({ model: 'm', context_length: 128_000,
+    usage: { context_used: 0, context_estimated: true } }, [], [], true),
+  { activity: 'idle', model: 'm', context_usage: { used: 0, max: 128_000, estimated: true } });
+  for (const usage of [{ total: 500_000 }, { context_used: -1 }, { context_used: '5' },
+    { model: 'previous', context_used: 42, context_max: 50 }]) {
+    assert.deepEqual(sessionStatus({ model: 'm', usage }, [], [], true), { activity: 'idle', model: 'm' });
+  }
 });

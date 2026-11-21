@@ -51,7 +51,9 @@ export function bridgeFrame(source: string): BridgeFrame {
     && typeof frame.profile_ref === 'string' && /^[a-z0-9][a-z0-9_-]{0,63}$/u.test(frame.profile_ref)
     && text(frame.session_id, 512) && (frame.kind === 'skills' || frame.kind === 'status' || frame.kind === 'version' || frame.kind === 'commands')) {
     const { type, request_id, topic_id, profile_ref, session_id, kind } = frame;
-    return { type, request_id, topic_id, profile_ref, session_id, kind };
+    return { type, request_id, topic_id, profile_ref, session_id, kind,
+      ...(kind === 'status' && frame.include_context === true && { include_context: true }),
+      ...(kind === 'status' && frame.include_reasoning === true && { include_reasoning: true }) };
   }
   if (frame?.type === 'management_request') {
     const { type, request_id, profile_ref, operation } = frame;

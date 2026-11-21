@@ -49,11 +49,26 @@ export async function webappSkills({ origin, token }: WebappAccess, profile: str
   return skillList(skills.filter((item: unknown) => object(item)?.enabled !== false));
 }
 
-export function sessionStatus(value: unknown, turns: Turn[], subagents: unknown[] = []): SessionStatus {
+export function contextUsage(value: unknown, model?: string, window?: unknown): SessionStatus['context_usage'] {
+  const usage = object(value);
+  const usageModel = string(usage?.model)?.trim();
+  if (!usage || (model && usageModel && model !== usageModel)) return;
+  const reportedMax = integer(usage.context_max);
+  const max = reportedMax || integer(window) || undefined;
+  const reportedUsed = integer(usage.context_used);
+  // Agentless context breakdowns can have zeroed header fields and a real transcript estimate.
+  const estimate = !reportedMax && !reportedUsed ? integer(usage.estimated_total) : undefined;
+  const used = estimate || reportedUsed;
+  if (used === undefined || (!used && !max) || (max !== undefined && used > max)) return;
+  return { used, ...(max && { max }), ...((estimate || usage.context_estimated === true) && { estimated: true }) };
+}
+
+export function sessionStatus(value: unknown, turns: Turn[], subagents: unknown[] = [], includeContext = false): SessionStatus {
   const item = object(value);
   if (!item || (item.running !== undefined && typeof item.running !== 'boolean')) throw new Error('Hermes 会话状态无效');
-  const model = boundedText(string(item.model) ?? '', 512).trim();
+  const model = boundedText(string(item.model)?.trim() || string(object(item.usage)?.model)?.trim() || '', 512);
   const count = integer(item.message_count);
+  const context = includeContext ? contextUsage(item.usage, model, item.context_length) : undefined;
   const children = subagents.map((value) => {
     const status = string(object(value)?.status);
     if (!status || !['queued', 'running', 'completed', 'failed', 'error', 'timeout', 'interrupted'].includes(status)) {
@@ -69,5 +84,6 @@ export function sessionStatus(value: unknown, turns: Turn[], subagents: unknown[
     activity,
     ...(model && { model }),
     ...(count !== undefined && { message_count: count }),
+    ...(context && { context_usage: context }),
   };
 }

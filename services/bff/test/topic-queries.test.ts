@@ -4,6 +4,7 @@ import test from "node:test";
 import websocket from "@fastify/websocket";
 import Fastify from "fastify";
 import WebSocket from "ws";
+import { connectorFrame } from "../src/connector-frame.js";
 import { registerPersonalRoutes } from "../src/routes/personal.js";
 import type { Store } from "../src/store.js";
 
@@ -45,7 +46,8 @@ test("话题查询使用通过鉴权的话题所绑定的 Hermes 配置档案和
   try {
     await once(ws, "open", { signal: t.signal });
     const skills = Array.from({ length: 205 }, (_, index) => ({ name: `skill-${index}` }));
-    const status = { activity: "running", model: "test-model", message_count: 0 };
+    const status = { activity: "running", model: "test-model", reasoning_effort: "xhigh", message_count: 0,
+      context_usage: { used: 32_000, max: 128_000, estimated: true } };
     for (const [kind, expected] of [
       ["skills", skills],
       ["status", status],
@@ -55,6 +57,7 @@ test("话题查询使用通过鉴权的话题所绑定的 Hermes 配置档案和
         const frame = JSON.parse(raw.toString());
         assert.deepEqual(frame, {
           type: "topic_query", request_id: frame.request_id, kind,
+          ...(kind === "status" && { include_context: true, include_reasoning: true }),
           topic_id: topicId, profile_ref: "work", session_id: sessionId,
         });
         ws.send(JSON.stringify({
@@ -77,5 +80,23 @@ test("话题查询使用通过鉴权的话题所绑定的 Hermes 配置档案和
     await closed;
   } finally {
     ws.terminate();
+  }
+});
+
+test("会话状态兼容旧连接器，并校验上下文占用的单位和边界", () => {
+  const frame = (usage?: unknown) => ({ type: "topic_query_result", request_id: "00000000-0000-4000-8000-000000000001",
+    data: { kind: "status", status: { activity: "idle", ...(usage !== undefined && { context_usage: usage }) } } });
+  for (const usage of [undefined, { used: 0 }, { used: 128, max: 128 }]) {
+    assert.deepEqual(connectorFrame(frame(usage)), frame(usage));
+  }
+  for (const usage of [{}, { used: -1 }, { used: 0.5 }, { used: "5" }, { used: 1, max: 0 },
+    { used: 5, max: 4 }, { used: 5, estimated: "true" }]) {
+    assert.throws(() => connectorFrame(frame(usage)), { statusCode: 422 });
+  }
+  for (const effort of ["none", "ultra", "unsupported", null]) {
+    const value = frame();
+    Object.assign(value.data.status, { reasoning_effort: effort });
+    if (effort === "none" || effort === "ultra") assert.deepEqual(connectorFrame(value), value);
+    else assert.throws(() => connectorFrame(value), { statusCode: 422 });
   }
 });

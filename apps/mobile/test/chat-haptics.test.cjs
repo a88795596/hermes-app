@@ -8,7 +8,7 @@ function mount(file, name, props, speech, reduceMotion = true) {
   const dimensions = { width: 390, height: 844 };
   let cursor = 0;
   let requestSequence = 0;
-  const jsx = (type, props, key) => type?.name === "ConversationTranscript" ? type(props) : ({ type, props, key });
+  const jsx = (type, props, key) => ["ConversationTranscript", "ComposerStatus"].includes(type?.name) ? type(props) : ({ type, props, key });
   const exported = {};
   const source = ts.transpileModule(readFileSync(require.resolve(`../src/chat/${file}.tsx`), "utf8"), {
     compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS },
@@ -50,7 +50,8 @@ function mount(file, name, props, speech, reduceMotion = true) {
         EmptyState: "EmptyState", Field: "Field", Icon: "Icon", Notice: "Notice",
       };
       case "./composer-menu": return {
-        reasoningLabels: {}, AttachmentMenu: "AttachmentMenu", ComposerMenu: "ComposerMenu", ReasoningMenu: "ReasoningMenu",
+        reasoningLabels: { none: "关闭", low: "低", high: "高", xhigh: "很高" },
+        AttachmentMenu: "AttachmentMenu", ComposerMenu: "ComposerMenu", ReasoningMenu: "ReasoningMenu",
         ComposerSheet: "ComposerSheet", PickerRow: "PickerRow",
       };
       case "./model-picker": return { ModelPicker: "ModelPicker" };
@@ -110,6 +111,65 @@ function conversation(enqueue, draft = "测试消息", { messages = [], workspac
     ...props,
   }, speech, reduceMotion);
 }
+
+test("输入框底部固定单行显示模型及上下文，长模型名可截断，缺少用量保留占位", () => {
+  const model = "provider/very-long-model-name";
+  for (const [usage, expected] of [
+    [{ used: 32_000, max: 128_000 }, "上下文 25%"],
+    [{ used: 0, max: 128_000 }, "上下文 0%"],
+    [{ used: 32_000, max: 128_000, estimated: true }, "上下文 约25%"],
+    [{ used: 9250, estimated: true }, "上下文 约9.3K tokens"],
+    [undefined, "上下文 —"],
+  ]) {
+    const tree = conversation(async () => {}, "第一行\n第二行", {
+      workspace: { sessionStatus: { topicId: "topic", status: { activity: "idle", model, context_usage: usage } } },
+    }).render();
+    const footer = find(tree, (node) => node.props.accessible && node.props.accessibilityLabel?.includes(model));
+    assert.ok(footer, "读屏可读出完整模型和上下文");
+    const composer = find(tree, (node) => Array.isArray(node.props.children) && node.props.children.includes(footer));
+    const controls = composer.props.children.at(-2);
+    assert.ok(find(controls, (node) => node.props.accessibilityLabel === "消息"), "状态行必须在整个输入控件下方");
+    assert.ok(find(controls, (node) => node.props.accessibilityLabel === "发送"));
+    assert.equal(footer.props.pointerEvents, "none");
+    assert.equal(Object.assign({}, ...[footer.props.style].flat()).position, "absolute");
+    for (const value of [model, "思考强度 跟随配置档案", expected]) {
+      const label = find(footer, (node) => node.type === "Text" && node.props.children === value);
+      assert.equal(label?.props.numberOfLines, 1, value);
+    }
+    if (usage) assert.ok(footer.props.accessibilityLabel.includes(String(usage.used)));
+  }
+  const previousScreen = conversation(async () => {}, "", { id: "previous",
+    workspace: { sessionStatus: { topicId: "topic", status: { activity: "idle", model } } } }).render();
+  assert.ok(find(previousScreen, (node) => node.props.children === "模型 —"), "返回手势露出的旧页面不能显示新会话的模型");
+});
+
+test("输入框下方显示本会话实际思考强度，兼容旧服务和未确认的切换", () => {
+  for (const [topic, reported, label, supported = true] of [
+    [{ reasoning_effort: "xhigh" }, "high", "高"],
+    [{}, "low", "低"],
+    [{ reasoning_effort: "none" }, undefined, "关闭"],
+    [{ reasoning_status: "pending" }, "low", "切换中"],
+    [{ reasoning_status: "unknown" }, "high", "待确认"],
+    [{ reasoning_effort: "low" }, undefined, "不可用", false],
+  ]) {
+    const tree = conversation(async () => {}, "", { topic: { status: "ready", ...topic },
+      workspace: { reasoning_supported: supported, sessionStatus: { topicId: "topic",
+        status: { activity: "idle", reasoning_effort: reported } } } }).render();
+    const footer = find(tree, (node) => node.props.accessible && node.props.accessibilityLabel?.startsWith("模型 "));
+    assert.ok(footer.props.accessibilityLabel.includes("思考强度 " + label));
+    const text = find(footer, (node) => node.props.children === "思考强度 " + label);
+    assert.equal(text?.props.numberOfLines, 1, label);
+  }
+  const other = conversation(async () => {}, "", { id: "other", topic: { status: "ready", reasoning_effort: "low" },
+    workspace: { sessionStatus: { topicId: "topic", status: { activity: "idle", reasoning_effort: "high" } } } }).render();
+  assert.ok(find(other, (node) => node.props.children === "思考强度 低"));
+  const loading = conversation(async () => {}, "", { topic: undefined });
+  assert.ok(find(loading.render(), (node) => node.props.children === "思考强度 —"));
+  loading.dimensions.width = 320;
+  const draft = loading.render({ newProfileId: "default" });
+  assert.ok(find(draft, (node) => node.props.children === "思考强度 默认"));
+  assert.ok(find(draft, (node) => node.props.accessible && node.props.accessibilityLabel.includes("思考强度 跟随配置档案")));
+});
 
 test("输入栏上方的图片草稿显示 100 × 100 缩略图，可单独移除并保留其他附件", () => {
   const photo = { name: "横图.png", mime: "image/png", size: 3, content_base64: "AQID" };
@@ -434,7 +494,8 @@ test("语音按钮独立位于输入框外侧右边，点击开始与停止都�
   assert.ok(mic, "可用设备显示语音入口");
   const row = find(tree, (node) => Array.isArray(node.props.children)
     && node.props.children.some((child) => child?.props?.accessibilityLabel === "消息"));
-  const labels = row.props.children.map((child) => child?.props?.accessibilityLabel).filter(Boolean);
+  const labels = row.props.children.filter((child) => child?.type === "Pressable" || child?.type === "Field")
+    .map((child) => child.props.accessibilityLabel);
   assert.deepEqual(labels, ["添加附件", "消息", "发送"]);
   const controls = find(tree, (node) => Array.isArray(node.props.children) && node.props.children.includes(row));
   const speechSlot = find(tree, (node) => node.props.children === mic);

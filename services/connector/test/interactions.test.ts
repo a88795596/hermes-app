@@ -122,6 +122,12 @@ async function harness(t: TestContext, replyStatus = 'resolved', runEvents?: Jso
     return frames.find((frame) => frame.type === 'command_result' && frame.command_id === id);
   }
   return { calls, frames, restart, command,
+    status: () => {
+      const frame = bridgeFrame(JSON.stringify({ type: 'topic_query', kind: 'status', request_id: randomUUID(),
+        topic_id: topicId, session_id: sessionId, profile_ref: profileRef, include_context: true, include_reasoning: true }));
+      assert(frame.type === 'topic_query' && frame.include_context && frame.include_reasoning);
+      return connector.query(frame);
+    },
     modelWrite: (status = 200, warning = false) => { modelWriteStatus = status; modelWarning = warning; },
     turn: () => spool.turn(topicId, runId),
     skills: () => connector.query({ type: 'topic_query', kind: 'skills', request_id: randomUUID(),
@@ -241,7 +247,7 @@ test('原版 Runs 技能接口出错时查询原版控制台技能目录', async
 });
 
 test('HTTP 模式的模型选择器返回已配置的服务商目录，并在重启后保留选择', async (t) => {
-  const { command, calls, restart } = await harness(t);
+  const { command, calls, restart, status } = await harness(t);
   assert.deepEqual((await command({ kind: 'model_options', body: {} }))?.model_result, {
     type: 'catalog',
     catalog: {
@@ -256,6 +262,7 @@ test('HTTP 模式的模型选择器返回已配置的服务商目录，并在重
   const selection = { provider: 'custom:local', model: 'local-model' };
   assert.deepEqual((await command({ kind: 'select_model', body: selection }))?.model_result, { type: 'selected', selection });
   restart();
+  assert.deepEqual(await status(), { kind: 'status', status: { activity: 'idle', model: 'local-model' } });
   const id = randomUUID();
   await command({ kind: 'submit', body: { submission_id: id, text: '你好' } }, id);
   const body = calls.find((call) => call.path === '/v1/runs')?.body;
@@ -326,14 +333,18 @@ test('Global 确认在重启后失效，缺少控制台配置时不写入或切�
 });
 
 test('HTTP Runs 保留话题的思考强度，恢复默认后不再覆盖 Hermes 配置', async (t) => {
-  const { command, calls, restart } = await harness(t);
+  const { command, calls, restart, status } = await harness(t);
   assert.equal((await command({ kind: 'select_reasoning', body: { effort: 'high' } }))?.status, 'ok');
   restart();
+  assert.deepEqual(await status(), { kind: 'status', status: { activity: 'idle', reasoning_effort: 'high' } });
   const highId = randomUUID();
   await command({ kind: 'submit', body: { submission_id: highId, text: '使用高强度' } }, highId);
   assert.deepEqual(calls.find((call) => call.path === '/v1/runs')?.body.model_options, { reasoning_effort: 'high' });
 
   assert.equal((await command({ kind: 'select_reasoning', body: { effort: null } }))?.status, 'ok');
+  const reset = await status();
+  assert(reset.kind === 'status');
+  assert.equal(reset.status.reasoning_effort, undefined);
   const defaultId = randomUUID();
   await command({ kind: 'submit', body: { submission_id: defaultId, text: '使用档案默认值' } }, defaultId);
   assert.equal(calls.filter((call) => call.path === '/v1/runs').at(-1)?.body.model_options, undefined);

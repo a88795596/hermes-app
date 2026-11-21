@@ -157,7 +157,9 @@ export interface Skill {
 export interface SessionStatus {
   activity: "idle" | "running" | "queued" | "unknown";
   model?: string;
+  reasoning_effort?: ReasoningEffort;
   message_count?: number;
+  context_usage?: { used: number; max?: number; estimated?: boolean };
 }
 
 export type TopicQueryData =
@@ -173,6 +175,9 @@ export interface TopicQuery {
   profile_ref: string;
   session_id: string;
   kind: TopicQueryData["kind"];
+  /** Send extended status fields only when the BFF requests them. */
+  include_context?: true;
+  include_reasoning?: true;
 }
 
 export interface NativeCommand {

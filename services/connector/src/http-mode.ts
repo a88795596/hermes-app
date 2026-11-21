@@ -142,7 +142,7 @@ export function createHttpConnector({ url, token, send, spool, downloadAttachmen
     return images.length ? [{ role: 'user', content: [{ type: 'text', text: prompt }, ...images] }] : prompt;
   }
 
-  async function query({ kind, topic_id, profile_ref, session_id }: TopicQuery): Promise<TopicQueryData> {
+  async function query({ kind, topic_id, profile_ref, session_id, include_context, include_reasoning }: TopicQuery): Promise<TopicQueryData> {
     const binding = spool.binding(topic_id);
     if (!binding || binding.profileRef !== profile_ref || binding.sessionId !== session_id || spool.transport(topic_id) !== 'http') {
       throw new Error('无法验证 Hermes 会话绑定');
@@ -167,7 +167,11 @@ export function createHttpConnector({ url, token, send, spool, downloadAttachmen
     if (kind === 'version') return { kind, version: runtimeVersion(data?.version) };
     const session = object(data?.session);
     if (session?.id !== session_id) throw new Error('Hermes 返回了意外的会话');
-    return { kind, status: sessionStatus(session, spool.activeTurns(topic_id)) };
+    const model = spool.modelSelection(topic_id)?.model ?? session.model;
+    const status = sessionStatus({ ...session, model }, spool.activeTurns(topic_id), [], include_context);
+    const effort = include_reasoning ? spool.reasoningEffort(topic_id) : undefined;
+    if (effort) status.reasoning_effort = effort;
+    return { kind, status };
   }
 
   async function syncTitle(binding: Binding) {

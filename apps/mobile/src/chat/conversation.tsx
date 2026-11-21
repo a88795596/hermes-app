@@ -4,7 +4,7 @@ import { useCallback, useEffect, useImperativeHandle, useRef, useState, type Com
 import { ActivityIndicator, Image, Keyboard, KeyboardAvoidingView, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import Animated from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { MAX_ATTACHMENTS, type Attachment, type AttachmentUpload, type Control, type Message, type MessageProcessStep, type Skill, type Topic } from "@hermes-mobile/protocol";
+import { MAX_ATTACHMENTS, type Attachment, type AttachmentUpload, type Control, type Message, type MessageProcessStep, type SessionStatus, type Skill, type Topic } from "@hermes-mobile/protocol";
 import type { Session } from "../auth/session";
 import type { useWorkspace } from "../sync/use-workspace";
 import { haptic } from "../ui/haptics";
@@ -50,6 +50,35 @@ const approvalLabels = new Map([
 
 const transcriptGutter = 24;
 const touchSize = Platform.OS === "android" ? 48 : 44;
+const compactTokens = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
+const profileReasoningLabel = "跟随配置档案";
+
+function ComposerStatus({ status, reasoningLabel, compact }: { status?: SessionStatus; reasoningLabel: string; compact: boolean }) {
+  const { colors } = useTheme();
+  const { width } = useWindowDimensions();
+  const visibleReasoning = width < 360 && reasoningLabel === profileReasoningLabel ? "默认" : reasoningLabel;
+  const usage = status?.context_usage;
+  const estimate = usage?.estimated ? "约" : "";
+  const percent = usage?.max ? usage.used / usage.max * 100 : undefined;
+  const percentLabel = percent === undefined ? undefined : percent > 0 && percent < 1 ? "<1%" : `${Math.round(percent)}%`;
+  const context = !usage ? "上下文 —" : `上下文 ${estimate}${percentLabel ?? compactTokens.format(usage.used) + " tokens"}`;
+  const counts = usage && `${usage.used}${usage.max ? " / " + usage.max : ""} tokens`;
+  const labelStyle = [chat.statusText, compact && chat.compactStatusText, { color: colors.muted }];
+  return (
+    <View pointerEvents="none" accessible accessibilityLabel={`模型 ${status?.model ?? "未知"}，思考强度 ${reasoningLabel}，${context}${counts ? "，" + counts : ""}`}
+      style={[chat.composerStatus, compact && chat.compactStatus]}>
+      <Text numberOfLines={1} ellipsizeMode="middle" maxFontSizeMultiplier={1}
+        style={[labelStyle, chat.statusModel]}>{status?.model ?? "模型 —"}</Text>
+      <Text numberOfLines={1} maxFontSizeMultiplier={1} style={labelStyle}>·</Text>
+      <Text numberOfLines={1} maxFontSizeMultiplier={1} style={labelStyle}>{`思考强度 ${visibleReasoning}`}</Text>
+      <Text numberOfLines={1} maxFontSizeMultiplier={1} style={labelStyle}>·</Text>
+      <Text numberOfLines={1} maxFontSizeMultiplier={1} style={labelStyle}>{context}</Text>
+      {usage?.max !== undefined && <Text numberOfLines={1} maxFontSizeMultiplier={1} style={labelStyle}>
+        {`${compactTokens.format(usage.used)}/${compactTokens.format(usage.max)}`}
+      </Text>}
+    </View>
+  );
+}
 
 function ProcessTimeline({ steps, final }: { steps: MessageProcessStep[]; final: boolean }) {
   const { colors, styles } = useTheme();
@@ -441,7 +470,7 @@ export function Conversation({
   const { colors, styles } = useTheme();
   const { alert } = useAlert();
   const reduced = useReduceMotion();
-  const { top: safeAreaTop } = useSafeAreaInsets();
+  const { top: safeAreaTop, bottom: safeAreaBottom = 0 } = useSafeAreaInsets();
   const [sending, setSending] = useState(false);
   const [recovering, setRecovering] = useState(false);
   const recoveryInFlight = useRef(false);
@@ -450,6 +479,7 @@ export function Conversation({
   const enqueueing = useRef(false);
   const [stopping, setStopping] = useState(false);
   const [draftFocused, setDraftFocused] = useState(false);
+  const compactStatus = safeAreaBottom < 20 || draftFocused;
   const [sendFocused, setSendFocused] = useState(false);
   const [menu, setMenu] = useState<"commands" | "skills" | "reasoning" | "attachments">();
   const [picking, setPicking] = useState(false);
@@ -499,7 +529,9 @@ export function Conversation({
     : topicBusy ? "请等待当前消息处理完成，再切换思考强度。" : undefined;
   const reasoningLabel = reasoningBlocked ? "不可用"
     : reasoningStatus === "pending" ? "切换中" : reasoningStatus === "unknown" ? "待确认"
-    : reasoning === null ? "跟随配置档案" : reasoningLabels[reasoning];
+    : reasoning !== null ? reasoningLabels[reasoning] : topic || newProfileId ? profileReasoningLabel : "—";
+  const sessionStatus = workspace.sessionStatus?.topicId === id ? workspace.sessionStatus.status : undefined;
+  const reportedEffort = !reasoningBlocked && !reasoningStatus ? sessionStatus?.reasoning_effort : undefined;
   const currentProfile = workspace.profiles.find((item) => item.profile_id === (topic?.profile_id ?? newProfileId));
   const switchBlocked = speech.busy || picking || sending || recovering || openingSkills || !!nativeCommand
     || settingsOpen || !!menu || modelPicker;
@@ -724,7 +756,8 @@ export function Conversation({
         onClose={() => { commandOpen.current = false; setNativeCommand(undefined); }}
         onRequest={(requestId, command, signal, approval) => workspace.requestNativeCommand(id, requestId, command, signal, approval)} />}
       {transcriptView}
-      <View pointerEvents={paging ? "none" : "auto"} style={[chat.column, chat.composer, { borderTopColor: colors.edge }]}>
+      <View pointerEvents={paging ? "none" : "auto"} style={[chat.column, chat.composer, compactStatus && chat.compactComposer,
+        { borderTopColor: colors.edge }]}>
         {(error ?? speech.error) && <Notice>{error ?? speech.error}</Notice>}
         {commandNotice && <Text accessibilityLiveRegion="polite" style={styles.muted}>{commandNotice}</Text>}
         {isModelCommand && !canControl && <Text style={styles.muted}>连接 Hermes 后即可选择模型。</Text>}
@@ -773,7 +806,8 @@ export function Conversation({
           </ScrollView>
         )}
         <View style={chat.composerControls}>
-          <View style={[chat.composerRow, { backgroundColor: colors.secondary, borderColor: draftFocused ? colors.accent : colors.edge }]}>
+          <View style={[chat.composerRow, compactStatus && chat.compactComposerRow,
+            { backgroundColor: colors.secondary, borderColor: draftFocused ? colors.accent : colors.edge }]}>
             {speech.state === "recording" && <AssistantStreamBorder variant="composer" />}
             <Pressable accessibilityRole="button" accessibilityLabel="添加附件"
               accessibilityState={{ disabled: attachmentDisabled, busy: picking, expanded: menu === "attachments" }}
@@ -821,7 +855,7 @@ export function Conversation({
             pointerEvents={speechVisible ? "auto" : "none"}
             accessibilityElementsHidden={!speechVisible}
             importantForAccessibility={speechVisible ? "auto" : "no-hide-descendants"}
-            style={[chat.speechButton, {
+            style={[chat.speechButton, compactStatus && chat.compactSpeechButton, {
               transitionProperty: ["width", "marginLeft", "opacity", "transform"],
               transitionDuration: reduced ? 0 : 360,
               transitionTimingFunction: "ease-in-out",
@@ -850,6 +884,8 @@ export function Conversation({
             </Pressable>
           </Animated.View>}
         </View>
+        <ComposerStatus status={sessionStatus} reasoningLabel={reportedEffort ? reasoningLabels[reportedEffort] : reasoningLabel}
+          compact={compactStatus} />
       </View>
       {settingsOpen ? <SettingsDrawer busy={settingsBusy} canWrite={canWrite} reasoningLabel={reasoningLabel}
         settingsNavigation={settingsNavigation} applicationSettings={applicationSettings}
@@ -907,6 +943,16 @@ const chat = StyleSheet.create({
   iconButton: { width: touchSize, height: touchSize, alignItems: "center", justifyContent: "center" },
   composerDivider: { height: 22, width: StyleSheet.hairlineWidth, marginBottom: (touchSize - 22) / 2 },
   composerControls: { flexDirection: "row", alignItems: "flex-end" },
+  composerStatus: { position: "absolute", left: transcriptGutter, right: transcriptGutter, bottom: -8,
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4 },
+  statusText: { fontSize: 11, lineHeight: 14, includeFontPadding: false, flexShrink: 0, fontVariant: ["tabular-nums"] },
+  statusModel: { flexShrink: 1, minWidth: 0 },
+  // With no spare safe area below the field, move its three points of bottom padding to the footer.
+  compactStatus: { bottom: 0 },
+  compactStatusText: { fontSize: 10, lineHeight: 11 },
+  compactComposer: { paddingBottom: 11 },
+  compactComposerRow: { minHeight: touchSize + 5, paddingBottom: 0 },
+  compactSpeechButton: { marginBottom: 1 },
   speechButton: { flexShrink: 0, marginBottom: 4, overflow: "hidden" },
   composerRow: {
     flex: 1,

@@ -5,8 +5,8 @@ import {
   parseAdmissionReceipt, parseCanonicalEvent, parseControlReceipt, parseServerRequest, parseSessionSnapshot,
 } from '@hermes-mobile/hermes-adapter';
 import type { CanonicalAdmission, CanonicalPrompt, ServerRequest, SessionSnapshot } from '@hermes-mobile/hermes-adapter';
-import type { Command, CommandResult, ConnectorEvent, Control, NativeCommandResult, TopicQuery, TopicQueryData } from '@hermes-mobile/protocol';
-import { MAX_CLARIFY_CHOICE_BYTES, MAX_MESSAGE_PROCESS_TEXT_BYTES } from '@hermes-mobile/protocol';
+import type { Command, CommandResult, ConnectorEvent, Control, NativeCommandResult, SessionStatus, TopicQuery, TopicQueryData } from '@hermes-mobile/protocol';
+import { isReasoningEffort, MAX_CLARIFY_CHOICE_BYTES, MAX_MESSAGE_PROCESS_TEXT_BYTES } from '@hermes-mobile/protocol';
 import { attachmentBytes, attachmentFilename, hasReceivedAttachments, type DownloadAttachment, type ReceiveAttachments } from './attachments.js';
 import { Gateway, GatewayRefusal, integer, object } from './gateway.js';
 import type { JsonObject, WebappAccess } from './gateway.js';
@@ -15,7 +15,7 @@ import { hasModel, modelCatalog } from './models.js';
 import { enableNativeCommands, NativeCommandFailure, nativeStatusOutput, resolveNativeCommand, tuiCommandList, type NativeCommands } from './native-commands.js';
 import { Spool } from './spool.js';
 import type { Binding, Cursor, NativePending, Turn } from './spool.js';
-import { QueryUnavailable, queryTimeout, runtimeVersion, sessionStatus, skillList, webappSkills } from './topic-query.js';
+import { contextUsage, QueryUnavailable, queryTimeout, runtimeVersion, sessionStatus, skillList, webappSkills } from './topic-query.js';
 import { topicTitleEvent } from './topic-title.js';
 import { boundedText, commandDigest, result, stableId, text } from './wire.js';
 
@@ -36,6 +36,7 @@ type Session = {
   cursor?: Cursor;
   targets: Map<string, Target>;
   reasoning: Map<string, string>;
+  breakdown?: { revision: string; model?: string; expires: number; usage?: SessionStatus['context_usage'] };
 };
 
 type Profile = {
@@ -174,7 +175,7 @@ export class CanonicalConnector {
     }
   }
 
-  async query({ kind, topic_id, profile_ref, session_id }: TopicQuery): Promise<TopicQueryData> {
+  async query({ kind, topic_id, profile_ref, session_id, include_context, include_reasoning }: TopicQuery): Promise<TopicQueryData> {
     const binding = this.#bindings.get(topic_id);
     if (!binding || binding.profileRef !== profile_ref || binding.sessionId !== session_id) {
       throw new Error('无法验证 Hermes 会话绑定');
@@ -188,9 +189,8 @@ export class CanonicalConnector {
         return { kind, skills: await webappSkills(this.access, profile_ref) };
       }
       const deadline = Date.now() + queryTimeout;
-      let subagents: unknown[] = [];
-      let info: JsonObject;
       if (kind === 'status') {
+        let subagents: unknown[] = [];
         try {
           // 先查子任务再读父执行，覆盖后台结果唤醒下一轮的交接。
           const roster = await gateway.rpc('subagent.list', { session_id }, undefined, queryTimeout);
@@ -202,22 +202,37 @@ export class CanonicalConnector {
         const raw = await gateway.rpc('session.resume', { session_id, omit_messages: true }, undefined, Math.max(1, deadline - Date.now()));
         const snapshot = parseSessionSnapshot(raw);
         this.#checkSnapshot(session, snapshot);
-        info = { ...object(raw.info), running: snapshot.running, message_count: raw.message_count };
-      } else {
-        info = await gateway.rpc('session.info', { session_id }, undefined, Math.max(1, deadline - Date.now()));
+        const info = object(raw.info);
+        if (info?.profile_id !== binding.profileId) throw new Error('Hermes 返回了意外的配置档案');
+        const status = sessionStatus({ ...info, running: snapshot.running, message_count: raw.message_count },
+          this.spool.activeTurns(topic_id), subagents, include_context);
+        if (include_reasoning) {
+          const effort = isReasoningEffort(info.reasoning_effort_wire) ? info.reasoning_effort_wire : info.reasoning_effort;
+          if (isReasoningEffort(effort)) status.reasoning_effort = effort;
+        }
+        if (include_context && !status.context_usage && (status.message_count || info.lazy === false)) {
+          // A resumed session may only have a native estimate. Reuse it between identical status polls.
+          const cached = session.breakdown;
+          if (!cached || cached.revision !== snapshot.revision || cached.model !== status.model || cached.expires <= Date.now()) {
+            const breakdown = await gateway.rpc('session.context_breakdown', { session_id }, undefined,
+              Math.max(1, deadline - Date.now())).catch(() => undefined);
+            session.breakdown = { revision: snapshot.revision, model: status.model, expires: Date.now() + 30_000,
+              usage: contextUsage(breakdown, status.model, info.context_length) };
+          }
+          if (session.breakdown?.usage) status.context_usage = session.breakdown.usage;
+        }
+        return { kind, status };
       }
+      const info = await gateway.rpc('session.info', { session_id }, undefined, Math.max(1, deadline - Date.now()));
       if (info.profile_id !== binding.profileId) throw new Error('Hermes 返回了意外的配置档案');
       if (kind === 'version') return { kind, version: runtimeVersion(info.version) };
-      if (kind === 'skills') {
-        const categories = object(info.skills);
-        if (!categories) throw new QueryUnavailable();
-        const skills = Object.entries(categories).flatMap(([category, names]) => {
-          if (!Array.isArray(names)) throw new Error('Hermes 技能分类无效');
-          return names.map((name: unknown) => ({ name, category }));
-        });
-        return { kind, skills: skillList(skills) };
-      }
-      return { kind, status: sessionStatus(info, this.spool.activeTurns(topic_id), subagents) };
+      const categories = object(info.skills);
+      if (!categories) throw new QueryUnavailable();
+      const skills = Object.entries(categories).flatMap(([category, names]) => {
+        if (!Array.isArray(names)) throw new Error('Hermes 技能分类无效');
+        return names.map((name: unknown) => ({ name, category }));
+      });
+      return { kind, skills: skillList(skills) };
     } catch (error) {
       if (error instanceof GatewayRefusal && error.code === -32601) throw new QueryUnavailable();
       throw error;

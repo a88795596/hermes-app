@@ -136,6 +136,7 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
       }
       const result = await bridge.query({
         kind, topic_id: topic.id, profile_ref: topic.profile_ref, session_id: topic.session_id,
+        ...(kind === "status" && { include_context: true, include_reasoning: true }),
       });
       switch (result.kind) {
         case "commands": return success(request, result.commands);

@@ -51,7 +51,11 @@ export function useWorkspace(session: Session, routedTopicId: string | null, loc
   const currentDirectory = useRef(directory);
   const [topicDetails, setTopicDetails] = useState<Record<string, TopicDetail>>({});
   const detail = topicId ? topicDetails[topicId] : undefined;
-  const [activity, setActivity] = useState<{ topicId: string; streamingIds: string; value: SessionStatus["activity"] }>();
+  const currentTopic = detail?.topic ?? directory.topics.find((topic) => topic.topic_id === topicId);
+  const reasoningSetting = currentTopic?.reasoning_status ?? currentTopic?.reasoning_effort;
+  const [statusReading, setStatusReading] = useState<{
+    topicId: string; streamingIds: string; reasoningSetting: typeof reasoningSetting; status: SessionStatus;
+  }>();
   const [pending, setPending] = useState<Pending[]>([]);
   const [foreground, setForeground] = useState(AppState.currentState !== "background");
   const [network, setNetwork] = useState<"connecting" | "online" | "offline">("connecting");
@@ -225,7 +229,7 @@ export function useWorkspace(session: Session, routedTopicId: string | null, loc
 
   useEffect(() => {
     if (!cache || !foreground || !remoteId || sessionEnded || network === "offline" || !directory.connector_online) {
-      setActivity(undefined);
+      setStatusReading(undefined);
       return;
     }
     const abort = new AbortController();
@@ -234,7 +238,7 @@ export function useWorkspace(session: Session, routedTopicId: string | null, loc
     async function poll() {
       try {
         const status = await call<SessionStatus>(`/topics/${id}/status`, { signal: abort.signal });
-        if (!abort.signal.aborted) setActivity({ topicId: id, streamingIds, value: status.activity });
+        if (!abort.signal.aborted) setStatusReading({ topicId: id, streamingIds, reasoningSetting, status });
       } catch {
         // 查询失败不等于任务完成，保留本次前台会话最后确认的状态。
       } finally {
@@ -243,7 +247,7 @@ export function useWorkspace(session: Session, routedTopicId: string | null, loc
     }
     void poll();
     return () => { abort.abort(); clearTimeout(timer); };
-  }, [cache, call, directory.connector_online, foreground, network, remoteId, sessionEnded, streamingIds]);
+  }, [cache, call, directory.connector_online, foreground, network, reasoningSetting, remoteId, sessionEnded, streamingIds]);
 
   const createTopic = useCallback((id: string, profileId: string, signal?: AbortSignal) => call<Topic>("/topics", {
     method: "POST", body: { request_id: id, profile_id: profileId }, signal,
@@ -676,6 +680,11 @@ export function useWorkspace(session: Session, routedTopicId: string | null, loc
     }
   }
 
+  let sessionStatus = foreground && statusReading?.topicId === topicId ? statusReading : undefined;
+  if (sessionStatus?.status.reasoning_effort && sessionStatus.reasoningSetting !== reasoningSetting) {
+    // The previous poll predates the setting change. Its model and context are still useful.
+    sessionStatus = { ...sessionStatus, status: { ...sessionStatus.status, reasoning_effort: undefined } };
+  }
   return {
     ...directory,
     infiniteFlow,
@@ -685,8 +694,8 @@ export function useWorkspace(session: Session, routedTopicId: string | null, loc
     streamTopics,
     topicDetails,
     detail: detail?.topic.topic_id === topicId ? detail : undefined,
-    activity: foreground && activity?.topicId === topicId && (!streamingIds || activity.streamingIds === streamingIds)
-      ? activity.value : undefined,
+    sessionStatus,
+    activity: !streamingIds || sessionStatus?.streamingIds === streamingIds ? sessionStatus?.status.activity : undefined,
     pending,
     network,
     live,
