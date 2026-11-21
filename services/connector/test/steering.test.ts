@@ -142,6 +142,24 @@ test('steering uses the proven running generation and never creates another admi
   await assert.rejects(invoke, /重复使用了命令 ID/);
 });
 
+test('acknowledged reply status frames are not changed or emitted again when reasoning is replayed', { timeout: 5000 }, async (t) => {
+  const { publish, spool, topicId, restart, watch } = await harness(t);
+  const events = () => spool.events(new Set([topicId]), new Set(), 50);
+  const latest = 'Hermes 正在回复… · 第 6 轮迭代';
+  publish('message.start', {});
+  publish('reasoning.delta', { text: '正在核对。' });
+  publish('agent.step', { iteration: 5 });
+  publish('status.update', { kind: 'warn', text: '⚠ Context is over the compression threshold (~20 tokens >= 10) but compression is currently blocked (cooldown:53).' });
+  publish('agent.step', { iteration: 6 });
+  while (!events().some(({ body }) => (body.reply_status as { progress?: string } | undefined)?.progress === latest)) {
+    await delay(5, undefined, { signal: t.signal });
+  }
+  for (const { id } of events()) spool.ack(id);
+  restart();
+  await watch();
+  assert.deepEqual(events().filter(({ body }) => body.type === 'message'), []);
+});
+
 test('splits the assistant process at the ordered plugin event and resumes the new reply after reconnect', { timeout: 5000 }, async (t) => {
   const { publish, sendEvent, command, invoke, watch, restart, spool, topicId, originalId, admissionId, calls } = await harness(t);
   const output = () => spool.events(new Set([topicId]), new Set(), 50).map(({ body }) => body);

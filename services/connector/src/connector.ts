@@ -64,12 +64,15 @@ function isRevision(value: unknown): boolean {
 }
 
 function assistantMessage(turn: Turn, key: string[]): Extract<ConnectorEvent, { type: 'message' }> | undefined {
-  if (!turn.text && !turn.process?.length && !turn.attachments?.length) return;
+  const warning = turn.replyStatus?.warning;
+  const progress = turn.status === 'streaming' ? turn.replyStatus?.progress : undefined;
+  if (!turn.text && !turn.process?.length && !turn.attachments?.length && !warning && !turn.replyStatus?.progress) return;
   return {
     type: 'message', event_id: stableId([turn.topicId, 'message', ...key]), topic_id: turn.topicId,
     message_id: turn.replyMessageId ?? stableId([turn.topicId, 'message', turn.admissionId]),
     text: turn.text, status: turn.status === 'streaming' ? 'streaming' : 'final',
     ...(turn.process?.length ? { process: turn.process } : {}),
+    ...(warning || progress ? { reply_status: { ...(warning && { warning }), ...(progress && { progress }) } } : {}),
     ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
     ...(turn.submissionId ? { submission_id: turn.submissionId } : {}),
   };
@@ -878,6 +881,7 @@ export class CanonicalConnector {
     this.#setTurn(session, {
       topicId: session.binding.topicId, admissionId: receipt.admissionId, submissionId, text, status,
       replyMessageId: previous?.replyMessageId,
+      replyStatus: previous?.replyStatus,
       process: terminal && reasoning ? addProcessText(previous?.process, 'reasoning', redactProcessText(reasoning)) : previous?.process,
     }, [receipt.admissionId, 'receipt', status, receipt.authorityEpoch, receipt.executionGeneration ?? ''],
     terminal);
@@ -942,6 +946,19 @@ export class CanonicalConnector {
       return;
     }
     const projection = normalizeCanonicalEvent(event);
+    if (projection?.type === 'review.summary') {
+      const summary = boundedText(redactProcessText(projection.text).trim(), MAX_MESSAGE_PROCESS_TEXT_BYTES);
+      if (summary) {
+        const id = stableId([binding.topicId, 'review-summary', ...key]);
+        const frame: Extract<ConnectorEvent, { type: 'message' }> = {
+          type: 'message', event_id: id, topic_id: binding.topicId, message_id: id, text: '', status: 'final',
+          reply_status: { review_summary: summary },
+        };
+        this.spool.record(binding.topicId, [{ id, body: { ...frame } }], session.reasoning.size ? undefined : cursor);
+        session.cursor = cursor;
+        return;
+      }
+    }
     let title: ReturnType<typeof topicTitleEvent>;
     if (projection?.type === 'approval.request' || projection?.type === 'clarify.request') {
       this.#prompt(session, projection, key, event.admissionId ? this.spool.turn(binding.topicId, event.admissionId)?.submissionId : undefined);
@@ -971,6 +988,14 @@ export class CanonicalConnector {
     } else if (projection && 'admissionId' in projection && projection.admissionId) {
       const admissionId = projection.admissionId;
       const existing = this.spool.turn(binding.topicId, admissionId);
+      const statusUpdate = projection.type === 'status.update' || projection.type === 'agent.step';
+      const applied = existing?.replyStatus?.cursor;
+      // 思考分块会延迟回放游标落盘，状态帧仍按已写入的序号去重。
+      if (statusUpdate && applied?.epoch === cursor.epoch && BigInt(applied.sequence) >= BigInt(cursor.sequence)) {
+        this.spool.record(binding.topicId, [], session.reasoning.size ? undefined : cursor);
+        session.cursor = cursor;
+        return;
+      }
       if (projection.type === 'reasoning.delta' && existing?.submissionId
         && !['final', 'failed', 'cancelled'].includes(existing.status)) {
         // 保留完整思考块以隐藏跨增量的凭据，重连从上一条已持久化事件补拉。
@@ -982,10 +1007,11 @@ export class CanonicalConnector {
       const previousText = existing?.text ?? '';
       let text = previousText;
       let process = existing?.process;
+      let replyStatus = statusUpdate ? { ...existing?.replyStatus, cursor } : existing?.replyStatus;
       let status: Turn['status'] = 'streaming';
       let publishMessage = false;
       let submissionId = existing?.submissionId ?? null;
-      if (projection.type !== 'message.start' && projection.type !== 'reasoning.delta') {
+      if (projection.type !== 'message.start' && projection.type !== 'reasoning.delta' && !statusUpdate) {
         const reasoning = session.reasoning.get(admissionId);
         if (reasoning) {
           session.reasoning.delete(admissionId);
@@ -993,7 +1019,19 @@ export class CanonicalConnector {
           publishMessage = process !== existing?.process;
         }
       }
-      if (projection.type === 'message.delta' && projection.text) {
+      if (projection.type === 'status.update') {
+        const warning = boundedText(redactProcessText(projection.text).trim(), MAX_MESSAGE_PROCESS_TEXT_BYTES);
+        if (warning && warning !== replyStatus?.warning) {
+          replyStatus = { ...replyStatus, warning };
+          publishMessage = true;
+        }
+      } else if (projection.type === 'agent.step') {
+        const progress = `Hermes 正在回复… · 第 ${projection.iteration} 轮迭代`;
+        if (progress !== replyStatus?.progress) {
+          replyStatus = { ...replyStatus, progress };
+          publishMessage = true;
+        }
+      } else if (projection.type === 'message.delta' && projection.text) {
         text = previousText + projection.text;
         publishMessage = true;
       } else if (projection.type === 'message.interim') {
@@ -1025,7 +1063,7 @@ export class CanonicalConnector {
       }
       // 已结束的回复保留已确认的终态。
       if (projection.type !== 'reasoning.delta' && (!existing || !['final', 'failed', 'cancelled'].includes(existing.status))) {
-        this.#setTurn(session, { topicId: binding.topicId, admissionId, submissionId, text, status, process,
+        this.#setTurn(session, { topicId: binding.topicId, admissionId, submissionId, text, status, process, replyStatus,
           replyMessageId: existing?.replyMessageId },
           key, publishMessage, cursor);
         session.cursor = cursor;
@@ -1046,6 +1084,7 @@ export class CanonicalConnector {
       session.reasoning.size ? undefined : cursor, {
         ...turn, replyMessageId: stableId([turn.topicId, 'message', turn.admissionId, 'steer', ...key]),
         text: '', process: undefined, attachments: undefined,
+        replyStatus: turn.replyStatus?.cursor ? { cursor: turn.replyStatus.cursor } : undefined,
       });
   }
 

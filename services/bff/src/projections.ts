@@ -107,8 +107,9 @@ export function detail(store: Store, id: string, refs: Set<string>) {
   return store.transaction(async (db) => {
     const row = await topicRow(db, id, refs);
     // shortcut: 个人话题返回完整历史。需要支持长期会话时，改用游标分页。
-    const messages = await db.query<{ data: Message }>("SELECT data FROM messages WHERE topic_id = $1 ORDER BY position", [id]);
+    const messages = await db.query<{ data: Message & { reply_progress_at?: number } }>("SELECT data FROM messages WHERE topic_id = $1 ORDER BY position", [id]);
     const controls = await db.query<{ data: Control }>("SELECT data FROM controls WHERE topic_id = $1 ORDER BY position", [id]);
-    return { topic: topicData(row), messages: messages.rows.map(({ data }) => data), controls: controls.rows.map(({ data }) => data) };
+    return { topic: topicData(row), messages: messages.rows.map(({ data: { reply_progress_at, ...message } }) => message),
+      controls: controls.rows.map(({ data }) => data) };
   });
 }

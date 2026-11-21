@@ -45,7 +45,7 @@ function mount(props) {
       case "../ui/motion": return { motion: {}, useReduceMotion: () => true };
       case "../ui/text": return { profileLabel: (label) => label };
       case "../ui/theme": return {
-        useTheme: () => ({ colors: { tint: "highlight" }, styles: {} }), Action: "Action", CloseButton: "CloseButton",
+        useTheme: () => ({ colors: { tint: "highlight" }, styles: { caption: { color: "#735F50", fontSize: 13 } } }), Action: "Action", CloseButton: "CloseButton",
         Field: "Field", Icon: "Icon", Notice: "Notice",
       };
       case "./composer-menu": return { reasoningLabels: {} };
@@ -124,6 +124,47 @@ test("通知定位的回复保持助手样式，只有用户消息显示发送�
     assert.ok(find(question, hasBubble), "用户消息保留发送气泡");
     assert.ok(find(question, (node) => node.props.accessibilityLabel === "你：question"));
   }
+});
+
+test("回复状态行更新进度，压缩警告独立于正文且在完成后保留", () => {
+  const input = props();
+  const warning = "上下文压缩暂不可用。";
+  const progress = "⏳ 正在处理——3 分钟";
+  const question = { ...reply("question"), role: "user", status: "streaming", submission_id: "turn",
+    reply_status: { progress } };
+  const answer = { ...reply("answer"), status: "streaming", submission_id: "turn",
+    reply_status: { warning, progress: "第 6 轮迭代" } };
+  const status = (tree, value) => find(tree, (node) => node.type === "Text" && node.props.children === value);
+  input.workspace.detail.messages = [question];
+  const screen = mount(input);
+  assert.ok(status(message(screen.render(), "question"), progress));
+
+  input.workspace.detail.messages = [question, answer];
+  const running = screen.render();
+  assert.equal(status(message(running, "question"), progress), undefined);
+  assert.ok(status(message(running, "answer"), progress));
+  assert.ok(find(running, (node) => node.type === "Notice" && node.props.children === warning));
+  assert.ok(find(running, (node) => node.type === "AnswerMarkdown" && node.props.text === "answer"));
+
+  input.workspace.detail.messages = [{ ...question, status: "unknown" }, answer];
+  assert.equal(status(screen.render(), "第 6 轮迭代"), undefined);
+
+  input.workspace.detail.messages = [question, { ...answer, status: "final" }];
+  const finished = screen.render();
+  assert.equal(status(finished, progress), undefined);
+  assert.ok(find(finished, (node) => node.type === "Notice" && node.props.children === warning));
+});
+
+test("自我改进回顾以正文下方的灰色小字显示", () => {
+  const input = props();
+  const summary = "💾 自我改进回顾：技能 'sdlc-review' 已修补";
+  input.workspace.detail.messages = [reply("answer"), { ...reply("review"), text: "", reply_status: { review_summary: summary } }];
+  const tree = mount(input).render();
+  assert.ok(find(message(tree, "answer"), (node) => node.type === "AnswerMarkdown"));
+  const review = message(tree, "review");
+  assert.equal(find(review, (node) => node.type === "AnswerMarkdown"), undefined);
+  const text = find(review, (node) => node.type === "Text" && node.props.children === summary);
+  assert.deepEqual(Object.assign({}, ...[text?.props.style].flat()), { color: "#666666", fontSize: 13 });
 });
 
 test("切换通知目标能定位已布局的消息，切换话题不会保留旧目标", () => {

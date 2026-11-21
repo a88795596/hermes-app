@@ -76,6 +76,12 @@ export type MessageProcessStep =
   | { kind: "reasoning" | "commentary"; text: string }
   | { kind: "tool"; id: string; name: string; status: "running" | "succeeded" | "failed" | "unknown" };
 
+export interface ReplyStatus {
+  warning?: string;
+  progress?: string;
+  review_summary?: string;
+}
+
 export interface Message {
   message_id: string;
   role: "user" | "assistant";
@@ -85,6 +91,7 @@ export interface Message {
   submission_id?: string;
   error?: string;
   process?: MessageProcessStep[];
+  reply_status?: ReplyStatus;
 }
 
 export interface Control {
@@ -235,6 +242,7 @@ export interface InboxDelivery {
   title?: string;
   text: string;
   attachments?: Attachment[];
+  notice?: { kind: keyof ReplyStatus; sent_at: number };
 }
 
 export interface MobileNotice {
@@ -289,7 +297,7 @@ export interface DeliveryFrame extends InboxDelivery {
 
 export type ConnectorEvent =
   | (EventEnvelope & { type: "topic_title"; session_id: string; title: string })
-  | (EventEnvelope & Pick<Message, "message_id" | "submission_id" | "text" | "process" | "attachments"> & { type: "message"; status: "streaming" | "final" })
+  | (EventEnvelope & Pick<Message, "message_id" | "submission_id" | "text" | "process" | "attachments" | "reply_status"> & { type: "message"; status: "streaming" | "final" })
   | (EventEnvelope & { type: "submission"; submission_id: string; status: Exclude<MessageStatus, "accepted">; error?: string })
   | (EventEnvelope & Omit<Control, "answer" | "error"> & { type: "control" });
 

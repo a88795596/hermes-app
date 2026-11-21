@@ -45,6 +45,10 @@ def _connect(path: Path):
             delivery_id TEXT PRIMARY KEY REFERENCES deliveries(delivery_id) ON DELETE CASCADE,
             session_id TEXT NOT NULL
         )""")
+        db.execute("""CREATE TABLE IF NOT EXISTS delivery_notices (
+            delivery_id TEXT PRIMARY KEY REFERENCES delivery_sessions(delivery_id) ON DELETE CASCADE,
+            kind TEXT NOT NULL CHECK (kind IN ('warning', 'progress', 'review_summary'))
+        )""")
         db.execute("""CREATE TABLE IF NOT EXISTS attachments (
             attachment_id TEXT PRIMARY KEY,
             delivery_id TEXT NOT NULL REFERENCES deliveries(delivery_id) ON DELETE CASCADE,
@@ -153,9 +157,12 @@ def read_command(path: Path, profile_ref: str, request_id: str, session_id: str)
         }
 
 
-def enqueue(path: Path, profile_ref: str, text: str, files=(), *, session_id: str | None = None) -> str:
+def enqueue(path: Path, profile_ref: str, text: str, files=(), *, session_id: str | None = None,
+            notice_kind: str | None = None) -> str:
     if len(files) > MAX_ATTACHMENTS:
         raise ValueError("每条消息最多包含 10 个附件")
+    if notice_kind is not None and (notice_kind not in {"warning", "progress", "review_summary"} or not session_id or files):
+        raise ValueError("会话状态提示无效")
     delivery_id = str(uuid4())
     with _connect(path) as db:
         db.execute("INSERT INTO deliveries VALUES (?, ?, ?)", (delivery_id, profile_ref, text))
@@ -164,6 +171,8 @@ def enqueue(path: Path, profile_ref: str, text: str, files=(), *, session_id: st
                    (delivery_id, now, now))
         if session_id is not None:
             db.execute("INSERT INTO delivery_sessions VALUES (?, ?)", (delivery_id, session_id))
+        if notice_kind is not None:
+            db.execute("INSERT INTO delivery_notices VALUES (?, ?)", (delivery_id, notice_kind))
         for position, (source, display_name) in enumerate(files):
             source = Path(source)
             name = source.name if display_name is None else display_name
@@ -334,9 +343,18 @@ def attachments(path: Path, delivery_id: str):
 
 
 def delivery_session(path: Path, delivery_id: str) -> str | None:
+    return delivery_target(path, delivery_id)[0]
+
+
+def delivery_target(path: Path, delivery_id: str) -> tuple[str | None, dict | None]:
     with _connect(path) as db:
-        row = db.execute("SELECT session_id FROM delivery_sessions WHERE delivery_id = ?", (delivery_id,)).fetchone()
-        return row[0] if row else None
+        row = db.execute("""SELECT target.session_id, notice.kind, state.created_at FROM delivery_sessions target
+            JOIN delivery_state state USING (delivery_id) LEFT JOIN delivery_notices notice USING (delivery_id)
+            WHERE target.delivery_id = ?""", (delivery_id,)).fetchone()
+    if row is None:
+        return None, None
+    session_id, kind, created_at = row
+    return session_id, {"kind": kind, "sent_at": int(created_at * 1_000)} if kind else None
 
 
 def ack(path: Path, delivery_id: str, *, attempt_token: str) -> bool:

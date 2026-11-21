@@ -330,6 +330,9 @@ type SegmentIdentity = TurnIdentity & { segment?: number };
 
 export type CanonicalProjection =
   | ({ type: "message.start" } & TurnIdentity)
+  | ({ type: "status.update"; text: string } & TurnIdentity)
+  | ({ type: "agent.step"; iteration: number } & TurnIdentity)
+  | { type: "review.summary"; text: string }
   | { type: "steering.applied"; admissionId: string }
   | ({ type: "message.delta"; text: string | null; offset?: number } & SegmentIdentity)
   | ({ type: "message.interim"; text: string; alreadyStreamed: boolean } & SegmentIdentity)
@@ -360,6 +363,17 @@ export function normalizeCanonicalEvent(event: CanonicalEvent): CanonicalProject
   switch (type) {
     case "message.start":
       return { type, ...turnIdentity(event) };
+    case "status.update":
+      if (payload.kind !== "warn" || typeof payload.text !== "string"
+        || !/^⚠️? Context is over the compression threshold \(~/u.test(payload.text)
+        || !payload.text.includes("but compression is currently blocked (")) return;
+      return { type, text: payload.text, ...turnIdentity(event) };
+    case "agent.step":
+      if (typeof payload.iteration !== "number" || !Number.isSafeInteger(payload.iteration) || payload.iteration < 1) return;
+      return { type, iteration: payload.iteration, ...turnIdentity(event) };
+    case "review.summary":
+      if (typeof payload.text === "string" && payload.text.trim()) return { type, text: payload.text };
+      return;
     case "plugin.hermes-mobile-delivery.steering.applied":
       if (event.admissionId && event.authorityEpoch !== undefined && event.executionGeneration !== undefined
         && typeof payload.api_request_id === "string" && payload.api_request_id.length > 0

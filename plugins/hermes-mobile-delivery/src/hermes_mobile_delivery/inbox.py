@@ -10,7 +10,7 @@ import re
 from time import sleep
 from urllib.parse import SplitResult, urlsplit
 
-from .spool import ack, attachments, begin_attempt, delivery_session, due, finish_attempt, renew_attempt
+from .spool import ack, attachments, begin_attempt, delivery_target, due, finish_attempt, renew_attempt
 
 
 logger = logging.getLogger(__name__)
@@ -50,12 +50,14 @@ def _request(endpoint: SplitResult, token: str, method: str, path: str, payload:
 
 
 def post_delivery(endpoint: SplitResult, token: str, delivery_id: str, profile: str, text: str,
-                  files=(), *, session_id: str | None = None) -> tuple[int | None, bytes]:
+                  files=(), *, session_id: str | None = None, notice: dict | None = None) -> tuple[int | None, bytes]:
     payload = {"delivery_id": delivery_id, "profile_ref": profile, "text": text}
     if files:
         payload["attachments"] = files
     if session_id is not None:
         payload["session_id"] = session_id
+    if notice is not None:
+        payload["notice"] = notice
     return _request(endpoint, token, "POST", endpoint.path or "/", payload)
 
 
@@ -89,7 +91,7 @@ def deliver_one(path: Path, endpoint: SplitResult, token: str, profile: str, del
     attempt_token = begin_attempt(path, profile, delivery_id)
     if not attempt_token:
         return "queued"
-    session_id = delivery_session(path, delivery_id)
+    session_id, notice = delivery_target(path, delivery_id)
     references = []
     for reference, content in attachments(path, delivery_id):
         if not renew_attempt(path, profile, delivery_id, attempt_token):
@@ -114,7 +116,7 @@ def deliver_one(path: Path, endpoint: SplitResult, token: str, profile: str, del
         references.append(canonical)
     if not renew_attempt(path, profile, delivery_id, attempt_token):
         return "queued"
-    status, body = post_delivery(endpoint, token, delivery_id, profile, text, references, session_id=session_id)
+    status, body = post_delivery(endpoint, token, delivery_id, profile, text, references, session_id=session_id, notice=notice)
     if status != 204:
         return _failure(path, profile, delivery_id, status, body, attempt_token=attempt_token)
     return "delivered" if ack(path, delivery_id, attempt_token=attempt_token) else "queued"

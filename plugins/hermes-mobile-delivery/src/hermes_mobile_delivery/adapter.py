@@ -22,12 +22,33 @@ from hermes_constants import get_hermes_home
 from .inbox import deliver_one, deliver_pending, inbox_endpoint
 from .spool import cancel, enqueue, inspect_queue, MAX_ATTACHMENTS, retry
 
+try:
+    from agent.i18n import t
+except ImportError:
+    t = None
 
 PLATFORM = "hermes_mobile"
 HOME_CHANNEL_ENV = "HERMES_MOBILE_HOME_CHANNEL"
 MAX_TEXT_BYTES = 128 * 1024
+MAX_NOTICE_TEXT_BYTES = 4096
 SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,511}")
+COMPRESSION_WARNING = re.compile(r"⚠️? Context is over the compression threshold \(~")
 logger = logging.getLogger(__name__)
+
+
+def _interim_notice(content: str) -> str | None:
+    if t is None:
+        return None
+    heartbeat = t("gateway.progress.working_heartbeat")
+    if "{minutes}" in heartbeat:
+        pattern = re.escape(heartbeat).replace(r"\{minutes\}", r"[0-9]+").replace(r"\{detail\}", r"(?: — [^\r\n]+)?")
+        if re.fullmatch(pattern, content):
+            return "progress"
+    prefix, placeholder, suffix = t("display.review.summary_callback").partition("{summary}")
+    if not placeholder or not (prefix.strip() or suffix.strip()):
+        return None
+    pattern = re.escape(prefix) + r"(?s:.+)" + re.escape(suffix)
+    return "review_summary" if re.fullmatch(pattern, content) else None
 
 
 def register_platform(ctx):
@@ -55,7 +76,7 @@ def register_platform(ctx):
             return {"home_channel": {"chat_id": configured[1], "name": "Hermes 移动端收件箱"}}
         return None
 
-    async def submit(chat_id, message, *, thread_id=None, media_files=None, file_name=None, gateway=False):
+    async def submit(chat_id, message, *, thread_id=None, media_files=None, file_name=None, gateway=False, notice_kind=None):
         configured = route()
         if (not configured or not isinstance(chat_id, str)
                 or not SESSION_ID.fullmatch(chat_id) or thread_id):
@@ -63,17 +84,22 @@ def register_platform(ctx):
         if not isinstance(message, str) or (not message.strip() and not media_files):
             return {"error": "投递到 Hermes 移动端的文本为空"}
         profile, _, endpoint, token, path = configured
+        session_id = None if chat_id == configured[1] else chat_id
+        if session_id is None:
+            notice_kind = None
         try:
             text = redact_sensitive_text(message.replace(token, "[REDACTED]"), force=True, redact_url_credentials=True)
         except Exception:
             return {"error": "Hermes 移动端无法对投递文本中的敏感信息脱敏"}
         try:
-            text_size = len(text.encode("utf-8"))
+            encoded = text.encode("utf-8")
         except UnicodeEncodeError:
             return {"error": "投递到 Hermes 移动端的文本必须采用有效的 UTF-8 编码"}
         if "\x00" in text:
             return {"error": "投递到 Hermes 移动端的文本含有空字符"}
-        if text_size > MAX_TEXT_BYTES:
+        if notice_kind is not None and len(encoded) > MAX_NOTICE_TEXT_BYTES:
+            text = encoded[:MAX_NOTICE_TEXT_BYTES - len("…".encode("utf-8"))].decode("utf-8", errors="ignore") + "…"
+        elif len(encoded) > MAX_TEXT_BYTES:
             return {"error": "投递到 Hermes 移动端的文本超过 128 KiB"}
         files = []
         try:
@@ -92,7 +118,7 @@ def register_platform(ctx):
         try:
             # shortcut: 每次调用生成 UUID，待 Hermes 提供稳定的分段 ID 后可跨调用去重。
             delivery_id = await asyncio.to_thread(enqueue, path, profile, text, files,
-                                                 session_id=None if chat_id == configured[1] else chat_id)
+                                                  session_id=session_id, notice_kind=notice_kind)
         except (OSError, sqlite3.Error, ValueError):
             return {"error": "无法保存投递队列，请检查磁盘权限、附件名称和单个附件 50 MiB 的限制"}
 
@@ -190,14 +216,23 @@ def register_platform(ctx):
             name = "Hermes 移动端收件箱" if configured and chat_id == configured[1] else "Hermes 移动端会话"
             return {"name": name, "type": "channel", "chat_id": chat_id}
 
-        async def send(self, chat_id, content, reply_to=None, metadata=None):
+        async def send_or_update_status(self, chat_id, status_key, content, metadata=None):
+            warning = (status_key.rsplit(":", 1)[-1] == "warn" and isinstance(content, str)
+                       and COMPRESSION_WARNING.match(content) and "but compression is currently blocked (" in content)
+            return await self.send(chat_id, content, metadata=metadata, notice_kind="warning" if warning else None)
+
+        async def send(self, chat_id, content, reply_to=None, metadata=None, *, notice_kind=None):
             from .commands import capture_reply
 
             if await capture_reply(self, chat_id, reply_to, content):
                 return SendResult(success=True, message_id=reply_to)
-            media_files, content = self.extract_media(content) if isinstance(content, str) and "MEDIA:" in content else ([], content)
-            result = await submit(chat_id, content, thread_id=(metadata or {}).get("thread_id"),
-                                  media_files=media_files, gateway=True)
+            metadata = metadata or {}
+            if metadata.get("_interim_send") is True and isinstance(content, str):
+                notice_kind = _interim_notice(content) or notice_kind
+            media_files, content = (self.extract_media(content)
+                                    if notice_kind is None and isinstance(content, str) and "MEDIA:" in content else ([], content))
+            result = await submit(chat_id, content, thread_id=metadata.get("thread_id"),
+                                  media_files=media_files, gateway=True, notice_kind=notice_kind)
             return SendResult(success=bool(result.get("success")), message_id=result.get("message_id"),
                               error=result.get("error"), raw_response=result)
 

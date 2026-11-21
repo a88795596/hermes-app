@@ -11,20 +11,23 @@ import { ApiError, conflict, invalid, missing } from "./validation.js";
 const terminal = new Set<Message["status"]>(["final", "failed", "cancelled"]);
 
 async function applySubmission(db: PoolClient, topicId: string, id: string, status: Message["status"], error?: string, admissionId?: string) {
-  const { rows } = await db.query<{ message_id: string; data: { status: Message["status"]; admission_id?: string } }>(
-    "SELECT message_id, data FROM submissions WHERE id = $1 AND topic_id = $2", [id, topicId],
+  const { rows } = await db.query<{ message_id: string; data: { status: Message["status"]; admission_id?: string; streaming_started_at?: number } }>(
+    "SELECT message_id, data FROM submissions WHERE id = $1 AND topic_id = $2 FOR UPDATE", [id, topicId],
   );
   const submission = rows[0];
   if (!submission) missing("消息提交记录");
   const old = submission.data.status;
   if (terminal.has(old) || (old === "streaming" && status === "queued")) status = old;
+  const startedAt = status === "streaming" ? (old === "streaming" ? submission.data.streaming_started_at : undefined) ?? Date.now() : undefined;
   await db.query("UPDATE submissions SET data = $2 WHERE id = $1", [id, {
     ...submission.data, status, ...(admissionId ? { admission_id: admissionId } : {}),
+    ...(startedAt === undefined ? {} : { streaming_started_at: startedAt }),
   }]);
   if (status === old && (terminal.has(old) || !error)) return;
-  await db.query("UPDATE messages SET data = (data - 'error') || $2::jsonb WHERE id = $1", [submission.message_id, {
+  const removed = status === "streaming" ? ["error"] : ["error", "reply_status", "reply_progress_at"];
+  await db.query("UPDATE messages SET data = (data - $3::text[]) || $2::jsonb WHERE id = $1", [submission.message_id, {
     status, ...(error ? { error } : {}),
-  }]);
+  }, removed]);
   await touchTopic(db, topicId);
   return status === "final";
 }
@@ -181,9 +184,12 @@ export async function applyEvent(db: PoolClient, frame: ConnectorEvent, refs: Se
     const submissionId = frame.submission_id ?? existing?.data.submission_id;
     const process = frame.process ?? existing?.data.process;
     const attachments = frame.attachments ?? existing?.data.attachments;
+    const replyStatus = { ...existing?.data.reply_status, ...frame.reply_status };
+    if (frame.status === "final") delete replyStatus.progress;
     await validateReceivedAttachments(db, attachments, topic.profile_ref);
     const message: Message = { message_id: frame.message_id, role: "assistant", text: frame.text, status: frame.status,
       ...(process?.length ? { process } : {}),
+      ...(Object.keys(replyStatus).length ? { reply_status: replyStatus } : {}),
       ...(attachments?.length ? { attachments } : {}),
       ...(submissionId ? { submission_id: submissionId } : {}) };
     await db.query("INSERT INTO messages (id, topic_id, data) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET data = excluded.data",
@@ -214,18 +220,34 @@ export async function applyDelivery(db: PoolClient, frame: DeliveryFrame, refs: 
   return applied;
 }
 
-export async function applyInboxDelivery(db: PoolClient, { delivery_id, profile_ref, session_id, title, text, attachments }: InboxDelivery, refs: Set<string>) {
+export async function applyInboxDelivery(db: PoolClient, { delivery_id, profile_ref, session_id, title, text, attachments, notice }: InboxDelivery, refs: Set<string>) {
   if (!refs.has(profile_ref)) missing("配置档案");
   await validateReceivedAttachments(db, attachments, profile_ref);
   if (!await recordEvent(db, "delivery", delivery_id, { profile_ref, text, ...(title === undefined ? {} : { title }),
     ...(session_id === undefined ? {} : { session_id }),
-    ...(attachments?.length ? { attachments } : {}) })) return false;
+    ...(attachments?.length ? { attachments } : {}), ...(notice ? { notice } : {}) })) return false;
   if (session_id !== undefined) {
     const { rows: [topic] } = await db.query<{ id: string; status: string }>(
       "SELECT id, status FROM topics WHERE profile_ref = $1 AND session_id = $2", [profile_ref, session_id]);
     if (!topic) throw new ApiError(404, "DELIVERY_TARGET_NOT_FOUND", "找不到投递目标会话。");
     if (topic.status !== "ready") throw new ApiError(409, "DELIVERY_TARGET_NOT_READY", "投递目标会话尚未就绪。");
-    const message: Message = { message_id: delivery_id, role: "assistant", text, status: "final",
+    if (notice?.kind === "progress") {
+      const updated = await db.query(
+        "UPDATE messages AS m SET data = m.data || jsonb_build_object('reply_status', jsonb_build_object('progress', $3::text), 'reply_progress_at', $2::bigint) " +
+        "FROM (SELECT user_message.id, (s.data->>'streaming_started_at')::bigint AS started_at FROM messages user_message " +
+        "JOIN submissions s ON s.message_id = user_message.id " +
+        "WHERE user_message.topic_id = $1 AND user_message.data->>'status' = 'streaming' " +
+        "ORDER BY user_message.position DESC LIMIT 1) AS active " +
+        "WHERE m.id = active.id AND m.data->>'status' = 'streaming' AND active.started_at <= $2::bigint " +
+        "AND COALESCE((m.data->>'reply_progress_at')::bigint, 0) <= $2::bigint",
+        [topic.id, notice.sent_at, text],
+      );
+      if (!updated.rowCount) return false;
+      await touchTopic(db, topic.id);
+      return true;
+    }
+    const message: Message = { message_id: delivery_id, role: "assistant", text: notice ? "" : text, status: "final",
+      ...(notice ? { reply_status: { [notice.kind]: text } } : {}),
       ...(attachments?.length ? { attachments } : {}) };
     const inserted = await db.query("INSERT INTO messages (id, topic_id, data) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING",
       [delivery_id, topic.id, message]);

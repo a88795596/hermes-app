@@ -33,6 +33,9 @@ test('Canonical Gateway 在提交返回终态回执时仍保存已缓冲的过�
   const admissionId = 'admission-test';
   const submissionId = randomUUID();
   const protocol = 'hermes-gateway-v1';
+  const warning = '⚠ Context is over the compression threshold (~248,549 tokens >= 204,000) but compression is currently blocked (cooldown:53).'
+    + ' The model may stop responding. Run /new to start a fresh session or /compress to retry immediately.';
+  const reviewSummary = "💾 自我改进回顾：技能 'sdlc-review' 已修补";
   const attach = { endpoint, url: `ws://127.0.0.1:${address.port}/api/ws`, ticket: 'test', protocol,
     protocols: [protocol, 'hermes-gateway-ticket.test'] };
   const stageCalls: [string, JsonObject][] = [];
@@ -69,7 +72,10 @@ test('Canonical Gateway 在提交返回终态回执时仍保存已缓冲的过�
         submitted = params;
         const events: [string, JsonObject][] = [
           ['session.info', { title: 'Hermes 原生标题' }],
+          ['status.update', { kind: 'warn', text: warning }],
+          ['agent.step', { iteration: 5 }],
           ['reasoning.delta', { text: '先检查。 Authorization: Bearer abc123' }],
+          ['agent.step', { iteration: 6 }],
           ['reasoning.delta', { text: '456789012345678901' }],
           ['message.interim', { text: '正在读取附件。', already_streamed: false }],
           ['tool.start', { tool_id: 'call-1', name: 'read_file', args: { path: 'private-path' } }],
@@ -80,9 +86,11 @@ test('Canonical Gateway 在提交返回终态回执时仍保存已缓冲的过�
           ['tool.start', { tool_id: 'call-2', name: 'read_file' }],
           ['tool.complete', { tool_id: 'call-2', name: 'read_file', is_error: false }],
           ['message.complete', { text: '', outcome: 'completed' }],
+          ['review.summary', { text: reviewSummary }],
         ];
         events.forEach(([type, payload], index) => send({ method: 'event', params: {
-          type, payload, session_id: sessionId, replay_epoch: 'epoch', seq: index + 1, admission_id: admissionId,
+          type, payload, session_id: sessionId, replay_epoch: 'epoch', seq: index + 1,
+          ...(type === 'review.summary' ? {} : { admission_id: admissionId }),
         } }));
         reply({ admission_id: admissionId, ref: { session_id: sessionId, profile_id: 'default' },
           sequence: 1, status: 'terminal', outcome: 'completed', authority_epoch: 1, execution_generation: 1,
@@ -112,9 +120,19 @@ test('Canonical Gateway 在提交返回终态回执时仍保存已缓冲的过�
   assert.deepEqual(frames.filter(({ type }) => type === 'topic_title').map(({ session_id, title }) => ({ session_id, title })),
     [{ session_id: sessionId, title: 'Hermes 原生标题' }]);
   const replies = frames.filter(({ type }) => type === 'message');
-  assert.equal(replies.at(-1)?.status, 'final');
-  assert.equal(replies.at(-1)?.text, '已检查。');
-  assert.deepEqual(replies.at(-1)?.process, [
+  assert.equal(replies[0]?.text, '');
+  assert.deepEqual(replies[0]?.reply_status, { warning });
+  assert.deepEqual(replies[1]?.reply_status, { warning, progress: 'Hermes 正在回复… · 第 5 轮迭代' });
+  assert.deepEqual(replies[2]?.reply_status, { warning, progress: 'Hermes 正在回复… · 第 6 轮迭代' });
+  const summary = replies.find((frame) => (frame.reply_status as { review_summary?: string } | undefined)?.review_summary);
+  assert.equal(summary?.text, '');
+  assert.equal(summary?.status, 'final');
+  assert.deepEqual(summary?.reply_status, { review_summary: reviewSummary });
+  const answer = replies.filter((frame) => frame !== summary).at(-1);
+  assert.equal(answer?.status, 'final');
+  assert.equal(answer?.text, '已检查。');
+  assert.deepEqual(answer?.reply_status, { warning });
+  assert.deepEqual(answer?.process, [
     { kind: 'reasoning', text: '先检查。 Authorization: Bearer [已隐藏]' }, { kind: 'commentary', text: '正在读取附件。' },
     { kind: 'tool', id: 'call-1', name: 'read_file', status: 'failed' },
     { kind: 'commentary', text: '正在重新读取附件。' },

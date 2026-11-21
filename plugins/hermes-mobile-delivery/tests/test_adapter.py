@@ -13,6 +13,7 @@ from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+from hermes_mobile_delivery.inbox import deliver_pending, inbox_endpoint
 from hermes_mobile_delivery.spool import attachments, begin_attempt, enqueue, finish_attempt, pull
 
 
@@ -38,7 +39,12 @@ class AdapterTest(unittest.TestCase):
             def validate_media_delivery_path(value):
                 return None if Path(value).name == "secret.txt" else str(Path(value).resolve())
 
+        translations = {
+            "gateway.progress.working_heartbeat": "⏳ 處理中 — {minutes} 分鐘{detail}",
+            "display.review.summary_callback": "💾 自我改进回顾：{summary}",
+        }
         exports = {
+            "agent.i18n": {"t": translations.__getitem__},
             "agent.redact": {"redact_sensitive_text": lambda text, **kwargs: text},
             "gateway.config": {"Platform": str},
             "gateway.platform_registry": {"PlatformEntry": SimpleNamespace(__dataclass_fields__={})},
@@ -84,6 +90,43 @@ class AdapterTest(unittest.TestCase):
             self.assertEqual("note" in result, status != "delivered")
             self.assertEqual("error" in result, status == "failed")
             self.assertTrue(result["message_id"])
+
+    def test_gateway_notices_keep_their_kind_after_queue_retry(self):
+        heartbeat = "⏳ 處理中 — 3 分鐘 — 第 6/240 輪迭代, waiting for provider response (streaming)"
+        review_start = "💾 自我改进回顾：技能 'sdlc-review' 已修补\n记忆更新：MEDIA:/tmp/note.txt\n"
+        review = review_start + "记" * 1500
+        warning = ("⚠ Context is over the compression threshold (~248,549 tokens >= 204,000) "
+                   "but compression is currently blocked (cooldown:53). The model may stop responding. "
+                   "Run /new to start a fresh session or /compress to retry immediately.")
+        endpoint = inbox_endpoint(os.environ["HERMES_MOBILE_INBOX_URL"])
+        with patch("hermes_mobile_delivery.spool.time.time", return_value=1000) as clock:
+            progress = asyncio.run(self.adapter.send("mobile_target", heartbeat, metadata={"_interim_send": True}))
+            ordinary = asyncio.run(self.adapter.send("mobile_target", heartbeat))
+            with patch.object(self.module.BasePlatformAdapter, "extract_media",
+                              return_value=([(str(self.source), False)], "已提取附件"), create=True):
+                summary = asyncio.run(self.adapter.send("mobile_target", review, metadata={"_interim_send": True}))
+            self.assertTrue(summary.success, summary.error)
+            send_status = getattr(self.adapter, "send_or_update_status", None)
+            if send_status is None:
+                alert = asyncio.run(self.adapter.send("mobile_target", warning))
+            else:
+                alert = asyncio.run(send_status("mobile_target", "session:run:1:warn", warning))
+            with patch("hermes_mobile_delivery.inbox._request", return_value=(503, b"")) as first:
+                with self.assertLogs("hermes_mobile_delivery.inbox", level="WARNING"):
+                    self.assertFalse(deliver_pending(self.path, endpoint, "test-token", "default"))
+            clock.return_value += 300
+            with patch("hermes_mobile_delivery.inbox._request", return_value=(204, b"")) as retry:
+                self.assertTrue(deliver_pending(self.path, endpoint, "test-token", "default"))
+
+        payloads = {call.args[4]["delivery_id"]: call.args[4] for call in retry.call_args_list}
+        self.assertEqual(payloads, {call.args[4]["delivery_id"]: call.args[4] for call in first.call_args_list})
+        self.assertEqual(payloads[progress.message_id].get("notice"), {"kind": "progress", "sent_at": 1_000_000})
+        self.assertEqual(payloads[alert.message_id].get("notice"), {"kind": "warning", "sent_at": 1_000_000})
+        self.assertEqual(payloads[summary.message_id].get("notice"), {"kind": "review_summary", "sent_at": 1_000_000})
+        summary_text = payloads[summary.message_id]["text"]
+        self.assertTrue(summary_text.startswith(review_start) and summary_text.endswith("…"))
+        self.assertLessEqual(len(summary_text.encode("utf-8")), 4096)
+        self.assertNotIn("notice", payloads[ordinary.message_id])
 
     def test_queue_cli_lists_cancels_and_retries_without_changing_target_or_files(self):
         delivery_id = enqueue(self.path, "default", "报告", [(self.source, None)], session_id="mobile_target")

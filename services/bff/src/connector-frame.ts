@@ -1,4 +1,4 @@
-import type { ConnectorFrame, MessageProcessStep, ModelResult, NativeCommand, NativeCommandResult, SessionStatus } from "@hermes-mobile/protocol";
+import type { ConnectorFrame, InboxDelivery, MessageProcessStep, ModelResult, NativeCommand, NativeCommandResult, ReplyStatus, SessionStatus } from "@hermes-mobile/protocol";
 import { MAX_CLARIFY_CHOICE_BYTES, MAX_INBOX_TITLE_BYTES, MAX_MESSAGE_PROCESS_STEPS, MAX_MESSAGE_PROCESS_TEXT_BYTES, MAX_TOPIC_TITLE_BYTES, reasoningEfforts } from "@hermes-mobile/protocol";
 import { deliverySessionId, invalid, record, string, uuid } from "./validation.js";
 import { receivedAttachmentReferences } from "./received-attachments.js";
@@ -18,6 +18,25 @@ function contextUsage(value: unknown): NonNullable<SessionStatus["context_usage"
   }
   if (estimated !== undefined && typeof estimated !== "boolean") invalid("上下文估算标记无效。");
   return { used, ...(max !== undefined && { max }), ...(estimated !== undefined && { estimated }) };
+}
+
+function replyStatus(value: unknown): ReplyStatus {
+  const { warning, progress, review_summary } = record(value, ["warning", "progress", "review_summary"]);
+  if (warning === undefined && progress === undefined && review_summary === undefined) invalid("回复状态无效。");
+  return {
+    ...(warning === undefined ? {} : { warning: string(warning, "压缩警告", MAX_MESSAGE_PROCESS_TEXT_BYTES) }),
+    ...(progress === undefined ? {} : { progress: string(progress, "回复进度", MAX_MESSAGE_PROCESS_TEXT_BYTES) }),
+    ...(review_summary === undefined ? {} : { review_summary: string(review_summary, "自我改进回顾", MAX_MESSAGE_PROCESS_TEXT_BYTES) }),
+  };
+}
+
+export function deliveryNotice(body: Record<string, unknown>): InboxDelivery["notice"] {
+  if (body.notice === undefined) return;
+  if (body.session_id === undefined || body.title !== undefined || body.attachments !== undefined) invalid("会话状态提示无效。");
+  const { kind, sent_at } = record(body.notice, ["kind", "sent_at"]);
+  if (typeof sent_at !== "number" || !Number.isSafeInteger(sent_at) || sent_at <= 0) invalid("会话状态提示时间无效。");
+  string(body.text, "会话状态提示", MAX_MESSAGE_PROCESS_TEXT_BYTES);
+  return { kind: option(kind, ["warning", "progress", "review_summary"]), sent_at };
 }
 
 function messageProcess(value: unknown): MessageProcessStep[] {
@@ -156,12 +175,14 @@ export function connectorFrame(value: unknown): ConnectorFrame {
       } } };
     }
     case "delivery": {
-      const body = record(value, ["type", "event_id", "delivery_id", "profile_ref", "session_id", "title", "text", "attachments"]);
+      const body = record(value, ["type", "event_id", "delivery_id", "profile_ref", "session_id", "title", "text", "attachments", "notice"]);
+      const notice = deliveryNotice(body);
       const attachments = body.attachments === undefined ? undefined : receivedAttachmentReferences(body.attachments);
       return { type, event_id: uuid(body.event_id, "事件 ID"), delivery_id: uuid(body.delivery_id, "投递 ID"),
         ...(body.session_id === undefined ? {} : { session_id: deliverySessionId(body.session_id) }),
         ...(body.title === undefined ? {} : { title: string(body.title, "消息标题", MAX_INBOX_TITLE_BYTES) }),
         ...(attachments?.length ? { attachments } : {}),
+        ...(notice ? { notice } : {}),
         profile_ref: string(body.profile_ref, "配置档案名称", 256), text: string(body.text, "消息正文", 256 * 1024, !!attachments?.length) };
     }
     case "topic_title": {
@@ -170,11 +191,12 @@ export function connectorFrame(value: unknown): ConnectorFrame {
         session_id: string(body.session_id, "会话 ID", 512), title: string(body.title, "话题标题", MAX_TOPIC_TITLE_BYTES) };
     }
     case "message": {
-      const body = record(value, ["type", "event_id", "topic_id", "message_id", "submission_id", "text", "status", "process", "attachments"]);
+      const body = record(value, ["type", "event_id", "topic_id", "message_id", "submission_id", "text", "status", "process", "attachments", "reply_status"]);
       return { type, event_id: uuid(body.event_id, "事件 ID"), topic_id: uuid(body.topic_id, "话题 ID"),
         message_id: uuid(body.message_id, "消息 ID"), text: string(body.text, "消息正文", 256 * 1024, true),
         status: option(body.status, ["streaming", "final"]),
         ...(body.process === undefined ? {} : { process: messageProcess(body.process) }),
+        ...(body.reply_status === undefined ? {} : { reply_status: replyStatus(body.reply_status) }),
         ...(body.attachments === undefined ? {} : { attachments: receivedAttachmentReferences(body.attachments) }),
         ...(body.submission_id === undefined ? {} : { submission_id: uuid(body.submission_id, "提交 ID") }) };
     }

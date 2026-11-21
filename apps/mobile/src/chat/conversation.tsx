@@ -33,6 +33,7 @@ const messageStatus: Record<Message["status"], string> = {
   unknown: "执行状态待确认",
   cancelled: "已停止",
 };
+const inactiveSubmission = new Set<Message["status"]>(["final", "failed", "unknown", "cancelled"]);
 
 const toolStatus: Record<Extract<MessageProcessStep, { kind: "tool" }>["status"], string> = {
   running: "执行中…",
@@ -263,7 +264,7 @@ type TranscriptProps = {
 
 export function ConversationTranscript({ id, topic, newProfileId, workspace, session, targetMessageId,
   active = true, ref, onOpenLink: openLink, onError: setError, onRecover: recoverStream, recovering }: TranscriptProps) {
-  const { colors, styles } = useTheme();
+  const { colors, styles, dark } = useTheme();
   const reduced = useReduceMotion();
   const { width } = useWindowDimensions();
   const messageWidth = Math.min(560, (width - transcriptGutter * 2) * 0.84);
@@ -278,6 +279,13 @@ export function ConversationTranscript({ id, topic, newProfileId, workspace, ses
   const messageOffsets = useRef(new Map<string, number>());
   const [refreshing, setRefreshing] = useState(false);
   const messages = workspace.detail?.messages ?? [];
+  const userSubmissions = new Map<string, Message>();
+  const replied = new Set<string>();
+  for (const message of messages) {
+    if (!message.submission_id) continue;
+    if (message.role === "assistant") replied.add(message.submission_id);
+    else userSubmissions.set(message.submission_id, message);
+  }
   const controls = workspace.detail?.controls ?? [];
   const submitted = new Set(messages.filter((message) => message.role === "user").map((message) => message.submission_id));
   const historyControls = new Map<string, Control[]>();
@@ -368,7 +376,17 @@ export function ConversationTranscript({ id, topic, newProfileId, workspace, ses
       {messages.map((message, index) => {
         const outgoing = message.role === "user";
         const process = !outgoing ? message.process : undefined;
-        if (!outgoing && !message.text && !message.attachments?.length && !process?.length && message.status === "final") return null;
+        const warning = !outgoing ? message.reply_status?.warning : undefined;
+        const review = !outgoing ? message.reply_status?.review_summary : undefined;
+        const submittedMessage = message.submission_id ? userSubmissions.get(message.submission_id) : undefined;
+        const deliveryProgress = submittedMessage?.status === "streaming" ? submittedMessage.reply_status?.progress : undefined;
+        const pendingProgress = outgoing && message.submission_id && !replied.has(message.submission_id) ? deliveryProgress : undefined;
+        const replyProgress = !outgoing && message.status === "streaming" ? deliveryProgress ?? message.reply_status?.progress : undefined;
+        const stopped = !outgoing && message.status === "streaming" && submittedMessage && inactiveSubmission.has(submittedMessage.status);
+        const caption = stopped ? "" : replyProgress ?? (!outgoing && !message.text && message.status === "streaming"
+          ? "Hermes 正在回复…" : messageStatus[message.status]);
+        if (!outgoing && !message.text && !message.attachments?.length && !process?.length && !warning && !review
+          && (message.status === "final" || stopped)) return null;
         const startGroup = messages[index - 1]?.role !== message.role;
         const attachedControls = outgoing && message.submission_id ? historyControls.get(message.submission_id) : undefined;
         return (
@@ -380,6 +398,7 @@ export function ConversationTranscript({ id, topic, newProfileId, workspace, ses
             style={chat.messageGroup}>
             <View style={[chat.message, outgoing ? [chat.outgoing, { maxWidth: messageWidth }] : chat.incoming, startGroup && chat.startGroup]}>
               {!!process?.length && <ProcessTimeline steps={process} final={message.status === "final"} />}
+              {!!warning && <Notice>{warning}</Notice>}
               {(!!message.text || !!message.attachments?.length) && (
                 <View style={[
                   chat.messageContent,
@@ -397,13 +416,13 @@ export function ConversationTranscript({ id, topic, newProfileId, workspace, ses
                   </Text> : <AnswerMarkdown text={message.text} onOpenLink={openLink} />)}
                 </View>
               )}
-              {messageStatus[message.status] ? (
-                <Text style={[styles.caption, outgoing && chat.outgoingStatus]}>
-                  {!outgoing && !message.text && message.status === "streaming" ? "Hermes 正在回复…" : messageStatus[message.status]}
-                </Text>
+              {!!review && <Text selectable style={[styles.caption, { color: dark ? "#AFAFAF" : "#666666" }]}>{review}</Text>}
+              {caption && !pendingProgress ? (
+                <Text style={[styles.caption, outgoing && chat.outgoingStatus]}>{caption}</Text>
               ) : null}
               {message.error && <Notice>{message.error}</Notice>}
             </View>
+            {!!pendingProgress && <Text style={styles.caption}>{pendingProgress}</Text>}
             {attachedControls?.map((control) => (
               <ControlPrompt key={control.control_id} control={control} enabled={canControl} onAnswer={workspace.answer} />
             ))}

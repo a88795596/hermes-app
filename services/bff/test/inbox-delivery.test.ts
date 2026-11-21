@@ -9,6 +9,7 @@ import Fastify from "fastify";
 import pg from "pg";
 import WebSocket from "ws";
 import { connectorFrame } from "../src/connector-frame.js";
+import { applyEvent } from "../src/ingress.js";
 import { profileId } from "../src/projections.js";
 import { migratePush } from "../src/push.js";
 import { registerPersonalRoutes } from "../src/routes/personal.js";
@@ -237,6 +238,49 @@ test("指定会话的文件投递写入匹配档案的消息列表并保留幂�
     const inboxDelivery = { delivery_id: randomUUID(), profile_ref: "work", text: "仍投递收件箱" };
     assert.equal((await post(inboxDelivery)).statusCode, 204);
     assert.equal((await post({ ...inboxDelivery, session_id: "session-work" })).statusCode, 409);
+
+    async function submitForProgress(submission_id: string) {
+      const submitted = await app.inject({ method: "POST", url: `/mobile/v1/topics/${topicId}/submissions`, headers: device,
+        payload: { submission_id, text: "处理报告" } });
+      assert.equal(submitted.statusCode, 202);
+      return submitted.json().data.message_id as string;
+    }
+    const setStatus = (submission_id: string, status: "streaming" | "final") => store.transaction((db) => applyEvent(db,
+      { type: "submission", event_id: randomUUID(), topic_id: topicId, submission_id, status },
+      new Set(["work"]), new Map([[topicId, "session-work"]])));
+    const submissionId = randomUUID();
+    const userId = await submitForProgress(submissionId);
+    await setStatus(submissionId, "streaming");
+    const sentAt = Date.now() + 100;
+    const replyNotice = (kind: "warning" | "progress" | "review_summary", text: string, sent_at: number) => ({
+      delivery_id: randomUUID(), profile_ref: "work", session_id: "session-work", text, notice: { kind, sent_at },
+    });
+    const warning = replyNotice("warning", "上下文压缩暂不可用。", sentAt);
+    const latest = replyNotice("progress", "⏳ 正在处理——6 分钟", sentAt + 2);
+    const summary = replyNotice("review_summary", "💾 自我改进回顾：技能已修补。", sentAt + 3);
+    assert.equal((await post(warning)).statusCode, 204);
+    assert.equal((await post(latest)).statusCode, 204);
+    assert.equal((await post(replyNotice("progress", "⏳ 正在处理——3 分钟", sentAt + 1))).statusCode, 204);
+    assert.equal((await post(replyNotice("progress", "上一轮的进度", sentAt - 60_000))).statusCode, 204);
+    const readMessages = async () => (await app.inject({ url: `/mobile/v1/topics/${topicId}`, headers: device })).json().data.messages as
+      { message_id: string; text: string; reply_status?: { warning?: string; progress?: string; review_summary?: string } }[];
+    const updatedMessages = await readMessages();
+    assert.deepEqual(updatedMessages.find(({ message_id }) => message_id === userId)?.reply_status, { progress: latest.text });
+    assert.deepEqual(updatedMessages.find(({ message_id }) => message_id === warning.delivery_id),
+      { message_id: warning.delivery_id, role: "assistant", text: "", status: "final", reply_status: { warning: warning.text } });
+    assert(!updatedMessages.some(({ text }) => text === warning.text || text.startsWith("⏳")));
+
+    const nextSubmission = randomUUID();
+    const nextUserId = await submitForProgress(nextSubmission);
+    await store.query("UPDATE commands SET created_at = now() - interval '2 minutes' WHERE id = $1", [nextSubmission]);
+    await setStatus(submissionId, "final");
+    await setStatus(nextSubmission, "streaming");
+    assert.equal((await post(replyNotice("progress", "前一轮排队重试的进度", Date.now() - 60_000))).statusCode, 204);
+    assert.equal((await readMessages()).find(({ message_id }) => message_id === nextUserId)?.reply_status, undefined);
+
+    assert.equal((await post(summary)).statusCode, 204);
+    assert.deepEqual((await readMessages()).find(({ message_id }) => message_id === summary.delivery_id),
+      { message_id: summary.delivery_id, role: "assistant", text: "", status: "final", reply_status: { review_summary: summary.text } });
   } finally {
     mobile?.terminate();
     await app.close();

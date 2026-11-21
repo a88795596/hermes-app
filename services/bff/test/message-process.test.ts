@@ -36,10 +36,13 @@ test("最终回复兼容旧消息帧并保留已收到的回复过程", async ()
     await applyEvent(db, frame, new Set(["default"]), new Map([[topicId, sessionId]]));
   }
 
-  await ingest({ text: "", status: "streaming", process });
+  const warning = "上下文压缩暂不可用。";
+  await ingest({ text: "", status: "streaming", process, reply_status: { warning, progress: "第 6 轮迭代" } });
+  assert.deepEqual(stored?.reply_status, { warning, progress: "第 6 轮迭代" });
   await ingest({ text: "最终答案", status: "final" });
-  await ingest({ text: "迟到的增量", status: "streaming", process: [{ kind: "reasoning", text: "迟到的过程" }] });
-  assert.deepEqual(stored, { role: "assistant", message_id: messageId, text: "最终答案", status: "final", process });
+  await ingest({ text: "迟到的增量", status: "streaming", reply_status: { progress: "第 7 轮迭代" } });
+  assert.deepEqual(stored, { role: "assistant", message_id: messageId, text: "最终答案", status: "final", process,
+    reply_status: { warning } });
 });
 
 test("拒绝包含工具原始参数的过程帧", () => {

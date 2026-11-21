@@ -6,6 +6,7 @@ import type { WebSocket } from "ws";
 import { submissionAttachments } from "../attachments.js";
 import { deviceAuth, matchesToken, readBearer } from "../auth.js";
 import { registerBridge } from "../bridge.js";
+import { deliveryNotice } from "../connector-frame.js";
 import { applyInboxDelivery } from "../ingress.js";
 import { createTopic, findProfile, interrupt, requestModel, requestNativeCommand, requestReasoning, respond, setTopicArchived, submit } from "../mutations.js";
 import { detail, modelRequest, nativeCommandRequest, profileId, profiles, reasoningRequest, topicRow, topics } from "../projections.js";
@@ -163,7 +164,8 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
         if (!matchesToken(readBearer(request), deliveryToken)) throw new ApiError(401, "UNAUTHORIZED", "收件箱投递凭证无效。");
       },
     }, async (request, reply) => {
-      const body = record(request.body, ["delivery_id", "profile_ref", "session_id", "title", "text", "attachments"]);
+      const body = record(request.body, ["delivery_id", "profile_ref", "session_id", "title", "text", "attachments", "notice"]);
+      const notice = deliveryNotice(body);
       const attachments = body.attachments === undefined ? undefined : receivedAttachmentReferences(body.attachments);
       const delivery: InboxDelivery = {
         delivery_id: uuid(body.delivery_id, "投递 ID"),
@@ -172,6 +174,7 @@ export function registerPersonalRoutes(api: FastifyInstance, store: Store, confi
         ...(body.title === undefined ? {} : { title: string(body.title, "消息标题", MAX_INBOX_TITLE_BYTES) }),
         text: string(body.text, "消息正文", MAX_INBOX_TEXT_BYTES, !!attachments?.length),
         ...(attachments?.length ? { attachments } : {}),
+        ...(notice ? { notice } : {}),
       };
       const applied = await store.transaction((db) => applyInboxDelivery(db, delivery, refs));
       if (applied) changed();
